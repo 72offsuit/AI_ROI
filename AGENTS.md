@@ -1,12 +1,13 @@
 # 72offsuit / AI_ROI — 에이전트 지침
 
-`Plan/`의 PRD/SRS v2.0(**AI 기반 고객 이탈 예측 및 리텐션 ROI 최적화 시스템**)을 기준 문서로 삼는 저장소.
+**과제 제출 단위** 저장소. `Plan/`의 PRD/SRS v2.0(**AI 기반 고객 이탈 예측 및 리텐션 ROI 최적화 시스템**)이 요구하는 시뮬레이터·AI 시스템을 구현한다.
 
-> **저장소 경계 미확정 (추정 아님 — 확인 필요)**
-> PRD §88 *Suggested Repository Structure*는 `project/` **단일 저장소** 구조를 전제한다.
-> `Ecommerce_Service` / `AI_ROI` 2개로 분리한 것은 PRD·SRS에 근거가 없는 결정이며,
-> 두 저장소 간 책임 경계가 아직 문서화되어 있지 않다.
-> **scope 목록과 `docs/GIT_WORKFLOW.md`를 만들기 전에 이 경계를 먼저 확정한다.**
+커머스 서비스 자체는 `Ecommerce_Service`에서 실체로 구축하며, 이 저장소는 그 위에 과제 내용을 이어붙이는 형태다.
+2저장소 분리는 팀의 의도된 결정이다.
+
+> 제출 요구사항(SRS §37 SUB-001~004)은 **이 저장소에만** 적용된다:
+> 제출 시 public · 최종 코드는 `main` · URL 하나만 제출 · fresh clone에서 `docker-compose up` 실행 가능.
+> 현재 private `Plan` 서브모듈이 public 전환 시 외부 clone을 막는다 — `Ecommerce_Service#2` 참조.
 
 ## 먼저 읽을 것
 
