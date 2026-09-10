@@ -18,8 +18,7 @@
 1. **조직 공통 git 규약 정본** — `Plan/docs/GIT_WORKFLOW_CORE.md`
    git 작업(브랜치·커밋·PR·이슈) 전에 반드시 읽는다. 아래 요약은 정본을 대체하지 않는다.
 2. **이 저장소의 워크플로우** — `docs/GIT_WORKFLOW.md`
-   **아직 존재하지 않는다.** 스택과 디렉터리 구조가 잡힌 뒤
-   `Plan/GIT_WORKFLOW_BOOTSTRAP.md` 절차(Step 1 정찰 → 추론표 → 확정 → 생성)로 만든다.
+   `Plan/GIT_WORKFLOW_BOOTSTRAP.md` 절차로 2026-09-11 생성했다. git 작업은 이 문서를 따른다.
 
 `Plan/`이 비어 있으면 먼저 초기화한다.
 
