@@ -74,9 +74,11 @@ python3 -m unittest tests.test_isolation -v
 
 파트 격리 규칙(import 경계·데이터 경로·지침 파일 존재)을 검사한다. **표준 라이브러리만 사용하므로 의존성 설치 없이 실행된다.** `src/` 또는 `tests/`를 수정하면 반드시 실행하고 결과를 PR에 기록한다.
 
+**CI에서도 자동 실행된다** — `.github/workflows/isolation.yml`이 모든 PR과 `main` push에서 이 검사를 돌린다. `Plan` 서브모듈은 private이라 체크아웃하지 않으며, 검사 대상이 `src/`·`tests/`뿐이라 필요도 없다.
+
 ## 프로젝트 현황 (2026-09-10)
 
-- 스택은 Python(SRS NFR-004: `>= 3.10`)으로 확정. **의존성 매니페스트·CI 워크플로우는 아직 없다.**
+- 스택은 Python(SRS NFR-004: `>= 3.10`, CI는 3.12)으로 확정. **의존성 매니페스트는 아직 없다.**
 - `src/`에 파트 디렉터리와 지침 파일만 있고 **구현 코드는 아직 없다.**
-- 실행 가능한 검증 명령은 위 `tests.test_isolation` 하나뿐이다. lint·build·타입 검사는 미정의.
+- CI는 `.github/workflows/isolation.yml` 하나뿐이다. 실행 가능한 검증 명령도 `tests.test_isolation` 하나뿐이며 lint·build·타입 검사는 미정의.
 - **존재하지 않는 명령을 문서·게이트·PR 본문에 쓰지 않는다.** 검증을 실행할 수 없으면 `BLOCKED`로 보고한다.
