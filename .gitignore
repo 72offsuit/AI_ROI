@@ -1,0 +1,23 @@
+# ── Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# ── 생성 데이터
+# data/ 전체를 제외한다. hidden/ · ground_truth/ 도 여기 포함되므로
+# 민감 산출물은 별도 규칙 없이 저장소에 들어가지 않는다.
+# 격리 자체는 tests/test_isolation.py 가 강제한다 (docs/data_spec.html §17).
+data/
+!data/.gitkeep
+
+# ── 학습 산출물
+models/
+
+# ── 문서 생성물
+# data_spec.pdf 는 docs/data_spec.html 에서 재생성한다.
+docs/data_spec.pdf
+
+# ── OS
+.DS_Store
