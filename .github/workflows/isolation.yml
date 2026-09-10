@@ -1,4 +1,4 @@
-name: Part Isolation
+name: Tests
 
 # 시뮬레이터(정답 생성)와 의사결정 시스템(정답 추론)의 경계를 검사한다.
 # 근거: PRD §21.1, SRS ISO-001~006, docs/data_spec.html §17
@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   isolation:
-    name: import·데이터 경로 경계 검사
+    name: 격리 경계 + 전체 테스트
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -35,3 +35,6 @@ jobs:
       # (ast · pathlib · unittest)만 사용하므로 설치할 것이 없다 — ISO-005.
       - name: Run isolation checks
         run: python -m unittest tests.test_isolation -v
+
+      - name: Run all tests
+        run: python -m unittest discover -s tests -t . -v
