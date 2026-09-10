@@ -96,11 +96,11 @@ thead{display:table-header-group}
 <small>72offsuit · AI_ROI</small>
 <h1>AI 기반 고객 이탈 예측 및 리텐션 ROI 최적화 시스템<br>Data Specification v1.0</h1>
 <p>PRD v2 / SRS v2.0의 요구사항을 학습·검증 가능한 데이터 명세로 확정한다.</p>
-<div class="meta">작성 기준 2026-09-10 · 근거 문서 PRD v2.1 · SRS v2.1 (2026-09-10 개정) · 상태 GATE 1 확정 후보</div>
+<div class="meta">작성 기준 2026-09-10 · 근거 문서 PRD v2.2 · SRS v2.2 (2026-09-10 개정) · 상태 GATE 1 확정 후보</div>
 </header>
 
 <nav class="nav">
-<a href="#s0">개요</a><a href="#s1">예측정의</a><a href="#s2">시간축</a><a href="#s3">고객생성</a><a href="#s4">처치·통제</a><a href="#s5">이탈정의</a><a href="#s6">비용</a><a href="#s7">스키마</a><a href="#s8">Feature</a><a href="#s9">품질</a><a href="#s10">분할</a><a href="#s11">Leakage</a><a href="#s12">Baseline</a><a href="#s13">비교</a><a href="#s14">성공지표</a><a href="#s15">산출물</a><a href="#s16">반영대장</a>
+<a href="#s0">개요</a><a href="#s1">예측정의</a><a href="#s2">시간축</a><a href="#s3">고객생성</a><a href="#s4">처치·통제</a><a href="#s5">이탈정의</a><a href="#s6">비용</a><a href="#s7">스키마</a><a href="#s8">Feature</a><a href="#s9">품질</a><a href="#s10">분할</a><a href="#s11">Leakage</a><a href="#s12">Baseline</a><a href="#s13">비교</a><a href="#s14">성공지표</a><a href="#s15">산출물</a><a href="#s16">반영대장</a><a href="#s17">격리</a>
 <button onclick="window.print()">PDF·인쇄</button>
 </nav>
 
@@ -399,7 +399,7 @@ true_uplift_i = Y_i(1) − Y_i(0)                # Ground-truth CATE
 <article class="card blue"><h3>얻는 것 ①</h3><p><b>Qini 지표 자체를 검증</b>할 수 있다. 무작위 실험으로 추정한 Qini와 Ground-truth CATE 기준 이론적 최대 Qini(Qini<sub>oracle</sub>)를 비교하면, 모델의 개선 여지가 얼마나 남았는지 정량적으로 말할 수 있다.</p></article>
 <article class="card blue"><h3>얻는 것 ②</h3><p>Uplift 모델의 직접 평가 지표(<code>PEHE</code>, <code>corr(τ̂, τ)</code>)를 산출할 수 있다. Qini는 순위 품질만 보지만 이 지표는 <b>CATE 추정 오차</b>를 본다.</p></article>
 </div>
-<div class="danger"><b>사용 금지 규칙 <span class="tag req">엄수</span></b> — <code>data/ground_truth/</code>는 다음에 절대 사용하지 않는다: 모델 학습 입력, Feature 생성, 하이퍼파라미터 튜닝, Threshold 선택, 타게팅 의사결정, 대시보드 타게팅 근거. <b>최종 리포트의 사후 진단 지표로만</b> 쓴다. 코드 레벨에서 <code>src/features/</code>·<code>src/models/</code>·<code>src/uplift/learners.py</code>가 이 경로를 읽지 못하도록 로더를 분리하고, 위반 시 실패하는 테스트를 <code>tests/test_leakage.py</code>에 둔다.</div>
+<div class="danger"><b>사용 금지 규칙 <span class="tag req">엄수</span></b> — <code>data/ground_truth/</code>는 다음에 절대 사용하지 않는다: 모델 학습 입력, Feature 생성, 하이퍼파라미터 튜닝, Threshold 선택, 타게팅 의사결정, 대시보드 타게팅 근거. <b>최종 리포트의 사후 진단 지표로만</b> 쓴다. 이 경로를 읽을 수 있는 모듈은 <code>src/diagnostics/</code> 하나뿐이며, <code>src/decision/</code>이 이 경로나 <code>src/diagnostics</code>를 참조하면 <code>tests/test_isolation.py</code>가 실패한다 (§17.3 · §17.4).</div>
 </section>
 
 <section class="section" id="s5"><h2>5. 이탈 정의</h2>
@@ -645,7 +645,7 @@ revenue_treatment</pre></article>
 <dt>4분면 분포</dt><dd>Persuadables 20~30% · Sure Things 30~40% · Lost Causes 20~30% · Sleeping Dogs 8~15%.</dd>
 <dt>재현성</dt><dd>동일 seed·동일 config로 재실행 시 <code>events.parquet</code>의 SHA-256이 일치한다(NFR-001).</dd>
 </dl>
-<p>모든 검사는 <code>src/data/validate.py</code>에서 실행하고 <code>results/data_quality_report.json</code>에 결과를 남긴다. 하나라도 실패하면 파이프라인은 <b>중단</b>한다(경고로 넘어가지 않는다).</p>
+<p>모든 검사는 <code>src/measurement/validate.py</code>에서 실행하고 <code>results/data_quality_report.json</code>에 결과를 남긴다. 하나라도 실패하면 파이프라인은 <b>중단</b>한다(경고로 넘어가지 않는다).</p>
 </section>
 
 <section class="section" id="s10"><h2>10. 데이터 분할</h2>
@@ -754,11 +754,12 @@ cooldown_days = 28                              # 직전 캠페인 대상 고객
 </ul>
 따라서 <b>index_date는 T0로 고정하고, 분리해야 할 것(모집단·라벨 구간·Feature 유효성)을 위 표로 분리</b>했다. Churn 모델의 Train/Validation만 과거 index date를 쓰는데(§10.1), 이는 시간 일반화 검증이 목적이며 라벨 구간이 서로 겹치지 않게 설계되어 있다.</div>
 
-<h3>11.1 자동 검증 (tests/test_leakage.py)</h3>
+<h3>11.1 자동 검증 (<code>tests/test_leakage.py</code>)</h3>
+<p>Feature 단위 Leakage를 검사한다. 파트 경계 자체는 <code>tests/test_isolation.py</code>가 맡는다(§17.5).</p>
 <div class="checks">
 <div>✓ <code>features_t0</code>의 어떤 컬럼도 <code>timestamp &gt; Feature Cutoff</code>인 이벤트에서 파생되지 않았음을 <b>lineage 메타로 검증</b></div>
 <div>✓ 금지 컬럼 목록(<code>treatment_group</code> 등)이 학습 입력 프레임에 존재하면 <b>테스트 실패</b></div>
-<div>✓ <code>data/hidden/</code>·<code>data/ground_truth/</code> 경로를 <code>src/features/</code>·<code>src/models/</code>·<code>src/uplift/</code>가 import하지 않음을 정적 검사</div>
+<div>✓ <code>data/hidden/</code>·<code>data/ground_truth/</code>를 <code>src/decision/</code>이 참조하지 않음 — <code>test_isolation.py</code>가 AST로 검사 (§17.4)</div>
 <div>✓ Scaler·Encoder·Imputer의 <code>fit</code>이 Train 인덱스에서만 호출되었음을 검증</div>
 <div>✓ Train / Validation / Test / Holdout 간 <code>customer_id</code> 교집합이 공집합</div>
 <div>✓ Churn 모델의 Train·Validation·Test 라벨 구간이 서로 겹치지 않음</div>
@@ -951,6 +952,7 @@ for k, T0 in enumerate(campaign_index_dates):             # 1M / 6M / 12M … �
 </div>
 
 <h3>15.1 디렉터리</h3>
+<p>소스 파트 구조는 §17.1, 접근 권한은 §17.4를 따른다. 아래는 데이터 경로다.</p>
 <pre class="code">data/
 ├── raw/                    # 불변. 생성 후 수정 금지
 │   ├── customers.parquet
@@ -973,6 +975,7 @@ for k, T0 in enumerate(campaign_index_dates):             # 1M / 6M / 12M … �
 <li><code>data_version</code>: <code>retention-roi-v1.0</code></li>
 <li><code>simulator_version</code> · <code>service_version</code> · <code>customer_version</code></li>
 <li><code>random_seed</code> · 생성일시 · 담당자</li>
+<li><b><code>simulator_commit</code></b> — GATE 1 봉인 시점 대조용 (§17.2)</li>
 <li>config 4종의 SHA-256</li>
 <li>전처리 코드 commit SHA · Python·라이브러리 버전</li>
 <li>테이블별 행·열 수, 결측률, 제외 내역</li>
@@ -993,7 +996,7 @@ for k, T0 in enumerate(campaign_index_dates):             # 1M / 6M / 12M … �
 <tbody>
 <tr><td><b>GATE 1</b> Environment Freeze</td><td>Persona 구성·Hidden Trait 분포·행동 규칙·Churn 임계값·Treatment 반응 규칙·경제 파라미터·Event Schema</td><td>§3 · §4.3 · §5 · §6 · §7</td></tr>
 <tr><td><b>GATE 2</b> Baseline Freeze</td><td>S1 규칙과 실집행 비용 C<sub>rule</sub>·예산 상한 B·Primary 지표 2종</td><td>§12 · §13 · §14</td></tr>
-<tr><td><b>GATE 3</b> AI 개발 루프</td><td>—(시뮬레이터 수정 금지 구간)</td><td>§11.2</td></tr>
+<tr><td><b>GATE 3</b> AI 개발 루프</td><td>—(시뮬레이터 수정 금지 구간). <code>simulator_commit</code> 대조로 위반을 탐지한다</td><td>§11.2 · §17.2</td></tr>
 <tr><td><b>GATE 4</b> Final Holdout</td><td>확정 전략 1회 평가 후 종료</td><td>§10.2</td></tr>
 </tbody></table></div>
 </section>
@@ -1038,6 +1041,7 @@ for k, T0 in enumerate(campaign_index_dates):             # 1M / 6M / 12M … �
 <tr><td>운영 이탈 정의를 그대로 라벨로 쓰면 Feature가 라벨을 결정한다 (Risk 7)</td><td>라벨을 <b>전향적 42일 window</b>로 재정의해 구조적으로 차단</td><td>§5</td></tr>
 <tr><td>전체 평균 성능은 경계 구간의 실패를 가린다</td><td><b>Stress Slice 6종</b>을 Test 안에서 별도 보고</td><td>§10.3</td></tr>
 <tr><td>전략 간 시뮬레이션 잡음이 비교를 흐린다</td><td>전략 실행에도 Common Random Numbers 공유 + <code>snapshot/restore</code>로 동일 시점 분기. 차이가 타게팅에서만 오도록 고정</td><td>§13.2 · §13.4</td></tr>
+<tr><td>시뮬레이터 담당과 시스템 담당이 서로의 작업을 보면 과적합된다 — 어떻게 막나</td><td><b>격리 아키텍처 3층</b>(파트별 <code>AGENTS.md</code>+<code>CLAUDE.md</code> · <code>test_isolation.py</code> · <code>simulator_commit</code> 기록). <b><code>.gitignore</code>·삭제는 채택하지 않음</b> — 런타임 접근을 막지 못하고 재현성을 죽인다. 파트 배정보다 <b>GATE 봉인 순서</b>가 더 결정적</td><td>§17</td></tr>
 <tr><td>측정 계층과 시뮬레이터의 구축 순서</td><td><b>측정 계층 먼저.</b> 스키마·KPI·경제 규칙이 시뮬레이터의 목표가 된다. 단 “측정되지 않는 행동을 만들지 않는다”이지 “예측 불가능한 잡음을 없앤다”가 아니다 — 잡음 제거는 Risk 2(비현실적으로 쉬운 모델)로 직결</td><td>§7 · §15</td></tr>
 </tbody></table></div>
 
@@ -1050,6 +1054,102 @@ for k, T0 in enumerate(campaign_index_dates):             # 1M / 6M / 12M … �
 <tr><td>Redis Feature Store</td><td><b>보류.</b> CPU 단일 노드 환경에서 File-based(Parquet)로 충분하며, 운영 복잡도만 늘어난다(PRD §37 [PROJECT-DECISION]과 동일 결론).</td></tr>
 <tr><td>실시간 스코어링</td><td><b>범위 밖.</b> 캠페인은 각 T0에서 배치로 집행되고 시뮬레이터 시간도 <code>advance()</code> 단위로 진행되므로 배치 스코어링으로 충분하다.</td></tr>
 </tbody></table></div>
+</section>
+
+<section class="section" id="s17"><h2>17. 파트 격리 아키텍처</h2>
+<p>지금까지의 Leakage 규칙(§11)은 <b>무엇을 보면 안 되는지</b>를 정했다. 이 절은 그것을 <b>코드 구조로 강제하는 방법</b>을 정한다.</p>
+
+<div class="definition"><b>Simulator</b>는 고객 행동의 정답을 만들어내고, <b>Decision</b>은 그 행동 기록만 보고 정답을 맞혀야 한다. 시험으로 치면 <b>출제자와 수험생</b>이다. 수험생이 답안지를 보면 점수는 높지만 실력은 0이다.</div>
+
+<div class="danger"><b>가장 위험한 누수는 파일 접근이 아니다.</b> AI 성능이 낮다는 이유로 <b>시뮬레이터를 고치는 것</b>이 진짜 위험이다(PRD §80 Risk 1). 파일을 아무리 숨겨도 사람 머릿속에는 결과가 남아 있고, 코딩 에이전트는 도움을 주려다 “이탈 감쇠 파라미터를 조정할까요”라고 제안한다. 그래서 선의에 기대지 않고 <b>구조와 검사</b>로 막는다.</div>
+
+<h3>17.1 파트 구분</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>디렉터리</th><th>역할</th><th>비유</th><th>정답을 아는가</th></tr></thead>
+<tbody>
+<tr><td><code>src/measurement/</code></td><td>이벤트 스키마 · KPI · 경제 규칙 · Event Sink</td><td><b>창구</b></td><td>모름 (계약만 정의)</td></tr>
+<tr><td><code>src/simulator/</code></td><td>고객 생성 · 행동 · 처치 반응</td><td><b>출제자</b></td><td><span class="tag req">안다</span></td></tr>
+<tr><td><code>src/simulator/_internal/</code></td><td>Hidden Trait · <code>τ_i</code> · Potential Outcome</td><td>답안지 보관소</td><td><span class="tag req">안다</span></td></tr>
+<tr><td><code>src/decision/</code></td><td>Feature · Churn · Uplift · CLV · 전략 · 최적화</td><td><b>수험생</b></td><td><span class="tag ok">몰라야 함</span></td></tr>
+<tr><td><code>src/diagnostics/</code></td><td>Ground-truth 대비 사후 채점</td><td><b>채점자</b></td><td>안다 (시험 후에만)</td></tr>
+<tr><td><code>src/orchestration/</code></td><td>실행 루프. 명령만 내린다</td><td><b>지휘자</b></td><td>모름</td></tr>
+</tbody></table></div>
+
+<h3>17.2 강제 수단 3층</h3>
+<p>세 층이 서로 다른 일을 한다. 하나만으로는 부족하다.</p>
+<div class="three">
+<article class="card blue"><h3>① 알린다</h3><p>파트 디렉터리마다 <code>AGENTS.md</code> + <code>CLAUDE.md</code></p><p>사람과 코딩 에이전트가 작업을 시작할 때 <b>자기 파트 경계를 알고</b> 들어간다. Codex와 Claude가 같은 지침을 읽도록 <code>AGENTS.md</code>가 본문이고 <code>CLAUDE.md</code>는 <code>@AGENTS.md</code> 한 줄이다.</p></article>
+<article class="card green"><h3>② 막는다</h3><p><code>tests/test_isolation.py</code></p><p>AST로 import와 문자열 경로를 검사한다. 경계를 넘는 코드가 들어오면 <b>검사가 실패해 진행되지 않는다.</b> 표준 라이브러리만 쓰므로 의존성 설치 없이 돈다.</p></article>
+<article class="card amber"><h3>③ 들키게 한다</h3><p>결과 리포트의 <code>simulator_commit</code></p><p>GATE 1 봉인 시점의 커밋 SHA를 결과에 기록한다. 이후 시뮬레이터가 바뀌면 값이 어긋나고, 그때는 <b>Baseline부터 전 전략 재실행</b>(FREEZE-003).</p></article>
+</div>
+
+<h3>17.3 import 경계 (ISO-002)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>이 모듈이</th><th>import할 수 없는 대상</th><th>이유</th></tr></thead>
+<tbody>
+<tr><td><code>src.decision</code></td><td><code>src.simulator</code> · <code>src.diagnostics</code></td><td>시뮬레이터 내부 구조를 알면 그 구조에 맞춘 Feature를 만들게 된다</td></tr>
+<tr><td><code>src.simulator</code></td><td><code>src.decision</code> · <code>src.diagnostics</code></td><td>AI 쪽 코드를 보면 성능을 의식하게 된다</td></tr>
+<tr><td><code>src.measurement</code></td><td>세 파트 전부</td><td>창구가 한쪽에 의존하면 계약이 아니게 된다</td></tr>
+<tr><td><code>src.orchestration</code></td><td><code>src.simulator._internal</code> · <code>src.diagnostics</code></td><td>지휘자는 명령만 내리고 속을 보지 않는다</td></tr>
+</tbody></table></div>
+<p><code>src.diagnostics</code>는 <b>어떤 모듈도 import하지 않는다.</b> 실험 루프 밖에서 리포트 생성 시에만 독립 실행한다.</p>
+
+<h3>17.4 데이터 경로 경계 (ISO-003)</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>경로</th><th>내용</th><th>접근 가능</th></tr></thead>
+<tbody>
+<tr><td><code>data/raw/</code> · <code>data/processed/</code></td><td>고객 행동 기록 · Feature</td><td>전체</td></tr>
+<tr><td><code>data/hidden/</code></td><td>Hidden Trait 15종</td><td><code>simulator</code> · <code>diagnostics</code></td></tr>
+<tr><td><code>data/ground_truth/</code></td><td>Potential Outcome · 참 CATE</td><td><span class="tag req"><code>diagnostics</code> 전용</span></td></tr>
+<tr><td><code>results/</code></td><td>모델 성능 · 전략 결과</td><td><code>decision</code> · <code>orchestration</code> — <b><code>simulator</code>는 읽지 않는다</b></td></tr>
+</tbody></table></div>
+
+<div class="danger"><b><code>.gitignore</code>와 삭제를 격리 수단으로 쓰지 않는다.</b>
+<ul style="margin:8px 0 0">
+<li><b><code>.gitignore</code>는 런타임 접근을 막지 못한다.</b> 저장소에 안 들어갈 뿐 로컬에는 파일이 그대로 있고, <code>read_parquet("data/hidden/…")</code>은 그냥 성공한다. <b>어겨도 아무 일이 일어나지 않으므로</b> 방어선이 아니다.</li>
+<li><b>삭제는 재현성을 죽인다.</b> Hidden Trait이 없으면 같은 seed로 재현할 수 없고(NFR-001 · SIM-011), Ground-truth가 없으면 §4.4의 PEHE·Qini<sub>oracle</sub> 진단이 사라진다.</li>
+<li>민감 산출물은 <b>생성물</b>이므로 <code>data/</code> 전체를 ignore하면 저장소에는 자연히 들어가지 않는다. 별도 규칙이 필요 없다.</li>
+</ul></div>
+
+<h3>17.5 검사 항목</h3>
+<pre class="code">python3 -m unittest tests.test_isolation -v
+
+TestPartIsolation
+  test_forbidden_imports              ISO-002 import 경계
+  test_diagnostics_is_never_imported  diagnostics 고립
+TestDataPathIsolation
+  test_forbidden_data_paths           ISO-003 경로 문자열 검사
+TestPartLayout
+  test_part_directories_exist         ISO-001 파트 존재
+  test_each_part_has_agent_guides     ISO-004 AGENTS.md + CLAUDE.md 쌍
+  test_claude_md_delegates_to_agents_md   CLAUDE.md 내용 복제 금지</pre>
+<div class="good"><b>검사가 실제로 잡는지 확인했다.</b> 규칙을 일부러 어기는 파일 3개(<code>decision → simulator</code> import, <code>decision → diagnostics</code> import, <code>measurement → decision</code> import, <code>decision</code>의 <code>data/hidden</code> 참조, <code>simulator</code>의 <code>results/</code> 참조, <code>diagnostics</code> 피참조)를 넣었을 때 <b>6종 위반을 모두 파일·줄 번호와 함께 보고하고 실패</b>했다. 파일 제거 후 재실행하면 통과한다.</div>
+
+<h3>17.6 협업 시 파트 배정</h3>
+<p>여러 작업자·에이전트가 나눠 개발할 때 파트를 명시한다. 다만 <b>파트 배정보다 순서가 더 결정적이다.</b></p>
+<div class="flow">
+<div class="node">Simulator 파트<br>개발</div><div class="arrow">→</div>
+<div class="node gate">GATE 1<br>봉인</div><div class="arrow">→</div>
+<div class="node">Decision 파트<br>개발</div><div class="arrow">→</div>
+<div class="node gate">GATE 2<br>Baseline 봉인</div><div class="arrow">→</div>
+<div class="node">AI 전략<br>개선 루프</div>
+</div>
+<div class="two">
+<article class="card"><h3>봉인 후에는</h3><ul>
+<li><b>Simulator 담당자도 자기 코드를 고치지 않는다.</b></li>
+<li>한 사람이 양쪽을 다 담당해도 이 순서만 지키면 결과는 유효하다.</li>
+<li>반대로 순서를 어기면 파트를 아무리 잘 나눠도 무효다.</li>
+<li>수정이 불가피하면 <code>simulator_version</code>을 올리고 Baseline부터 전부 재실행한다.</li>
+</ul></article>
+<article class="card amber"><h3>현실적 기대치</h3><ul>
+<li>소규모 팀에서 <b>완전한 격리는 불가능하다.</b> 그것이 정상이다.</li>
+<li>목표는 누수 0이 아니라 <b>누수가 드러나게 하는 것</b>이다.</li>
+<li>리포트에 <code>simulator_commit</code> · <code>data_version</code> · config 해시를 남기면 사후에 누구든 검증할 수 있다.</li>
+<li>학술 실험도 같은 방식으로 운영한다.</li>
+</ul></article>
+</div>
+
+<div class="notice"><b>파일 격리보다 중요한 것:</b> 시뮬레이터를 전혀 건드리지 않아도, <b>Test 성능을 보며 하이퍼파라미터를 반복 조정하면 그 자체가 과적합</b>이다. §10.2 Final Holdout이 이 문서에서 가장 강한 방어선인 이유다.</div>
 </section>
 
 <section class="section"><h2>부록. 확정 Config 요약</h2>

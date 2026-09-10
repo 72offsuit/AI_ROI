@@ -46,8 +46,37 @@ git submodule update --init
 - 작업용 체크아웃까지만 허용하고 스테이징·커밋에서 항상 제외한다.
 - 기획 문서 수정은 `Plan` 저장소에서 직접 한다. 이 저장소의 `Plan/` 안에서 커밋하지 않는다.
 
-## 프로젝트 현황 (2026-09-04)
+## 파트 경계 — 작업 전 반드시 확인
 
-- 스택 **미확정**. 소스 디렉터리·의존성 매니페스트·CI 워크플로우가 아직 없다.
-- 따라서 **검증 명령·CI job 이름·scope 목록이 정의되어 있지 않다.**
+이 저장소는 **서로 봐서는 안 되는 두 파트**로 나뉜다. `src/` 안에서 작업하기 전에 **`src/AGENTS.md`를 먼저 읽고**, 이어서 자기 파트 디렉터리의 `AGENTS.md`를 읽는다.
+
+| 디렉터리 | 역할 | 비유 |
+|---|---|---|
+| `src/measurement/` | 이벤트 스키마·KPI·경제 규칙·Event Sink | 창구 |
+| `src/simulator/` | 가상 고객 생성·행동·처치 반응 | 출제자 (정답을 안다) |
+| `src/decision/` | Feature·Churn·Uplift·CLV·전략·최적화 | 수험생 (맞혀야 한다) |
+| `src/diagnostics/` | Ground-truth 대비 사후 채점 | 채점자 |
+| `src/orchestration/` | 실행 루프 | 지휘자 |
+
+핵심 금지 사항:
+
+- `simulator/`에서 작업할 때 **`results/`와 모델 리포트를 읽지 않는다.** AI 성능을 이유로 시뮬레이터 파라미터를 조정하지 않는다.
+- `decision/`에서 작업할 때 **`data/hidden/`·`data/ground_truth/`·`src/simulator/`를 읽지 않는다.**
+- **AUC·Qini·Incremental Profit 이야기가 시뮬레이터 작업 중에 나오면 멈추고 사용자에게 보고한다.**
+
+가장 위험한 누수는 코드가 파일을 훔쳐보는 것이 아니라 **결과를 본 뒤 시뮬레이터를 고치는 것**이다 (PRD §80 Risk 1). 이 규칙은 `tests/test_isolation.py`가 강제한다.
+
+## 검증
+
+```bash
+python3 -m unittest tests.test_isolation -v
+```
+
+파트 격리 규칙(import 경계·데이터 경로·지침 파일 존재)을 검사한다. **표준 라이브러리만 사용하므로 의존성 설치 없이 실행된다.** `src/` 또는 `tests/`를 수정하면 반드시 실행하고 결과를 PR에 기록한다.
+
+## 프로젝트 현황 (2026-09-10)
+
+- 스택은 Python(SRS NFR-004: `>= 3.10`)으로 확정. **의존성 매니페스트·CI 워크플로우는 아직 없다.**
+- `src/`에 파트 디렉터리와 지침 파일만 있고 **구현 코드는 아직 없다.**
+- 실행 가능한 검증 명령은 위 `tests.test_isolation` 하나뿐이다. lint·build·타입 검사는 미정의.
 - **존재하지 않는 명령을 문서·게이트·PR 본문에 쓰지 않는다.** 검증을 실행할 수 없으면 `BLOCKED`로 보고한다.
