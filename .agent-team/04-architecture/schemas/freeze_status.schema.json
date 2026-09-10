@@ -1,0 +1,122 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/measurement-publish/v1/freeze_status.schema.json",
+  "title": "results/measurement/freeze_status.json — V6 봉인 상태",
+  "description": "'지금 보는 것이 어느 스키마·어느 커밋인가' 에 답한다. config/gate1_lock.yaml 에 기록된 해시와 현재 파일의 해시를 대조한 결과다. 대조를 실행하지 않았으면 not_run 이며 통과로 적지 않는다.",
+  "type": "object",
+  "required": ["contract_version", "artifact", "run_id", "generated_at", "timezone", "provenance", "notices", "gate", "overall", "items", "unlocked_items"],
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": { "$ref": "common.schema.json#/$defs/contract_version" },
+    "artifact": { "const": "freeze_status" },
+    "run_id": { "$ref": "common.schema.json#/$defs/run_id" },
+    "generated_at": { "$ref": "common.schema.json#/$defs/kst_timestamp" },
+    "timezone": { "const": "Asia/Seoul" },
+    "provenance": { "$ref": "common.schema.json#/$defs/provenance" },
+    "notices": { "type": "array", "items": { "$ref": "common.schema.json#/$defs/notice" } },
+
+    "gate": { "const": "GATE_1" },
+
+    "overall": {
+      "enum": ["not_started", "partial", "sealed", "violated"],
+      "description": "★ C1 에서 도달 가능한 최대치는 partial 이다. gate1-lock-scope.md §1 — C1 은 GATE 1 을 통과시키지 않는다. sealed 는 EXPERIMENT_ENVIRONMENT_v1 선언과 함께만 쓴다."
+    },
+
+    "lock_record": {
+      "type": ["object", "null"],
+      "description": "config/gate1_lock.yaml 요약. 파일이 없으면 null 이고 overall 은 not_started 다.",
+      "required": ["path", "sha256", "locked_at", "locked_by", "repo_commit", "simulator_commit"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "sha256": { "$ref": "common.schema.json#/$defs/sha256" },
+        "locked_at": { "$ref": "common.schema.json#/$defs/kst_timestamp" },
+        "locked_by": { "type": "string", "minLength": 1 },
+        "repo_commit": { "type": ["string", "null"] },
+        "simulator_commit": {
+          "type": ["string", "null"],
+          "$comment": "SRS ISO-006. C1 에는 시뮬레이터가 없으므로 null 이며 0 이나 빈 문자열로 채우지 않는다."
+        }
+      }
+    },
+
+    "items": {
+      "type": "array",
+      "minItems": 9,
+      "maxItems": 9,
+      "description": "PRD §22 Lock 9종 전부. C1 에서 다루지 않는 항목도 목록에 남기고 사유를 적는다.",
+      "items": {
+        "type": "object",
+        "required": ["item", "status", "owner_part", "scope_note"],
+        "additionalProperties": false,
+        "properties": {
+          "item": {
+            "enum": [
+              "SERVICE_v1",
+              "CUSTOMER_PERSONA_v1",
+              "HIDDEN_TRAIT_RULE_v1",
+              "BEHAVIOR_RULE_v1",
+              "ECONOMIC_RULE_v1",
+              "CHURN_DEFINITION_v1",
+              "TREATMENT_RESPONSE_v1",
+              "EVENT_SCHEMA_v1",
+              "KPI_DEFINITION_v1"
+            ]
+          },
+          "status": { "enum": ["LOCKED", "PARTIAL", "PENDING", "BLOCKED", "OUT_OF_SCOPE"] },
+          "owner_part": { "enum": ["measurement", "simulator", "commerce", "decision"] },
+          "scope_note": {
+            "type": "string",
+            "minLength": 1,
+            "description": "★ 부분 Lock 은 범위를 문장으로 남긴다(gate1-lock-scope.md §5). 예: 'EVENT SCHEMA v1 의 Lock 범위는 events 테이블에 한정된다. 나머지 6개 테이블은 미정의 상태다.'"
+          },
+          "reason_code": { "$ref": "common.schema.json#/$defs/reason_code" },
+          "reason_detail": { "type": "string", "minLength": 1 },
+          "canonical_files": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["path", "verification"],
+              "additionalProperties": false,
+              "properties": {
+                "path": { "type": "string" },
+                "locked_sha256": { "type": ["string", "null"], "pattern": "^([0-9a-f]{64})?$" },
+                "current_sha256": { "type": ["string", "null"], "pattern": "^([0-9a-f]{64})?$" },
+                "verification": {
+                  "enum": ["match", "mismatch", "missing", "not_run"],
+                  "$comment": "not_run 은 통과가 아니다. 대시보드는 not_run 을 match 와 다른 시각 상태로 렌더링한다."
+                }
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "if": { "properties": { "status": { "const": "LOCKED" } }, "required": ["status"] },
+            "then": { "required": ["canonical_files"] }
+          },
+          {
+            "if": { "properties": { "status": { "enum": ["PENDING", "BLOCKED", "OUT_OF_SCOPE"] } }, "required": ["status"] },
+            "then": { "required": ["reason_code", "reason_detail"] }
+          }
+        ]
+      }
+    },
+
+    "unlocked_items": {
+      "type": "array",
+      "description": "선행 조건 G-1~G-16 중 미충족 항목. 무엇이 아직 열려 있는지가 봉인만큼 중요하다.",
+      "items": {
+        "type": "object",
+        "required": ["id", "title", "met"],
+        "additionalProperties": false,
+        "properties": {
+          "id": { "type": "string", "pattern": "^G-[0-9]{1,2}$" },
+          "title": { "type": "string", "minLength": 1 },
+          "met": { "type": ["boolean", "null"], "description": "null = 확인하지 않았다. false 와 구별한다." },
+          "evidence": { "type": "string" }
+        }
+      }
+    }
+  }
+}

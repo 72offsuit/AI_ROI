@@ -1,0 +1,207 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "data_quality_report",
+  "run_id": "MR-20260918-141205-7c4e91ab",
+  "generated_at": "2026-09-18T14:12:05.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "3f9a2c1400000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {
+      "config/economic_config.yaml": "9f2b1e77c4a3d8065b1e0f4a2c7d9e3b5a8c1f0d6e4b2a9c7f3d1e8b5a0c6f24"
+    },
+    "source_root": "data/raw",
+    "sink_manifest_sha256": "1a4c9e2b7d05f38416c0b9e7a2d4f6081c3e5b7a9d2f4068b1e3c5a7d9f0b2e4",
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)",
+    "publisher_version": "(동일 — W5 에서 채운다)"
+  },
+  "notices": [
+    {
+      "code": "SIMULATOR_ABSENT",
+      "level": "limitation",
+      "message": "시뮬레이터 생성분이 0건이다. src/simulator/ 는 C1 범위 밖이며, 실험 판정 지표는 시뮬레이터 생성분만 쓴다(MEA-002).",
+      "reference": "charter §5"
+    }
+  ],
+  "gate_result": "fail",
+  "spec_coverage": {
+    "spec_items": [
+      {
+        "spec_ref": "유일성",
+        "covered_by": [
+          "DQ-01",
+          "DQ-02",
+          "DQ-02b"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "참조 무결성",
+        "covered_by": [
+          "DQ-03"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "시간 정합성",
+        "covered_by": [
+          "DQ-04",
+          "DQ-05",
+          "DQ-06"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "퍼널 정합성",
+        "covered_by": [
+          "DQ-07",
+          "DQ-08"
+        ],
+        "worst_status": "fail"
+      },
+      {
+        "spec_ref": "금액 정합성",
+        "covered_by": [
+          "DQ-09",
+          "DQ-10"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "완전성",
+        "covered_by": [
+          "DQ-11",
+          "DQ-12"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "생성 이탈률",
+        "covered_by": [
+          "DQ-13"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "실험 균형",
+        "covered_by": [
+          "DQ-14"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "처치 강도",
+        "covered_by": [
+          "DQ-15"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "4분면 분포",
+        "covered_by": [
+          "DQ-16"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "재현성",
+        "covered_by": [
+          "DQ-17"
+        ],
+        "worst_status": "blocked"
+      }
+    ],
+    "reported_checks": 6,
+    "unmapped_spec_items": []
+  },
+  "checks": [
+    {
+      "id": "DQ-01",
+      "spec_ref": "유일성",
+      "title": "event_id 전역 유일",
+      "status": "pass",
+      "violations": 0,
+      "examined_rows": 18430,
+      "scope": "저장된 events 파티션 전 구간(2026-09-12 ~ 2026-09-18)."
+    },
+    {
+      "id": "DQ-02b",
+      "spec_ref": "유일성(범위 축소)",
+      "title": "order_id 당 purchase 이벤트 1건",
+      "status": "pass",
+      "violations": 0,
+      "examined_rows": 1204,
+      "scope": "events 테이블에 한정. checkout_start·coupon_use 도 order_id 를 갖지만 중복이 정상이므로 purchase 만 센다."
+    },
+    {
+      "id": "DQ-07",
+      "spec_ref": "퍼널 정합성",
+      "title": "purchase 는 선행 checkout_start 보유",
+      "status": "pass",
+      "violations": 0,
+      "examined_rows": 1204,
+      "scope": "order_id 로 대응. 파티션 경계를 넘는 주문을 놓치지 않도록 전 구간을 한 번에 본다."
+    },
+    {
+      "id": "DQ-08",
+      "spec_ref": "퍼널 정합성",
+      "title": "coupon_use 는 선행 coupon_exposed 보유",
+      "status": "fail",
+      "violations": 3,
+      "examined_rows": 1204,
+      "scope": "coupon_id 로 대응. coupon_use 이벤트 자체는 0건이나 purchase 에 coupon_id 가 붙은 3건이 노출 기록 없이 나타났다.",
+      "samples": [
+        {
+          "detail": "coupon_id=CPN-A19XZ4 가 노출 기록 없이 주문에 사용됐다",
+          "order_id": "O20260914-000317",
+          "partition_date": "2026-09-14"
+        },
+        {
+          "detail": "coupon_id=CPN-B72KQ0 가 노출 기록 없이 주문에 사용됐다",
+          "order_id": "O20260916-001044",
+          "partition_date": "2026-09-16"
+        },
+        {
+          "detail": "coupon_id=CPN-C08MW5 가 노출 기록 없이 주문에 사용됐다",
+          "order_id": "O20260917-000892",
+          "partition_date": "2026-09-17"
+        }
+      ]
+    },
+    {
+      "id": "DQ-10",
+      "spec_ref": "금액 정합성",
+      "title": "음수 금액 0건",
+      "status": "pass",
+      "violations": 0,
+      "examined_rows": 18430,
+      "scope": "quantity·unit_price·order_amount·session_duration 4종."
+    },
+    {
+      "id": "DQ-09",
+      "spec_ref": "금액 정합성",
+      "title": "order_amount = sum(unit_price*quantity) - discount, 오차 0원",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "discount 필드가 22컬럼에 없고 purchase 는 주문 단위 1행이라 품목 합계를 재구성할 수 없다. order_items 테이블이 필요하다.",
+      "scope": "C1 에서 원리적으로 실행 불가."
+    },
+    {
+      "id": "DQ-17",
+      "spec_ref": "재현성",
+      "title": "동일 seed 재실행 시 events.parquet SHA-256 일치",
+      "status": "blocked",
+      "violations": null,
+      "reason_code": "BLOCKED",
+      "reason_detail": "pyarrow 가 설치되지 않아 Parquet 경로가 실행되지 않았다.",
+      "scope": "jsonl.gz 형식의 해시 재현성은 tests/test_sink.py 가 검사한다. Parquet 형식만 미검증."
+    }
+  ]
+}

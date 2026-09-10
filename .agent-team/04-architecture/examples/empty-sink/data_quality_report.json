@@ -1,0 +1,310 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "data_quality_report",
+  "run_id": "MR-20260911-090000-0a1b2c3d",
+  "generated_at": "2026-09-11T09:00:00.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "1140912aa0000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {},
+    "source_root": "data/raw",
+    "sink_manifest_sha256": null,
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)"
+  },
+  "notices": [
+    {
+      "code": "SINK_EMPTY",
+      "level": "limitation",
+      "message": "Event Sink 에 이벤트가 한 건도 없다. 커머스는 이벤트 기록이 미구현이고(Ecommerce #28) 시뮬레이터는 C1 범위 밖이다.",
+      "reference": "charter §5 · Ecommerce_Service #28"
+    }
+  ],
+  "gate_result": "incomplete",
+  "spec_coverage": {
+    "spec_items": [
+      {
+        "spec_ref": "유일성",
+        "covered_by": [
+          "DQ-01",
+          "DQ-02",
+          "DQ-02b"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "참조 무결성",
+        "covered_by": [
+          "DQ-03"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "시간 정합성",
+        "covered_by": [
+          "DQ-04",
+          "DQ-05",
+          "DQ-06"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "퍼널 정합성",
+        "covered_by": [
+          "DQ-07",
+          "DQ-08"
+        ],
+        "worst_status": "vacuous"
+      },
+      {
+        "spec_ref": "금액 정합성",
+        "covered_by": [
+          "DQ-09",
+          "DQ-10"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "완전성",
+        "covered_by": [
+          "DQ-11",
+          "DQ-12"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "생성 이탈률",
+        "covered_by": [
+          "DQ-13"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "실험 균형",
+        "covered_by": [
+          "DQ-14"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "처치 강도",
+        "covered_by": [
+          "DQ-15"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "4분면 분포",
+        "covered_by": [
+          "DQ-16"
+        ],
+        "worst_status": "not_run"
+      },
+      {
+        "spec_ref": "재현성",
+        "covered_by": [
+          "DQ-17"
+        ],
+        "worst_status": "blocked"
+      }
+    ],
+    "reported_checks": 18,
+    "unmapped_spec_items": []
+  },
+  "checks": [
+    {
+      "id": "DQ-01",
+      "spec_ref": "유일성",
+      "title": "event_id 전역 유일",
+      "status": "vacuous",
+      "violations": null,
+      "examined_rows": 0,
+      "reason_code": "NOT_RUN",
+      "reason_detail": "검사는 실행했으나 검사 대상이 0행이었다. 위반이 없는 것이 아니라 검사할 것이 없었다.",
+      "scope": "저장된 events 파티션 전 구간. 오늘은 0행이므로 위반이 없는 것이 아니라 검사 대상이 없다 — examined_rows 를 함께 읽어야 한다."
+    },
+    {
+      "id": "DQ-02",
+      "spec_ref": "유일성",
+      "title": "order_id 유일",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "orders 테이블이 구현되지 않아 '전역 유일'의 검사 대상이 없다(sink.py 는 events 만 저장한다).",
+      "scope": "C1 에서는 'order_id 당 purchase 이벤트가 정확히 1건'으로 범위를 좁혀야 검사할 수 있다. 그 좁힌 검사는 DQ-02b 다."
+    },
+    {
+      "id": "DQ-02b",
+      "spec_ref": "유일성(범위 축소)",
+      "title": "order_id 당 purchase 이벤트 1건",
+      "status": "vacuous",
+      "violations": null,
+      "examined_rows": 0,
+      "reason_code": "NOT_RUN",
+      "reason_detail": "검사는 실행했으나 검사 대상이 0행이었다. 위반이 없는 것이 아니라 검사할 것이 없었다.",
+      "scope": "events 테이블에 한정한다. checkout_start·coupon_use 도 order_id 를 갖지만 중복이 정상이므로 purchase 만 센다."
+    },
+    {
+      "id": "DQ-03",
+      "spec_ref": "참조 무결성",
+      "title": "고아 customer_id · product_id 0건",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "customers·products 테이블이 구현되지 않았다(data_spec §7.1 의 6개 테이블 미구현).",
+      "scope": "C1 에서 실행 불가. 이 검사를 통과로 적지 않는다."
+    },
+    {
+      "id": "DQ-04",
+      "spec_ref": "시간 정합성",
+      "title": "세션 내 이벤트 순서",
+      "status": "vacuous",
+      "violations": null,
+      "examined_rows": 0,
+      "reason_code": "NOT_RUN",
+      "reason_detail": "검사는 실행했으나 검사 대상이 0행이었다. 위반이 없는 것이 아니라 검사할 것이 없었다.",
+      "scope": "session_id 가 있는 이벤트만. session_id 가 NOT_APPLICABLE 인 push_sent 등은 대상이 아니다."
+    },
+    {
+      "id": "DQ-05",
+      "spec_ref": "시간 정합성",
+      "title": "timestamp < signup_date 0건",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "signup_date 는 customers 테이블 컬럼이며 구현되지 않았다.",
+      "scope": "C1 에서 실행 불가."
+    },
+    {
+      "id": "DQ-06",
+      "spec_ref": "시간 정합성",
+      "title": "모든 시각이 KST 단일 타임존",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "BLOCKED",
+      "reason_detail": "타임존 정책이 아직 강제되지 않는다(이슈 #53 D1-3). 정책 확정 전에는 위반 판정 기준이 없다.",
+      "scope": "#53 완료 후 실행한다."
+    },
+    {
+      "id": "DQ-07",
+      "spec_ref": "퍼널 정합성",
+      "title": "purchase 는 선행 checkout_start 보유",
+      "status": "vacuous",
+      "violations": null,
+      "examined_rows": 0,
+      "reason_code": "NOT_RUN",
+      "reason_detail": "검사는 실행했으나 검사 대상이 0행이었다. 위반이 없는 것이 아니라 검사할 것이 없었다.",
+      "scope": "order_id 로 대응시킨다. 파티션 경계를 넘는 주문(자정 전후)을 놓치지 않도록 전 구간을 한 번에 본다."
+    },
+    {
+      "id": "DQ-08",
+      "spec_ref": "퍼널 정합성",
+      "title": "coupon_use 는 선행 coupon_exposed 보유",
+      "status": "vacuous",
+      "violations": null,
+      "examined_rows": 0,
+      "reason_code": "NOT_RUN",
+      "reason_detail": "검사는 실행했으나 검사 대상이 0행이었다. 위반이 없는 것이 아니라 검사할 것이 없었다.",
+      "scope": "coupon_id 로 대응시킨다."
+    },
+    {
+      "id": "DQ-09",
+      "spec_ref": "금액 정합성",
+      "title": "order_amount = sum(unit_price*quantity) - discount, 오차 0원",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "discount 필드가 DATA-003 22컬럼에 없고, purchase 이벤트는 주문 단위 1행이라 품목 합계를 재구성할 수 없다. order_items 테이블이 필요하다.",
+      "scope": "C1 에서 원리적으로 실행 불가. api-contracts.md §8 신규 발견 A-1."
+    },
+    {
+      "id": "DQ-10",
+      "spec_ref": "금액 정합성",
+      "title": "음수 금액 0건",
+      "status": "vacuous",
+      "violations": null,
+      "examined_rows": 0,
+      "reason_code": "NOT_RUN",
+      "reason_detail": "검사는 실행했으나 검사 대상이 0행이었다. 위반이 없는 것이 아니라 검사할 것이 없었다.",
+      "scope": "quantity·unit_price·order_amount·session_duration 4종. validate_event() 가 이미 수집 시점에 거부하므로 저장분에는 나타나지 않는 것이 정상이다."
+    },
+    {
+      "id": "DQ-11",
+      "spec_ref": "완전성",
+      "title": "Key 결측 0%",
+      "status": "vacuous",
+      "violations": null,
+      "examined_rows": 0,
+      "reason_code": "NOT_RUN",
+      "reason_detail": "검사는 실행했으나 검사 대상이 0행이었다. 위반이 없는 것이 아니라 검사할 것이 없었다.",
+      "scope": "CORE 4종(event_id·customer_id·timestamp·event_type)."
+    },
+    {
+      "id": "DQ-12",
+      "spec_ref": "완전성",
+      "title": "Feature 결측률 항목별 5% 미만",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "data/processed/features_t0 가 생성되지 않았다. Feature 생성은 decision 파트 소관이며 C1 범위 밖이다.",
+      "scope": "C1 에서 실행 불가."
+    },
+    {
+      "id": "DQ-13",
+      "spec_ref": "생성 이탈률",
+      "title": "Generated Churn Rate 15~25%",
+      "status": "not_run",
+      "violations": null,
+      "threshold": "0.15 <= rate <= 0.25",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "시뮬레이터가 없다. C1 범위 밖이다(charter §5).",
+      "scope": "범위 C 에서 실행한다."
+    },
+    {
+      "id": "DQ-14",
+      "spec_ref": "실험 균형",
+      "title": "Balance Check |SMD| < 0.1",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "assignment 테이블과 시뮬레이터가 없다. 이슈 #48 이 이미 범위 C 로 이관했다.",
+      "scope": "범위 C 에서 실행한다."
+    },
+    {
+      "id": "DQ-15",
+      "spec_ref": "처치 강도",
+      "title": "ATE 3~6%p · 쿠폰 사용률 25~40% · Sleeping Dog 8~15%",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "시뮬레이터 산출물이 없다.",
+      "scope": "범위 C 에서 실행한다."
+    },
+    {
+      "id": "DQ-16",
+      "spec_ref": "4분면 분포",
+      "title": "Persuadables 20~30% 등",
+      "status": "not_run",
+      "violations": null,
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "Ground-truth 는 diagnostics 전용이며 measurement 는 참조조차 할 수 없다.",
+      "scope": "measurement 소관이 아니다. 범위 C·D 에서 diagnostics 가 검사한다."
+    },
+    {
+      "id": "DQ-17",
+      "spec_ref": "재현성",
+      "title": "동일 seed 재실행 시 events.parquet SHA-256 일치",
+      "status": "blocked",
+      "violations": null,
+      "reason_code": "BLOCKED",
+      "reason_detail": "pyarrow 가 설치되지 않아 Parquet 경로가 한 번도 실행되지 않았다. 의존성 도입(dependency-plan.md) 후 해소된다.",
+      "scope": "jsonl.gz 형식의 해시 재현성은 tests/test_sink.py 가 이미 검사한다. Parquet 형식만 미검증이다."
+    }
+  ]
+}

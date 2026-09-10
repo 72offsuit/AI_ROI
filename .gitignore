@@ -26,3 +26,7 @@ docs/data_spec.pdf
 # .agent-team/ 은 의사결정 기록이므로 커밋한다 (docs/GIT_WORKFLOW.md §10).
 # 예외: 목업 캔버스는 Claude Design 에디터 런타임이 통째로 들어간 생성물이다.
 .agent-team/07-design/canvas/
+
+# 감사 로그 서명 키와 락은 런타임 산출물이다. 키는 비밀값이므로 커밋하지 않는다.
+.agent-team/_state/*.audit-key
+.agent-team/_state/*.lock

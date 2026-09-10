@@ -1,0 +1,156 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "freeze_status",
+  "run_id": "MR-20260911-090000-0a1b2c3d",
+  "generated_at": "2026-09-11T09:00:00.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "1140912aa0000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {},
+    "source_root": "data/raw",
+    "sink_manifest_sha256": null,
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)"
+  },
+  "notices": [
+    {
+      "code": "GATE1_NOT_PASSED",
+      "level": "limitation",
+      "message": "C1 은 GATE 1 을 통과시키지 않는다. 부분 봉인만 하며 EXPERIMENT_ENVIRONMENT_v1 을 선언하지 않는다.",
+      "reference": "gate1-lock-scope.md §1"
+    }
+  ],
+  "gate": "GATE_1",
+  "overall": "not_started",
+  "lock_record": null,
+  "items": [
+    {
+      "item": "SERVICE_v1",
+      "status": "PENDING",
+      "owner_part": "commerce",
+      "scope_note": "기준 환경(커머스)의 확정. C1 은 갭을 이슈로 남기고 Lock 하지 않는다.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "unit_cost 부재를 비롯한 요구 대비 갭이 대부분 미해소다(Ecommerce #24)."
+    },
+    {
+      "item": "CUSTOMER_PERSONA_v1",
+      "status": "PENDING",
+      "owner_part": "simulator",
+      "scope_note": "Persona 6종 구성비. src/simulator/ 가 C1 비범위다.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "시뮬레이터 미구현. 검증할 생성물이 없다."
+    },
+    {
+      "item": "HIDDEN_TRAIT_RULE_v1",
+      "status": "OUT_OF_SCOPE",
+      "owner_part": "simulator",
+      "scope_note": "measurement 는 data/hidden 을 참조조차 할 수 없다. C1 의 어떤 담당자도 이 항목을 Lock 할 위치에 있지 않다.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "tests/test_isolation.py FORBIDDEN_PATHS 가 src.measurement 의 data/hidden 참조를 금지한다."
+    },
+    {
+      "item": "BEHAVIOR_RULE_v1",
+      "status": "PENDING",
+      "owner_part": "simulator",
+      "scope_note": "일별 행동 생성 규칙. 시뮬레이터 미가동.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "src/simulator/ 미구현."
+    },
+    {
+      "item": "ECONOMIC_RULE_v1",
+      "status": "PENDING",
+      "owner_part": "measurement",
+      "scope_note": "확정안은 economic-rule-v1.md 에 있다. 선행 조건 G-9·G-10·G-12 미충족으로 아직 Lock 하지 않았다.",
+      "reason_code": "NOT_RUN",
+      "reason_detail": "config/economic_config.yaml 이 아직 없다(이슈 #47 미착수)."
+    },
+    {
+      "item": "CHURN_DEFINITION_v1",
+      "status": "PENDING",
+      "owner_part": "measurement",
+      "scope_note": "판정 방식(고정 윈도우)과 label_window_days=42 는 Lock 대상이나, 임계값 28/42/60 은 Lock 하지 않는다 — 확정 절차(data_spec §5.1)가 시뮬레이터를 요구한다.",
+      "reason_code": "PARAM_UNCONFIRMED",
+      "reason_detail": "임계값 확정 절차 ①~④가 전부 시뮬레이터를 요구한다."
+    },
+    {
+      "item": "TREATMENT_RESPONSE_v1",
+      "status": "OUT_OF_SCOPE",
+      "owner_part": "simulator",
+      "scope_note": "Treatment 반응(tau, 4분면)은 simulator 소유다. Treatment 비용(T0~T4)은 ECONOMIC_RULE_v1 에 속하며 서로 다른 항목이다.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "src/simulator/ 미구현."
+    },
+    {
+      "item": "EVENT_SCHEMA_v1",
+      "status": "PENDING",
+      "owner_part": "measurement",
+      "scope_note": "Lock 범위는 events 테이블에 한정한다. 나머지 6개 테이블(customers·orders·order_items·products·marketing_actions·assignment)은 미정의이며 이 Lock 이 덮지 않는다.",
+      "reason_code": "NOT_RUN",
+      "reason_detail": "선행 조건 G-1~G-5(허용값 Enum·식별자 호출·타임존 정책) 미충족. 이슈 #53·#54 미완."
+    },
+    {
+      "item": "KPI_DEFINITION_v1",
+      "status": "PENDING",
+      "owner_part": "measurement",
+      "scope_note": "계산 계약(이름 ↔ 계산식·모집단·기간·분모)만 GATE 1 대상이고, 판정 역할 배정(Primary 지정·C_rule·B)은 GATE 2 대상이다.",
+      "reason_code": "NOT_RUN",
+      "reason_detail": "src/measurement/kpi.py 가 아직 없다(이슈 #46 미착수)."
+    }
+  ],
+  "unlocked_items": [
+    {
+      "id": "G-1",
+      "title": "category 허용값 5종 Enum 정의 + validate_event() 검사",
+      "met": false,
+      "evidence": "schema.py:115 는 '상품 카테고리 5종'을 설명 문자열로만 적는다."
+    },
+    {
+      "id": "G-3",
+      "title": "validate_event() 가 check_identifier() 를 호출한다",
+      "met": false,
+      "evidence": "schema.py:324-326 이 어디에서도 호출되지 않는다."
+    },
+    {
+      "id": "G-5",
+      "title": "타임존 정책 확정·강제",
+      "met": false,
+      "evidence": "이슈 #53 D1-3."
+    },
+    {
+      "id": "G-6",
+      "title": "동일 root 재기록 시 기존 파티션 보존",
+      "met": false,
+      "evidence": "이슈 #53 D1-1 — 덮어쓰기 재현 확인."
+    },
+    {
+      "id": "G-13",
+      "title": "docs/event_schema.md 가 코드와 일치",
+      "met": true,
+      "evidence": "gen_event_schema_doc.py 재생성 diff 0 (W1 실행 확인)."
+    },
+    {
+      "id": "G-14",
+      "title": "python3 -m unittest discover -s tests 전건 통과",
+      "met": null,
+      "evidence": "이 게시 실행에서 확인하지 않았다. 확인하지 않은 것을 통과로 적지 않는다."
+    },
+    {
+      "id": "G-15",
+      "title": "Lock 시점 커밋 SHA·config 해시 기록 절차",
+      "met": false,
+      "evidence": "config/gate1_lock.yaml 미작성."
+    },
+    {
+      "id": "G-16",
+      "title": "discount 필드 처리 방침 결정",
+      "met": false,
+      "evidence": "api-contracts.md §8 신규 발견 A-1 — 결정 D-16."
+    }
+  ]
+}

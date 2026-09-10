@@ -1,0 +1,138 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "index",
+  "run_id": "MR-20260918-141205-7c4e91ab",
+  "generated_at": "2026-09-18T14:12:05.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "3f9a2c1400000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {
+      "config/economic_config.yaml": "9f2b1e77c4a3d8065b1e0f4a2c7d9e3b5a8c1f0d6e4b2a9c7f3d1e8b5a0c6f24"
+    },
+    "source_root": "data/raw",
+    "sink_manifest_sha256": "1a4c9e2b7d05f38416c0b9e7a2d4f6081c3e5b7a9d2f4068b1e3c5a7d9f0b2e4",
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)",
+    "publisher_version": "(동일 — W5 에서 채운다)"
+  },
+  "notices": [
+    {
+      "code": "REFUND_NOT_ADJUSTED",
+      "level": "assumption",
+      "message": "revenue 는 총매출이며 환불·취소를 차감하지 않는다. 환불이 발생하는 환경에서는 contribution_profit 이 과대평가된다.",
+      "reference": "economic-rule-v1.md §6 가정 A-REFUND"
+    },
+    {
+      "code": "SIMULATOR_ABSENT",
+      "level": "limitation",
+      "message": "시뮬레이터 생성분이 0건이다. src/simulator/ 는 C1 범위 밖이며, 실험 판정 지표는 시뮬레이터 생성분만 쓴다(MEA-002).",
+      "reference": "charter §5"
+    }
+  ],
+  "publish_result": "ok",
+  "verdict": {
+    "level": "violation",
+    "headline_code": "QUALITY_VIOLATION",
+    "headline_detail": "퍼널 정합성 검사에서 위반 3건이 나왔다. 봉인된 정본 파일 1건이 Lock 시점과 다르다. 미실행 검사 8종.",
+    "counts": {
+      "quality_violations": 3,
+      "checks_not_run": 8,
+      "checks_blocked": 1,
+      "metrics_unavailable": 7,
+      "metrics_not_run": 0,
+      "schema_gaps": 4,
+      "lock_items_pending": 6,
+      "rejected_events": 217
+    }
+  },
+  "artifacts": [
+    {
+      "artifact": "ingestion_report",
+      "path": "results/measurement/ingestion_report.json",
+      "status": "published",
+      "sha256": "d6d6615e892412b2a3cd5bca6298cdb00b2787fc2e75f0a7cdf56eca8e8e18dd",
+      "bytes": 29169
+    },
+    {
+      "artifact": "rejection_report",
+      "path": "results/measurement/rejection_report.json",
+      "status": "published",
+      "sha256": "d6f92954c947e03ad81bf9a7c985bc7956b736d533b0eb50336c8fa08507ac69",
+      "bytes": 4658
+    },
+    {
+      "artifact": "field_coverage_report",
+      "path": "results/measurement/field_coverage_report.json",
+      "status": "published",
+      "sha256": "3cfbbf85b51a73fbabb602fa437383fc6690b3e0c524a8c32dff802e56598239",
+      "bytes": 32444
+    },
+    {
+      "artifact": "kpi_report",
+      "path": "results/measurement/kpi_report.json",
+      "status": "published",
+      "sha256": "82f434aa5ecc4cd66579c820b4f49261386fe83c6e7dd145cf63580b450e31b1",
+      "bytes": 20520
+    },
+    {
+      "artifact": "data_quality_report",
+      "path": "results/data_quality_report.json",
+      "status": "published",
+      "sha256": "ba5cb623c9a3dc5f75c42b0f75148bf87a0c299684a14a2337816554e4520fbf",
+      "bytes": 6252
+    },
+    {
+      "artifact": "freeze_status",
+      "path": "results/measurement/freeze_status.json",
+      "status": "published",
+      "sha256": "1a22b3fce13672b2e5fe4e3382e92df0926c300e979b614c35f3adcfdd9d3d67",
+      "bytes": 7491
+    }
+  ],
+  "static_views": [
+    {
+      "route": "/triggers",
+      "title": "모니터링 트리거",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "PRD §71 트리거 5종은 전부 변화를 조건으로 하는데 게시물 이력이 없어 비교 기준이 없다. C1 작동 0종."
+    }
+  ],
+  "views": {
+    "V1": {
+      "title": "수집 현황",
+      "artifact": "ingestion_report",
+      "route": "/ingestion"
+    },
+    "V2": {
+      "title": "계약 위반",
+      "artifact": "rejection_report",
+      "route": "/rejections"
+    },
+    "V3": {
+      "title": "필드 충족률",
+      "artifact": "field_coverage_report",
+      "route": "/coverage"
+    },
+    "V4": {
+      "title": "KPI",
+      "artifact": "kpi_report",
+      "route": "/kpi"
+    },
+    "V5": {
+      "title": "데이터 품질",
+      "artifact": "data_quality_report",
+      "route": "/quality"
+    },
+    "V6": {
+      "title": "봉인 상태",
+      "artifact": "freeze_status",
+      "route": "/freeze"
+    }
+  }
+}
