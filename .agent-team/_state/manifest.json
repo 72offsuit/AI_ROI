@@ -1,0 +1,246 @@
+{
+  "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+  "codename": "AI_ROI",
+  "current_level": 3,
+  "status": "active",
+  "lang": "ko",
+  "created": "2026-09-10T14:27:31.968984Z",
+  "routing": [
+    {
+      "decision_id": "ld-558a7916-0d1a-407a-8145-8bbd3c733f84",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "recommended_level": 3,
+      "confirmed_level": 3,
+      "stakes": {
+        "scope": "module",
+        "novelty": true,
+        "regulation_ip": false,
+        "team_size": "medium"
+      },
+      "wave_set": [
+        "W0",
+        "W1",
+        "W2",
+        "W3",
+        "W4",
+        "W5",
+        "W6"
+      ],
+      "role_set": [
+        "Caleb",
+        "John",
+        "Caleb",
+        "Joshua",
+        "James",
+        "Jonnathan",
+        "Matthew",
+        "Mark",
+        "Nathanael",
+        "Phillip",
+        "Andrew",
+        "Stephen",
+        "Thomas",
+        "Timothy",
+        "Matthias",
+        "Michael",
+        "Hananiah",
+        "Martin"
+      ],
+      "user_verdict": "approve",
+      "decided": "2026-09-10T14:45:39.830897Z"
+    }
+  ],
+  "waves": [
+    {
+      "wave_id": "W0",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "name": "Analysis",
+      "status": "skipped",
+      "active_roles": [],
+      "exit_gate": "Brief"
+    },
+    {
+      "wave_id": "W1",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "name": "Discovery & Market Research",
+      "status": "active",
+      "active_roles": [],
+      "entry_gate": "Brief",
+      "exit_gate": "Usp",
+      "started": "2026-09-10T14:55:19.611990Z"
+    },
+    {
+      "wave_id": "W2",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "name": "Planning · Architecture · Design",
+      "status": "active",
+      "active_roles": [],
+      "entry_gate": "Usp",
+      "exit_gate": "Plan",
+      "started": "2026-09-10T15:48:35.975733Z"
+    },
+    {
+      "wave_id": "W3",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "name": "Story Engineering & Readiness Gate",
+      "status": "pending",
+      "active_roles": [],
+      "entry_gate": "Plan",
+      "exit_gate": "Implementation"
+    },
+    {
+      "wave_id": "W4",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "name": "IP & Research",
+      "status": "skipped",
+      "active_roles": []
+    },
+    {
+      "wave_id": "W5",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "name": "Implementation",
+      "status": "pending",
+      "active_roles": [],
+      "entry_gate": "Implementation"
+    },
+    {
+      "wave_id": "W6",
+      "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
+      "name": "Verify · Documentation · Report",
+      "status": "pending",
+      "active_roles": [],
+      "exit_gate": "Release"
+    }
+  ],
+  "roles": [],
+  "tasks": [],
+  "gates": [
+    {
+      "gate_id": "gate-72118a25-5ab9-4d95-9972-7469b0db3c07",
+      "wave_id": "W1",
+      "gate_type": "Usp",
+      "verdict": "CONCERNS",
+      "issues_total": 8,
+      "issues_critical": 3,
+      "report_path": "01-reverse/reverse-summary.md",
+      "facilitator": "Paul",
+      "decided": "2026-09-10T15:26:05.479268Z"
+    },
+    {
+      "gate_id": "gate-31511ac8-ebe6-4a7c-94bf-fd2b675943f2",
+      "wave_id": "W2",
+      "gate_type": "Plan",
+      "verdict": "CONCERNS",
+      "issues_total": 9,
+      "issues_critical": 3,
+      "report_path": "04-architecture/build-plan.md",
+      "facilitator": "Paul",
+      "decided": "2026-09-10T17:24:26.427513Z"
+    }
+  ],
+  "risks": [
+    {
+      "risk_id": "R-4bab8c8b-9e70-4630-b949-ee5c31895d09",
+      "gate_id": "gate-72118a25-5ab9-4d95-9972-7469b0db3c07",
+      "severity": "med",
+      "description": "[01-reverse/reverse-summary.md §10] 가정 A6 조건부 성립 — 커머스가 이벤트 0건 기록이라 계약이 한쪽 선언이고, 계약이 값 수준(식별자·타임존·어휘)을 규정하지 않음. M-3(#45)은 AIROI-D2 선행 필요",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T15:26:05.479275Z"
+    },
+    {
+      "risk_id": "R-7a689815-b88e-421c-a556-5e6a3899fb51",
+      "gate_id": "gate-72118a25-5ab9-4d95-9972-7469b0db3c07",
+      "severity": "med",
+      "description": "[01-reverse/collision-check.md] 가정 A10 조건부 성립 — 코드 충돌 0이나 커머스 main 커밋 18건을 SeongHwan이 작성했고 제거 대상 R-1~R-9가 전부 그 작업물. 이슈 작성자와 코드 작성자가 다름",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T15:26:05.479276Z"
+    },
+    {
+      "risk_id": "R-afcaa852-5d41-4778-aa0a-f5eeb46f056f",
+      "gate_id": "gate-72118a25-5ab9-4d95-9972-7469b0db3c07",
+      "severity": "med",
+      "description": "[02-market-analysis/market-report.md T1.8] 환불/취소 이벤트 부재 — GA4·Segment·PostHog 표준에 있으나 우리 16종에 없음. 기여이익 과대평가 위험. return_visit는 재방문이지 반품이 아님(오독 주의). M-5 입력",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T15:26:05.479278Z"
+    },
+    {
+      "risk_id": "R-41fd5771-30e5-4c37-8064-7610f4a0afec",
+      "gate_id": "gate-72118a25-5ab9-4d95-9972-7469b0db3c07",
+      "severity": "low",
+      "description": "[리드 검증 git log --all --since] John 보고 시각 주장 오류 정정 — SeongHwan 커밋 39d1668(19:14 KST=10:14Z)이 이슈 발행(13:47Z) 이후라 했으나 실제로는 3시간33분 전. 이슈 발행 후 커머스 코드 커밋 0건",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T15:26:05.479279Z"
+    },
+    {
+      "risk_id": "R-8aa8e93a-457c-4fb0-8169-1733366a8fed",
+      "gate_id": "gate-72118a25-5ab9-4d95-9972-7469b0db3c07",
+      "severity": "low",
+      "description": "[01-reverse/reverse-summary.md §11] BLOCKED 10건 — pyarrow 미설치(Parquet) · Chromium 미설치(e2e) · 빌드류는 파일 생성 유발로 미실행",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T15:26:05.479281Z"
+    },
+    {
+      "risk_id": "R-4d4bb583-1318-4cac-844c-b8a23e0563fa",
+      "gate_id": "gate-31511ac8-ebe6-4a7c-94bf-fd2b675943f2",
+      "severity": "med",
+      "description": "[07-design/contract-reconciliation.md · 04-architecture §9] UX Flow ↔ 계약 대응표 불일치 잔여 — Jonnathan 대조 결과 합의 10 / 부분 1 / 불일치 3에서 James 개정으로 4건 해소(blocked_by·basis·verdict·schema_gaps). 잔여는 X-5(수집 0건 날짜의 중단 vs 활동없음)이며 heartbeat 부재로 계약으로 풀 수 없음. notices INGESTION_GAP_UNDECIDABLE로 사실만 전달",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T17:24:26.427524Z"
+    },
+    {
+      "risk_id": "R-30963caf-1f69-4722-802c-0b71aff872ff",
+      "gate_id": "gate-31511ac8-ebe6-4a7c-94bf-fd2b675943f2",
+      "severity": "med",
+      "description": "[04-architecture/dependency-plan.md · ADR-0004] D-19 CI 신규 워크플로 tests-with-deps.yml 신설 — isolation.yml을 편집하지 않고 새 파일 추가. 편집하면 의존성 없이도 전 테스트가 돈다(ISO-005) 보장이 사라짐. 사용자 승인 필요",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T17:24:26.427527Z"
+    },
+    {
+      "risk_id": "R-74c45645-abb4-446f-a529-5adb8809e3af",
+      "gate_id": "gate-31511ac8-ebe6-4a7c-94bf-fd2b675943f2",
+      "severity": "med",
+      "description": "[04-architecture/dashboard-architecture.md §6] D-22 tests/test_dashboard_isolation.py 도입 — DB-014를 강제하는 코드가 현재 0건. W-8(격리검사가 src/ 밖 미검사) 해소. 검사 설계는 완료(정규식 기반, AST 아님이라는 한계 명시). 실행은 W6 Matthias+사용자 승인",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T17:24:26.427529Z"
+    },
+    {
+      "risk_id": "R-4700d4a3-b722-441a-8374-396d240852e5",
+      "gate_id": "gate-31511ac8-ebe6-4a7c-94bf-fd2b675943f2",
+      "severity": "med",
+      "description": "[04-architecture/dependency-plan.md] D-20 docker-compose C1 도입 여부 — charter §4 In Scope에 없어 설계만 완료. 대시보드에 results/를 :ro로만 마운트하고 data/를 마운트하지 않으면 격리가 파일시스템 경계가 됨",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T17:24:26.427531Z"
+    },
+    {
+      "risk_id": "R-c6a26409-a795-4a0f-b540-34dd913d3c8a",
+      "gate_id": "gate-31511ac8-ebe6-4a7c-94bf-fd2b675943f2",
+      "severity": "low",
+      "description": "[00-plan/task-graph.md §4 · 리드 판정] 리드 판정 4건 기록 — D-6(신규 디렉터리 지침파일은 봉인 아님, Andrew 소유) · D-29(stale 미도입 승인, 도달 불가 분기를 계약에 넣지 않음) · D-30(거부샘플 값 22컬럼 제한 승인, 금지필드가 담길 자리가 구조적으로 없음) · B-1/B-2(문서 파일명은 이슈 본문 표기 채택, task-graph 수정)",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T17:24:26.427533Z"
+    },
+    {
+      "risk_id": "R-730bd4e6-29bb-444b-bccd-bdf120c7f8e4",
+      "gate_id": "gate-31511ac8-ebe6-4a7c-94bf-fd2b675943f2",
+      "severity": "low",
+      "description": "[04-architecture/dependency-plan.md §3.2 · 07-design/design-handoff.md] 검증 한계 — validate_examples.py는 저장소에 jsonschema 미설치로 BLOCKED. James는 스크래치패드 venv에서 실행(예시 14건 위반 0). 저장소 밖 환경이므로 저장소 검증으로 계산하지 않음. 리드는 표준 라이브러리 최소검증(required·type·enum)으로 7/7 확인. 대시보드 미구현이라 화면 검증 17종은 설계만",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T17:24:26.427535Z"
+    }
+  ],
+  "modules": [],
+  "artifacts": [],
+  "stale_story_keys": [],
+  "approved_fingerprints": []
+}

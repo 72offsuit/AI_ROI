@@ -1,0 +1,1121 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "field_coverage_report",
+  "run_id": "MR-20260918-141205-7c4e91ab",
+  "generated_at": "2026-09-18T14:12:05.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "3f9a2c1400000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {
+      "config/economic_config.yaml": "9f2b1e77c4a3d8065b1e0f4a2c7d9e3b5a8c1f0d6e4b2a9c7f3d1e8b5a0c6f24"
+    },
+    "source_root": "data/raw",
+    "sink_manifest_sha256": "1a4c9e2b7d05f38416c0b9e7a2d4f6081c3e5b7a9d2f4068b1e3c5a7d9f0b2e4",
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)",
+    "publisher_version": "(동일 — W5 에서 채운다)"
+  },
+  "notices": [
+    {
+      "code": "SIMULATOR_ABSENT",
+      "level": "limitation",
+      "message": "시뮬레이터 생성분이 0건이다. src/simulator/ 는 C1 범위 밖이며, 실험 판정 지표는 시뮬레이터 생성분만 쓴다(MEA-002).",
+      "reference": "charter §5"
+    }
+  ],
+  "fields": {
+    "event_id": {
+      "group": "core",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "event_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "events_ingested"
+      ]
+    },
+    "customer_id": {
+      "group": "core",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "customer_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "churn_rate",
+        "retention_rate",
+        "repurchase_rate",
+        "winback_rate",
+        "purchase_frequency",
+        "purchase_interval",
+        "cohort_retention_rate"
+      ]
+    },
+    "timestamp": {
+      "group": "core",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "timestamp 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "churn_rate",
+        "purchase_interval",
+        "cohort_retention_rate",
+        "ingestion_days_gap",
+        "partition_day_count"
+      ]
+    },
+    "event_type": {
+      "group": "core",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "event_type 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "events_ingested",
+        "event_type_coverage"
+      ]
+    },
+    "session_id": {
+      "group": "session",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.9871,
+            "unit": "ratio",
+            "basis": {
+              "population": "session_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18424,
+              "observed_count": 18424,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "session_duration",
+        "page_views"
+      ]
+    },
+    "session_duration": {
+      "group": "session",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.1602,
+            "unit": "ratio",
+            "basis": {
+              "population": "session_duration 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18424,
+              "observed_count": 18424,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_use",
+        "page_view",
+        "product_view",
+        "purchase",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "session_duration"
+      ]
+    },
+    "page_type": {
+      "group": "session",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "page_type 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18322,
+              "observed_count": 18322,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "page_views"
+      ]
+    },
+    "product_id": {
+      "group": "product",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "product_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 6836,
+              "observed_count": 6836,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "remove_from_cart",
+        "review"
+      ],
+      "blocks_metrics": [
+        "cart_abandonment_count"
+      ]
+    },
+    "category": {
+      "group": "product",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "category 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 6836,
+              "observed_count": 6836,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "remove_from_cart",
+        "review",
+        "search"
+      ],
+      "blocks_metrics": []
+    },
+    "quantity": {
+      "group": "product",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "quantity 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 1932,
+              "observed_count": 1932,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "remove_from_cart"
+      ],
+      "blocks_metrics": [
+        "cogs"
+      ]
+    },
+    "unit_price": {
+      "group": "product",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.8814,
+            "unit": "ratio",
+            "basis": {
+              "population": "unit_price 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 6734,
+              "observed_count": 6734,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "product_view",
+        "remove_from_cart"
+      ],
+      "blocks_metrics": [
+        "cogs"
+      ]
+    },
+    "order_id": {
+      "group": "order",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "order_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 2630,
+              "observed_count": 2630,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "checkout_start",
+        "coupon_use",
+        "cs_contact",
+        "purchase",
+        "review"
+      ],
+      "blocks_metrics": [
+        "average_order_value",
+        "revenue"
+      ]
+    },
+    "order_amount": {
+      "group": "order",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "order_amount 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 2522,
+              "observed_count": 2522,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "checkout_start",
+        "coupon_use",
+        "purchase"
+      ],
+      "blocks_metrics": [
+        "revenue",
+        "average_order_value",
+        "cumulative_revenue",
+        "contribution_profit",
+        "shipping_subsidy"
+      ]
+    },
+    "coupon_id": {
+      "group": "marketing",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "coupon_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 2522,
+              "observed_count": 2522,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "purchase",
+        "push_sent"
+      ],
+      "blocks_metrics": [
+        "coupon_usage_count",
+        "coupon_exposure_count",
+        "coupon_cost"
+      ]
+    },
+    "campaign_id": {
+      "group": "marketing",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "campaign_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 1204,
+              "observed_count": 1204,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "campaign_exposed",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "purchase",
+        "push_sent"
+      ],
+      "blocks_metrics": [
+        "campaign_response_count",
+        "message_cost",
+        "campaign_fixed_cost"
+      ]
+    },
+    "treatment_id": {
+      "group": "marketing",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "treatment_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "shipping_subsidy",
+        "marketing_cost"
+      ]
+    },
+    "treatment_group": {
+      "group": "marketing",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "treatment_group 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": []
+    },
+    "experiment_id": {
+      "group": "marketing",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "experiment_id 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": []
+    },
+    "service_version": {
+      "group": "meta",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 1.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "service_version 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": []
+    },
+    "customer_version": {
+      "group": "meta",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "customer_version 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": []
+    },
+    "simulator_version": {
+      "group": "meta",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "simulator_version 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "events_ingested"
+      ]
+    },
+    "random_seed": {
+      "group": "meta",
+      "fill_rate": {
+        "by_source": {
+          "commerce": {
+            "status": "ok",
+            "value": 0.0,
+            "unit": "ratio",
+            "basis": {
+              "population": "random_seed 가 적용되는 커머스 이벤트",
+              "denominator_definition": "NOT_APPLICABLE 을 제외한 적용 대상 건수",
+              "denominator": 18430,
+              "observed_count": 18430,
+              "window": {
+                "direction": "none",
+                "days": null
+              }
+            }
+          },
+          "simulator": {
+            "status": "unavailable",
+            "value": null,
+            "unit": "ratio",
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "시뮬레이터 생성분이 0건이라 분모가 없다."
+          }
+        }
+      },
+      "applicable_event_types": [
+        "add_to_cart",
+        "campaign_exposed",
+        "checkout_start",
+        "coupon_clicked",
+        "coupon_exposed",
+        "coupon_use",
+        "cs_contact",
+        "page_view",
+        "product_view",
+        "purchase",
+        "push_sent",
+        "remove_from_cart",
+        "return_visit",
+        "review",
+        "search",
+        "session_start"
+      ],
+      "blocks_metrics": [
+        "events_ingested"
+      ]
+    }
+  },
+  "missing_fields": [
+    "coupon_id",
+    "campaign_id",
+    "treatment_id",
+    "treatment_group",
+    "experiment_id",
+    "customer_version",
+    "simulator_version",
+    "random_seed"
+  ],
+  "schema_gaps": [
+    {
+      "ref": "unit_cost",
+      "required_by_formula": "cogs = sum(unit_cost * quantity)",
+      "where_it_should_live": "products 테이블 (data_spec §7.1 · 미구현). 커머스에도 없다 (Ecommerce #24)",
+      "blocks_metrics": [
+        "cogs",
+        "contribution_profit",
+        "incremental_contribution_profit",
+        "ai_roi"
+      ],
+      "blocks_checks": [],
+      "reason_code": "NO_COST_BASIS",
+      "reason_detail": "원가를 담을 테이블이 구현되지 않았고 커머스 스키마에도 unit_cost 컬럼이 없다. 원가율을 곱해 추정하지 않는다.",
+      "decision_ref": "EC-1 · EC-2 · Ecommerce #24"
+    },
+    {
+      "ref": "discount",
+      "required_by_formula": "order_amount = sum(unit_price * quantity) - discount · coupon_cost = sum(discount)",
+      "where_it_should_live": "events 22컬럼 (DATA-003) — 없다",
+      "blocks_metrics": [
+        "coupon_cost",
+        "marketing_cost",
+        "contribution_profit"
+      ],
+      "blocks_checks": [
+        "DQ-09"
+      ],
+      "reason_code": "MISSING_FIELD",
+      "reason_detail": "order_amount 의 정의식이 빼는 항목인데 22컬럼에 discount 가 없다. purchase 는 주문 단위 1행이라 품목 합계도 재구성할 수 없어 금액 정합성 검사가 원리적으로 불가하다.",
+      "decision_ref": "D-16 · G-16"
+    },
+    {
+      "ref": "shipping_fee",
+      "required_by_formula": "contribution_profit = ... - shipping_subsidy",
+      "where_it_should_live": "events 22컬럼 (DATA-003) — 없다",
+      "blocks_metrics": [
+        "shipping_subsidy",
+        "contribution_profit"
+      ],
+      "blocks_checks": [],
+      "reason_code": "MISSING_FIELD",
+      "reason_detail": "배송비·배송보조 필드가 없다. 시뮬레이터 생성분은 treatment_id=T1 과 order_amount 로 규칙 유도가 가능하나 저장된 사실이 아니다. 커머스는 배송비를 저장하지 않는다.",
+      "decision_ref": "D-3"
+    },
+    {
+      "ref": "refund",
+      "required_by_formula": "revenue = 순매출 (환불 차감 후)",
+      "where_it_should_live": "event_type 16종 — 환불·취소 이벤트가 없다",
+      "blocks_metrics": [
+        "revenue",
+        "contribution_profit",
+        "incremental_contribution_profit"
+      ],
+      "blocks_checks": [],
+      "reason_code": "MISSING_FIELD",
+      "reason_detail": "환불/취소 이벤트가 없어 총매출을 순매출로 간주한다(가정 A-REFUND). 환불이 발생하는 환경에서는 기여이익이 과대평가된다.",
+      "decision_ref": "D-2"
+    }
+  ]
+}

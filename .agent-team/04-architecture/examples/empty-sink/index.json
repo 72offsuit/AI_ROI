@@ -1,0 +1,129 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "index",
+  "run_id": "MR-20260911-090000-0a1b2c3d",
+  "generated_at": "2026-09-11T09:00:00.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "1140912aa0000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {},
+    "source_root": "data/raw",
+    "sink_manifest_sha256": null,
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)"
+  },
+  "notices": [
+    {
+      "code": "SINK_EMPTY",
+      "level": "limitation",
+      "message": "Event Sink 에 이벤트가 한 건도 없다. 커머스는 이벤트 기록이 미구현이고(Ecommerce #28) 시뮬레이터는 C1 범위 밖이다.",
+      "reference": "charter §5 · Ecommerce_Service #28"
+    }
+  ],
+  "publish_result": "ok",
+  "verdict": {
+    "level": "attention",
+    "headline_code": "SINK_EMPTY",
+    "headline_detail": "이벤트가 한 건도 수집되지 않았다. 커머스는 이벤트 기록이 미구현이고 시뮬레이터는 C1 범위 밖이다. 계산 불가 지표 12종 · 미실행 검사 10종 · 봉인 대기 9종.",
+    "counts": {
+      "quality_violations": 0,
+      "checks_not_run": 10,
+      "checks_blocked": 1,
+      "metrics_unavailable": 12,
+      "metrics_not_run": 0,
+      "schema_gaps": 4,
+      "lock_items_pending": 9,
+      "rejected_events": 0
+    }
+  },
+  "artifacts": [
+    {
+      "artifact": "ingestion_report",
+      "path": "results/measurement/ingestion_report.json",
+      "status": "published",
+      "sha256": "553a07afe1b54ccb952a9cb1a8a0991e406512ff0026a11ce519fab5d416d6dd",
+      "bytes": 27318
+    },
+    {
+      "artifact": "rejection_report",
+      "path": "results/measurement/rejection_report.json",
+      "status": "published",
+      "sha256": "5b9823cfa634078afe76ceabccdae379be197f1083b52907785d837e154b650d",
+      "bytes": 2104
+    },
+    {
+      "artifact": "field_coverage_report",
+      "path": "results/measurement/field_coverage_report.json",
+      "status": "published",
+      "sha256": "b8e4f80ec23e1141077f31d62b185135d6cb2f971c5abc3b96940495af5229a3",
+      "bytes": 28014
+    },
+    {
+      "artifact": "kpi_report",
+      "path": "results/measurement/kpi_report.json",
+      "status": "published",
+      "sha256": "c477879fa72fcfcadaab183c89916e58213c31b00911ae5aa8430e77b739bb71",
+      "bytes": 21198
+    },
+    {
+      "artifact": "data_quality_report",
+      "path": "results/data_quality_report.json",
+      "status": "published",
+      "sha256": "6fc2aed1903cc0618449b79a02414df9f0b823beef8256c117ba25a01138d35d",
+      "bytes": 11221
+    },
+    {
+      "artifact": "freeze_status",
+      "path": "results/measurement/freeze_status.json",
+      "status": "published",
+      "sha256": "09b57bbf216a2ffbc7fbcd83d661e7319fd8ecb7bc28b209d740f0ed9fa5c853",
+      "bytes": 6261
+    }
+  ],
+  "static_views": [
+    {
+      "route": "/triggers",
+      "title": "모니터링 트리거",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "PRD §71 트리거 5종은 전부 변화를 조건으로 하는데 게시물 이력이 없어 비교 기준이 없다. C1 작동 0종 — 각 트리거의 차단 사유를 적은 계획된 부재 표로 정적 구현한다."
+    }
+  ],
+  "views": {
+    "V1": {
+      "title": "수집 현황",
+      "artifact": "ingestion_report",
+      "route": "/ingestion"
+    },
+    "V2": {
+      "title": "계약 위반",
+      "artifact": "rejection_report",
+      "route": "/rejections"
+    },
+    "V3": {
+      "title": "필드 충족률",
+      "artifact": "field_coverage_report",
+      "route": "/coverage"
+    },
+    "V4": {
+      "title": "KPI",
+      "artifact": "kpi_report",
+      "route": "/kpi"
+    },
+    "V5": {
+      "title": "데이터 품질",
+      "artifact": "data_quality_report",
+      "route": "/quality"
+    },
+    "V6": {
+      "title": "봉인 상태",
+      "artifact": "freeze_status",
+      "route": "/freeze"
+    }
+  }
+}

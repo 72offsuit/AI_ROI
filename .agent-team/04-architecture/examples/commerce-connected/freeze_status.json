@@ -1,0 +1,184 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "freeze_status",
+  "run_id": "MR-20260918-141205-7c4e91ab",
+  "generated_at": "2026-09-18T14:12:05.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "3f9a2c1400000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {
+      "config/economic_config.yaml": "9f2b1e77c4a3d8065b1e0f4a2c7d9e3b5a8c1f0d6e4b2a9c7f3d1e8b5a0c6f24"
+    },
+    "source_root": "data/raw",
+    "sink_manifest_sha256": "1a4c9e2b7d05f38416c0b9e7a2d4f6081c3e5b7a9d2f4068b1e3c5a7d9f0b2e4",
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)",
+    "publisher_version": "(동일 — W5 에서 채운다)"
+  },
+  "notices": [
+    {
+      "code": "GATE1_NOT_PASSED",
+      "level": "limitation",
+      "message": "C1 은 GATE 1 을 통과시키지 않는다. 부분 봉인만 하며 EXPERIMENT_ENVIRONMENT_v1 을 선언하지 않는다.",
+      "reference": "gate1-lock-scope.md §1"
+    },
+    {
+      "code": "LOCK_MISMATCH",
+      "level": "failure",
+      "message": "EVENT SCHEMA v1 의 정본 파일 하나가 Lock 시점과 달라졌다. FREEZE-003 절차를 검토해야 한다.",
+      "reference": "gate1-freeze-procedure.md §4"
+    },
+    {
+      "code": "DASHBOARD_NOT_ISOLATION_CHECKED",
+      "level": "limitation",
+      "message": "격리 검사가 dashboard/ 를 보지 않는다. tests/test_isolation.py 는 src/**/*.py 만 순회한다.",
+      "reference": "dashboard-architecture.md §6"
+    }
+  ],
+  "gate": "GATE_1",
+  "overall": "violated",
+  "lock_record": {
+    "path": "config/gate1_lock.yaml",
+    "sha256": "b7e1d0c4a9f2635e8017c3b5d9a4e2f60817b3c5d9e1a4f60827b3c5d9e1a4f6",
+    "locked_at": "2026-09-16T18:30:00.000+09:00",
+    "locked_by": "(예시 · 실제 Lock 시 사람 이름을 기록한다)",
+    "repo_commit": "88c1a730000000000000000000000000000000aa",
+    "simulator_commit": null
+  },
+  "items": [
+    {
+      "item": "SERVICE_v1",
+      "status": "PENDING",
+      "owner_part": "commerce",
+      "scope_note": "기준 환경(커머스)의 확정. C1 은 갭을 이슈로 남기고 Lock 하지 않는다.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "unit_cost 부재를 비롯한 요구 대비 갭이 대부분 미해소다."
+    },
+    {
+      "item": "CUSTOMER_PERSONA_v1",
+      "status": "PENDING",
+      "owner_part": "simulator",
+      "scope_note": "Persona 6종 구성비. simulator 미가동.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "시뮬레이터 미구현."
+    },
+    {
+      "item": "HIDDEN_TRAIT_RULE_v1",
+      "status": "OUT_OF_SCOPE",
+      "owner_part": "simulator",
+      "scope_note": "measurement 는 data/hidden 을 참조조차 할 수 없다.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "격리 규칙상 C1 의 어떤 담당자도 Lock 할 위치에 있지 않다."
+    },
+    {
+      "item": "BEHAVIOR_RULE_v1",
+      "status": "PENDING",
+      "owner_part": "simulator",
+      "scope_note": "일별 행동 생성 규칙.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "src/simulator/ 미구현."
+    },
+    {
+      "item": "ECONOMIC_RULE_v1",
+      "status": "PARTIAL",
+      "owner_part": "measurement",
+      "scope_note": "원가율·Treatment 단위 비용·비용 회계 3원칙·N_targeted·기여이익식·EC-1·EC-2·AI 투자비용·가정 A-REFUND·EC-7 을 Lock 한다. C_rule·예산 상한 B·쿠폰 사용률 30% 가정은 Lock 하지 않는다.",
+      "canonical_files": [
+        {
+          "path": "config/economic_config.yaml",
+          "locked_sha256": "4d2f8a1c6e0b9375f4a2c8e1d0b6395f7a3c5e1d0b6284f7a3c5e1d0b6284f7a",
+          "current_sha256": "4d2f8a1c6e0b9375f4a2c8e1d0b6395f7a3c5e1d0b6284f7a3c5e1d0b6284f7a",
+          "verification": "match"
+        },
+        {
+          "path": "src/measurement/economics.py",
+          "locked_sha256": "0b6284f7a3c5e1d0b6284f7a3c5e1d04d2f8a1c6e0b9375f4a2c8e1d0b6395f7",
+          "current_sha256": "0b6284f7a3c5e1d0b6284f7a3c5e1d04d2f8a1c6e0b9375f4a2c8e1d0b6395f7",
+          "verification": "match"
+        }
+      ]
+    },
+    {
+      "item": "CHURN_DEFINITION_v1",
+      "status": "PARTIAL",
+      "owner_part": "measurement",
+      "scope_note": "판정 방식(고정 윈도우)과 운영 상태/모델 라벨의 분리, label_window_days=42 를 Lock 한다. 임계값 28/42/60 은 가설값이며 Lock 하지 않는다.",
+      "reason_code": "PARAM_UNCONFIRMED",
+      "reason_detail": "확정 절차(data_spec §5.1)가 시뮬레이터를 요구한다."
+    },
+    {
+      "item": "TREATMENT_RESPONSE_v1",
+      "status": "OUT_OF_SCOPE",
+      "owner_part": "simulator",
+      "scope_note": "Treatment 반응(tau·4분면)은 simulator 소유다. Treatment 비용은 ECONOMIC_RULE_v1 에 속하는 다른 항목이다.",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "src/simulator/ 미구현."
+    },
+    {
+      "item": "EVENT_SCHEMA_v1",
+      "status": "PARTIAL",
+      "owner_part": "measurement",
+      "scope_note": "Lock 범위는 events 테이블에 한정한다. customers·orders·order_items·products·marketing_actions·assignment 6개 테이블은 정의되지 않았으며 이 Lock 이 덮지 않는다.",
+      "canonical_files": [
+        {
+          "path": "src/measurement/schema.py",
+          "locked_sha256": "4d2f8a1c6e0b9375f4a2c8e1d0b6395f7a3c5e1d0b6284f7a3c5e1d0b6284f7a",
+          "current_sha256": "ffee1122334455667788990011223344556677889900aabbccddeeff00112233",
+          "verification": "mismatch"
+        },
+        {
+          "path": "docs/event_schema.md",
+          "locked_sha256": "0b6284f7a3c5e1d0b6284f7a3c5e1d04d2f8a1c6e0b9375f4a2c8e1d0b6395f7",
+          "current_sha256": null,
+          "verification": "not_run"
+        }
+      ]
+    },
+    {
+      "item": "KPI_DEFINITION_v1",
+      "status": "PARTIAL",
+      "owner_part": "measurement",
+      "scope_note": "계산 계약(이름 ↔ 계산식·모집단·기간·분모)만 Lock 한다. 판정 역할 배정·C_rule·예산 상한 B 는 GATE 2 대상이다.",
+      "canonical_files": [
+        {
+          "path": "src/measurement/kpi.py",
+          "locked_sha256": "4d2f8a1c6e0b9375f4a2c8e1d0b6395f7a3c5e1d0b6284f7a3c5e1d0b6284f7a",
+          "current_sha256": "4d2f8a1c6e0b9375f4a2c8e1d0b6395f7a3c5e1d0b6284f7a3c5e1d0b6284f7a",
+          "verification": "match"
+        }
+      ]
+    }
+  ],
+  "unlocked_items": [
+    {
+      "id": "G-8",
+      "title": "파생 상태 기록 경로 결정",
+      "met": false,
+      "evidence": "DerivedStateType 이 EventType 밖이라 Sink 에 기록할 수단이 없다."
+    },
+    {
+      "id": "G-9",
+      "title": "shipping_subsidy 처리 방침",
+      "met": false,
+      "evidence": "결정 D-3 대기."
+    },
+    {
+      "id": "G-13",
+      "title": "docs/event_schema.md 가 코드와 일치",
+      "met": null,
+      "evidence": "이 실행에서 재생성 대조를 하지 않았다. 확인하지 않은 것을 통과로 적지 않는다."
+    },
+    {
+      "id": "G-16",
+      "title": "discount 필드 처리 방침 결정",
+      "met": false,
+      "evidence": "결정 D-16 대기."
+    }
+  ]
+}

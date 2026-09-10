@@ -1,0 +1,181 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "rejection_report",
+  "run_id": "MR-20260918-141205-7c4e91ab",
+  "generated_at": "2026-09-18T14:12:05.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "3f9a2c1400000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {
+      "config/economic_config.yaml": "9f2b1e77c4a3d8065b1e0f4a2c7d9e3b5a8c1f0d6e4b2a9c7f3d1e8b5a0c6f24"
+    },
+    "source_root": "data/raw",
+    "sink_manifest_sha256": "1a4c9e2b7d05f38416c0b9e7a2d4f6081c3e5b7a9d2f4068b1e3c5a7d9f0b2e4",
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)",
+    "publisher_version": "(동일 — W5 에서 채운다)"
+  },
+  "notices": [],
+  "totals": {
+    "events_rejected": {
+      "status": "ok",
+      "value": 217,
+      "unit": "count",
+      "basis": {
+        "population": "수집 시도된 전 이벤트",
+        "denominator_definition": "분모 없음 (합계)",
+        "denominator": null,
+        "observed_count": 18647,
+        "window": {
+          "direction": "none",
+          "days": null
+        }
+      }
+    },
+    "rejection_rate": {
+      "status": "ok",
+      "value": 0.0116,
+      "unit": "ratio",
+      "basis": {
+        "population": "수집 시도된 전 이벤트",
+        "denominator_definition": "수집 시도 건수 (저장 + 거부)",
+        "denominator": 18647,
+        "observed_count": 18647,
+        "window": {
+          "direction": "none",
+          "days": null
+        }
+      }
+    },
+    "distinct_reasons": {
+      "status": "ok",
+      "value": 4,
+      "unit": "count",
+      "basis": {
+        "population": "거부 사유 종류",
+        "denominator_definition": "분모 없음 (합계)",
+        "denominator": null,
+        "observed_count": 217,
+        "window": {
+          "direction": "none",
+          "days": null
+        }
+      }
+    }
+  },
+  "by_reason": [
+    {
+      "reason_key": "IDENTIFIER_FORMAT",
+      "reason_label": "식별자 형식 위반",
+      "count": 148,
+      "by_field": {
+        "customer_id": 148
+      },
+      "by_event_type": {
+        "session_start": 61,
+        "purchase": 42,
+        "page_view": 45
+      }
+    },
+    {
+      "reason_key": "DISALLOWED_ENUM_VALUE",
+      "reason_label": "허용값 밖의 값",
+      "count": 44,
+      "by_field": {
+        "page_type": 31,
+        "category": 13
+      },
+      "by_event_type": {
+        "page_view": 31,
+        "product_view": 13
+      }
+    },
+    {
+      "reason_key": "MISSING_REQUIRED_FIELD",
+      "reason_label": "필수 필드 누락",
+      "count": 19,
+      "by_field": {
+        "session_id": 19
+      },
+      "by_event_type": {
+        "add_to_cart": 19
+      }
+    },
+    {
+      "reason_key": "TIMEZONE_POLICY",
+      "reason_label": "타임존 정책 위반",
+      "count": 6,
+      "by_field": {
+        "timestamp": 6
+      },
+      "by_event_type": {
+        "purchase": 6
+      }
+    }
+  ],
+  "samples": [
+    {
+      "reason_key": "IDENTIFIER_FORMAT",
+      "event_type": "purchase",
+      "partition_date": "2026-09-14",
+      "source": "commerce",
+      "problems": [
+        "customer_id 형식 위반 — ^C\\d{8}$ 를 만족하지 않는다"
+      ],
+      "offending_fields": [
+        "customer_id"
+      ],
+      "offending_values": {
+        "customer_id": "test-user-1"
+      }
+    },
+    {
+      "reason_key": "DISALLOWED_ENUM_VALUE",
+      "event_type": "page_view",
+      "partition_date": "2026-09-13",
+      "source": "commerce",
+      "problems": [
+        "page_type 허용값 8종 밖의 값"
+      ],
+      "offending_fields": [
+        "page_type"
+      ],
+      "offending_values": {
+        "page_type": "main"
+      }
+    },
+    {
+      "reason_key": "MISSING_REQUIRED_FIELD",
+      "event_type": "add_to_cart",
+      "partition_date": "2026-09-16",
+      "source": "commerce",
+      "problems": [
+        "add_to_cart: 필수 필드 누락 — session_id"
+      ],
+      "offending_fields": [
+        "session_id"
+      ]
+    },
+    {
+      "reason_key": "TIMEZONE_POLICY",
+      "event_type": "purchase",
+      "partition_date": "2026-09-17",
+      "source": "commerce",
+      "problems": [
+        "timestamp 가 KST(+09:00)가 아니다"
+      ],
+      "offending_fields": [
+        "timestamp"
+      ],
+      "offending_values": {
+        "timestamp": "2026-09-17T23:41:02.000Z"
+      }
+    }
+  ]
+}

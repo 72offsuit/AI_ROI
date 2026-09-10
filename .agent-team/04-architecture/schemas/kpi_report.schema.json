@@ -1,0 +1,270 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/measurement-publish/v1/kpi_report.schema.json",
+  "title": "results/measurement/kpi_report.json — V4 KPI",
+  "description": "'지금 계산되는 KPI는? 계산 안 되는 것은 왜?' 에 답한다. ★ kpi-definition-v1.md 가 정의한 지표 전부(47종)가 항목으로 존재한다 — 계산되지 않는 지표를 목록에서 빼면 '무엇이 계산 불가인지'가 화면에서 사라지고, 그것이 USP-1 이 막으려는 상황이다.",
+  "type": "object",
+  "required": [
+    "contract_version",
+    "artifact",
+    "run_id",
+    "generated_at",
+    "timezone",
+    "provenance",
+    "notices",
+    "index_date",
+    "definition_version",
+    "summary",
+    "metrics"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "$ref": "common.schema.json#/$defs/contract_version"
+    },
+    "artifact": {
+      "const": "kpi_report"
+    },
+    "run_id": {
+      "$ref": "common.schema.json#/$defs/run_id"
+    },
+    "generated_at": {
+      "$ref": "common.schema.json#/$defs/kst_timestamp"
+    },
+    "timezone": {
+      "const": "Asia/Seoul"
+    },
+    "provenance": {
+      "$ref": "common.schema.json#/$defs/provenance"
+    },
+    "notices": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/notice"
+      }
+    },
+    "index_date": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^([0-9]{4}-[0-9]{2}-[0-9]{2})?$",
+      "description": "기준일 D (kpi-definition-v1.md R-1). '현재'라는 암묵 기준일을 쓰지 않는다. 데이터가 없어 기준일을 정할 수 없으면 null 이고, 그때 시점 의존 지표는 전부 unavailable 이다."
+    },
+    "definition_version": {
+      "type": "string",
+      "description": "KPI 정의 문서의 버전 식별자. Lock 이후에는 config/gate1_lock.yaml 의 KPI DEFINITION 항목과 일치해야 한다."
+    },
+    "summary": {
+      "type": "object",
+      "description": "kpi-definition-v1.md §8 표를 그대로 화면에 옮기기 위한 집계. metrics 에서 파생되며 대시보드가 세지 않는다(DB-012).",
+      "required": [
+        "total",
+        "ok",
+        "unconfirmed",
+        "unavailable",
+        "blocked",
+        "not_run"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "total": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "ok": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unconfirmed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unavailable": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "blocked": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "not_run": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_layer": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "metrics": {
+      "type": "array",
+      "minItems": 1,
+      "description": "지표 하나당 한 항목. 정의(계산식·모집단·기간·분모)와 값이 같은 자리에 있어 '같은 이름의 다른 계산'이 성립할 수 없다(이슈 #46 완료 조건).",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "layer",
+          "role",
+          "population",
+          "window",
+          "denominator_definition",
+          "value"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*(\\[[a-z_]+\\])?$"
+          },
+          "layer": {
+            "enum": [
+              "collection_health",
+              "customer_kpi",
+              "business_kpi",
+              "experiment"
+            ],
+            "description": "kpi-definition-v1.md 계층 0 / 1 / 2 / 실험 판정"
+          },
+          "role": {
+            "enum": [
+              "none",
+              "primary",
+              "guardrail",
+              "secondary"
+            ]
+          },
+          "population": {
+            "enum": [
+              "P_all",
+              "P_buyer",
+              "P_eligible",
+              "cohort",
+              "orders",
+              "events",
+              "test_holdout",
+              "not_applicable"
+            ],
+            "description": "R-4 — '고객'이라고만 쓰지 않는다."
+          },
+          "window": {
+            "type": "object",
+            "required": [
+              "direction"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "direction": {
+                "enum": [
+                  "retrospective",
+                  "prospective",
+                  "point_in_time",
+                  "none"
+                ]
+              },
+              "days": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "minimum": 1
+              },
+              "label": {
+                "type": "string"
+              }
+            },
+            "$comment": "R-2 — D 이후를 보는 지표와 D 이전을 보는 지표를 같은 이름으로 쓰지 않는다."
+          },
+          "denominator_definition": {
+            "type": "string",
+            "minLength": 1
+          },
+          "formula": {
+            "type": "string"
+          },
+          "definition_ref": {
+            "type": "string",
+            "description": "정의 문서의 절 참조"
+          },
+          "source_events": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "value": {
+            "$comment": "anyOf 다 — 출처 분해가 없는 지표(metric_value)와 있는 지표(source_split)를 모두 받는다. 계층별 강제는 아래 allOf 가 한다. oneOf 를 쓰면 combined 없는 source_split 이 kpi_source_split 과 동시에 매칭되어 항상 실패한다.",
+            "anyOf": [
+              {
+                "$ref": "common.schema.json#/$defs/metric_value"
+              },
+              {
+                "$ref": "common.schema.json#/$defs/source_split"
+              }
+            ]
+          },
+          "blocks": {
+            "type": "array",
+            "description": "★ 이 지표가 계산되지 않을 때 함께 무너지는 하위 지표들. field_coverage_report.fields[f].blocks_metrics 와 같은 방향이고, metrics[].value.blocked_by 의 역방향이다.",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "allOf": [
+          {
+            "$comment": "R-7 — 계층 1·2 지표는 출처별로 갈라 게시하고 합산값을 두지 않는다.",
+            "if": {
+              "properties": {
+                "layer": {
+                  "enum": [
+                    "customer_kpi",
+                    "business_kpi"
+                  ]
+                }
+              },
+              "required": [
+                "layer"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": {
+                  "$ref": "common.schema.json#/$defs/kpi_source_split"
+                }
+              }
+            }
+          },
+          {
+            "$comment": "MEA-002 — 실험 판정 지표는 시뮬레이터 생성분만 쓰므로 출처 분해를 두지 않는다.",
+            "if": {
+              "properties": {
+                "layer": {
+                  "const": "experiment"
+                }
+              },
+              "required": [
+                "layer"
+              ]
+            },
+            "then": {
+              "properties": {
+                "value": {
+                  "$ref": "common.schema.json#/$defs/metric_value"
+                }
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}

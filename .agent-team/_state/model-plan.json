@@ -1,0 +1,32 @@
+{
+  "schema": "bathos/model-plan@1",
+  "updated": "2026-09-10T15:48:30.131947Z",
+  "updated_by": "Paul",
+  "session_backend": "claude",
+  "defaults": {
+    "runtime": "claude"
+  },
+  "roles": {
+    "caleb-market-analyst": {
+      "runtime": "claude",
+      "model": "sonnet"
+    },
+    "james-architect": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "jonnathan-chief-designer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "joshua-service-planner": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "john-reverse-specialist": {
+      "runtime": "claude",
+      "model": "opus"
+    }
+  },
+  "waves": {}
+}

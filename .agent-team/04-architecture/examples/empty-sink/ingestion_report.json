@@ -1,0 +1,982 @@
+{
+  "contract_version": "measurement-publish/v1",
+  "artifact": "ingestion_report",
+  "run_id": "MR-20260911-090000-0a1b2c3d",
+  "generated_at": "2026-09-11T09:00:00.000+09:00",
+  "timezone": "Asia/Seoul",
+  "provenance": {
+    "schema_version": "event-schema-v1.0-draft",
+    "repo_commit": "1140912aa0000000000000000000000000000000",
+    "data_version": null,
+    "simulator_commit": null,
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "config_hashes": {},
+    "source_root": "data/raw",
+    "sink_manifest_sha256": null,
+    "generated_by": "(예시 파일 — 실제 게시에서는 생성기가 자기 실행 명령을 런타임에 기록한다)"
+  },
+  "notices": [
+    {
+      "code": "SINK_EMPTY",
+      "level": "limitation",
+      "message": "Event Sink 에 이벤트가 한 건도 없다. 커머스는 이벤트 기록이 미구현이고(Ecommerce #28) 시뮬레이터는 C1 범위 밖이다.",
+      "reference": "charter §5 · Ecommerce_Service #28"
+    },
+    {
+      "code": "INGESTION_GAP_UNDECIDABLE",
+      "level": "limitation",
+      "message": "이벤트 0건인 날짜에 대해 '수집 중단'과 '활동 없음'을 현재 데이터로 구분할 수 없다. 두 경우가 같은 흔적을 남기고, 구분하려면 수집 시도를 남기는 heartbeat 레코드가 필요한데 Event Sink 에 없다.",
+      "reference": "kpi-definition-v1.md §3 ingestion_days_gap · api-contracts.md §10 X-5"
+    }
+  ],
+  "totals": {
+    "events_ingested": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "저장된 전 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "저장된 전 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "저장된 전 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "events_rejected": {
+      "status": "ok",
+      "value": 0,
+      "unit": "count",
+      "basis": {
+        "population": "수집 시도된 전 이벤트",
+        "denominator_definition": "분모 없음 (합계·건수)",
+        "denominator": null,
+        "observed_count": 0,
+        "window": {
+          "direction": "none",
+          "days": null
+        }
+      }
+    },
+    "rejection_rate": {
+      "status": "unavailable",
+      "value": null,
+      "unit": "ratio",
+      "reason_code": "NO_SOURCE_EVENT",
+      "reason_detail": "수집 시도가 0건이라 거부율의 분모가 없다."
+    },
+    "event_type_coverage": {
+      "status": "ok",
+      "value": 0.0,
+      "unit": "ratio",
+      "basis": {
+        "population": "EventType 16종",
+        "denominator_definition": "고정 분모 16 (event_type 전체 종수)",
+        "denominator": 16,
+        "observed_count": 0,
+        "window": {
+          "direction": "none",
+          "days": null
+        }
+      }
+    },
+    "partition_day_count": {
+      "status": "ok",
+      "value": 0,
+      "unit": "count",
+      "basis": {
+        "population": "파티션 디렉터리",
+        "denominator_definition": "분모 없음 (합계·건수)",
+        "denominator": null,
+        "observed_count": 0,
+        "window": {
+          "direction": "none",
+          "days": null
+        }
+      }
+    },
+    "ingestion_days_gap": {
+      "status": "unavailable",
+      "value": null,
+      "unit": "count",
+      "reason_code": "NO_SOURCE_EVENT",
+      "reason_detail": "파티션이 하나도 없어 관측 구간 자체가 정의되지 않는다. 구간이 생겨도 '수집 중단'과 '활동 없음'은 현재 데이터로 구분할 수 없다."
+    },
+    "unavailable_metric_count": {
+      "status": "ok",
+      "value": 16,
+      "unit": "count",
+      "basis": {
+        "population": "Observable 지표 16종",
+        "denominator_definition": "고정 분모 16",
+        "denominator": 16,
+        "observed_count": 16,
+        "window": {
+          "direction": "none",
+          "days": null
+        }
+      }
+    },
+    "ingestion_gap_attribution": {
+      "status": "not_run",
+      "value": null,
+      "unit": "text",
+      "reason_code": "PRECONDITION_MISSING",
+      "reason_detail": "heartbeat 레코드가 없어 이벤트 0건인 날짜가 수집 중단인지 활동 없음인지 구분할 수 없다."
+    }
+  },
+  "sources": {
+    "commerce": {
+      "link_state": "never_connected",
+      "first_event_at": null,
+      "last_event_at": null,
+      "event_count": 0,
+      "staleness": {
+        "status": "not_run",
+        "value": null,
+        "unit": "text",
+        "reason_code": "PARAM_UNCONFIRMED",
+        "reason_detail": "정지 판정 임계값이 확정되지 않았고 C1 에서 그 상태에 도달할 수 없어 검증도 불가능하다."
+      }
+    },
+    "simulator": {
+      "link_state": "never_connected",
+      "first_event_at": null,
+      "last_event_at": null,
+      "event_count": 0,
+      "staleness": {
+        "status": "not_run",
+        "value": null,
+        "unit": "text",
+        "reason_code": "PARAM_UNCONFIRMED",
+        "reason_detail": "정지 판정 임계값이 확정되지 않았고 C1 에서 그 상태에 도달할 수 없어 검증도 불가능하다."
+      }
+    }
+  },
+  "by_event_type": {
+    "session_start": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "session_start 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "session_start 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "session_start 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "page_view": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "page_view 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "page_view 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "page_view 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "search": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "search 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "search 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "search 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "product_view": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "product_view 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "product_view 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "product_view 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "return_visit": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "return_visit 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "return_visit 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "return_visit 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "add_to_cart": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "add_to_cart 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "add_to_cart 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "add_to_cart 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "remove_from_cart": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "remove_from_cart 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "remove_from_cart 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "remove_from_cart 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "checkout_start": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "checkout_start 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "checkout_start 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "checkout_start 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "purchase": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "purchase 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "purchase 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "purchase 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "campaign_exposed": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "campaign_exposed 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "campaign_exposed 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "campaign_exposed 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "push_sent": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "push_sent 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "push_sent 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "push_sent 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "coupon_exposed": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "coupon_exposed 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "coupon_exposed 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "coupon_exposed 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "coupon_clicked": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "coupon_clicked 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "coupon_clicked 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "coupon_clicked 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "coupon_use": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "coupon_use 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "coupon_use 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "coupon_use 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "review": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "review 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "review 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "review 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    },
+    "cs_contact": {
+      "by_source": {
+        "commerce": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "cs_contact 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        },
+        "simulator": {
+          "status": "ok",
+          "value": 0,
+          "unit": "count",
+          "basis": {
+            "population": "cs_contact 이벤트",
+            "denominator_definition": "분모 없음 (합계·건수)",
+            "denominator": null,
+            "observed_count": 0,
+            "window": {
+              "direction": "none",
+              "days": null
+            }
+          }
+        }
+      },
+      "combined": {
+        "status": "ok",
+        "value": 0,
+        "unit": "count",
+        "basis": {
+          "population": "cs_contact 이벤트",
+          "denominator_definition": "분모 없음 (합계·건수)",
+          "denominator": null,
+          "observed_count": 0,
+          "window": {
+            "direction": "none",
+            "days": null
+          }
+        }
+      }
+    }
+  },
+  "partitions": []
+}
