@@ -1,0 +1,361 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/measurement-publish/v1/index.schema.json",
+  "title": "results/measurement/index.json — 게시 인덱스",
+  "description": "게시 실행 한 번의 결과 목록. 대시보드가 가장 먼저 읽는 파일이며, 게시 절차에서 가장 마지막에 쓰인다(부분 게시 상태를 읽지 않게 하기 위함). views 맵이 화면 ↔ 산출물의 1:1 대응을 기계가독으로 고정한다 — 화면이 요구하는 데이터가 게시물에 없거나 게시물을 아무 화면도 쓰지 않으면 둘 중 하나가 틀린 것이다.",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "common.schema.json#/$defs/envelope"
+    },
+    {
+      "$comment": "B-11 — 거부된 이벤트가 있는데 ALL_CLEAR 로 게시하는 경로를 계약이 막는다. 화면 우회(화면이 counts 를 다시 세는 것)를 쓰지 않는 대신 계약이 성립시킨다.",
+      "if": {
+        "properties": {
+          "verdict": {
+            "properties": {
+              "counts": {
+                "properties": {
+                  "rejected_events": {
+                    "exclusiveMinimum": 0
+                  }
+                },
+                "required": [
+                  "rejected_events"
+                ]
+              }
+            },
+            "required": [
+              "counts"
+            ]
+          }
+        },
+        "required": [
+          "verdict"
+        ]
+      },
+      "then": {
+        "properties": {
+          "verdict": {
+            "properties": {
+              "headline_code": {
+                "not": {
+                  "const": "ALL_CLEAR"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "required": [
+    "contract_version",
+    "artifact",
+    "run_id",
+    "generated_at",
+    "timezone",
+    "provenance",
+    "notices",
+    "publish_result",
+    "artifacts",
+    "views",
+    "verdict"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "$ref": "common.schema.json#/$defs/contract_version"
+    },
+    "artifact": {
+      "const": "index"
+    },
+    "run_id": {
+      "$ref": "common.schema.json#/$defs/run_id"
+    },
+    "generated_at": {
+      "$ref": "common.schema.json#/$defs/kst_timestamp"
+    },
+    "timezone": {
+      "const": "Asia/Seoul"
+    },
+    "provenance": {
+      "$ref": "common.schema.json#/$defs/provenance"
+    },
+    "notices": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/notice"
+      }
+    },
+    "publish_result": {
+      "enum": [
+        "ok",
+        "partial",
+        "failed"
+      ],
+      "description": "partial = 일부 산출물을 게시하지 못했다. 대시보드는 이 상태를 숨기지 않고 표시한다."
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "artifact",
+          "path",
+          "status"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "artifact": {
+            "$ref": "common.schema.json#/$defs/artifact_name"
+          },
+          "path": {
+            "type": "string",
+            "description": "저장소 루트 기준 상대 경로. results/ 또는 data/processed/ 아래여야 한다 (SRS DB-014).",
+            "pattern": "^(results|data/processed)/"
+          },
+          "status": {
+            "enum": [
+              "published",
+              "skipped",
+              "failed"
+            ]
+          },
+          "sha256": {
+            "$ref": "common.schema.json#/$defs/sha256"
+          },
+          "bytes": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "reason_code": {
+            "$ref": "common.schema.json#/$defs/reason_code"
+          },
+          "reason_detail": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "published"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "sha256",
+                "bytes"
+              ]
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "skipped",
+                    "failed"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "reason_code",
+                "reason_detail"
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "views": {
+      "type": "object",
+      "description": "관측 화면군 V1~V6 ↔ 산출물 대응. usp.md §1.8 이 정의한 6화면이 키다. 이후 사이클의 결과 화면군은 이 맵에 추가되지 않는다 — 그쪽은 src/decision/ 이 별도 계약으로 게시한다.",
+      "required": [
+        "V1",
+        "V2",
+        "V3",
+        "V4",
+        "V5",
+        "V6"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "V1": {
+          "$ref": "#/$defs/view_binding"
+        },
+        "V2": {
+          "$ref": "#/$defs/view_binding"
+        },
+        "V3": {
+          "$ref": "#/$defs/view_binding"
+        },
+        "V4": {
+          "$ref": "#/$defs/view_binding"
+        },
+        "V5": {
+          "$ref": "#/$defs/view_binding"
+        },
+        "V6": {
+          "$ref": "#/$defs/view_binding"
+        }
+      }
+    },
+    "verdict": {
+      "type": "object",
+      "description": "★ 첫 화면 최상단 판정 배너의 데이터. 게시물이 집계한다 — 단순 합산도 계산이고(DB-012), 집계 규칙이 두 곳에 있으면 화면과 리포트가 다른 숫자를 낸다.",
+      "required": [
+        "level",
+        "headline_code",
+        "headline_detail",
+        "counts"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "level": {
+          "enum": [
+            "ok",
+            "attention",
+            "violation"
+          ],
+          "description": "최상위 하나. violation=데이터가 계약·검사를 위반했다 > attention=미실행·차단·계산 불가가 있다 > ok"
+        },
+        "headline_code": {
+          "enum": [
+            "CONTRACT_VIOLATION",
+            "FREEZE_MISMATCH",
+            "QUALITY_VIOLATION",
+            "REJECTED_EVENTS",
+            "SINK_EMPTY",
+            "CHECKS_NOT_RUN",
+            "METRICS_UNAVAILABLE",
+            "ALL_CLEAR"
+          ],
+          "description": "무엇이 최상위인가. 화면은 코드→문구 매핑만 하고 순위를 정하지 않는다 (DB-012). 우선순위는 위 enum 의 나열 순서이며 앞이 높다: 1 CONTRACT_VIOLATION(게시물이 계약을 어겼다) > 2 FREEZE_MISMATCH(봉인 불일치) > 3 QUALITY_VIOLATION(품질 검사 fail) > 4 REJECTED_EVENTS(수집 거부 발생) > 5 SINK_EMPTY(수집 0건) > 6 CHECKS_NOT_RUN(검사 미실행) > 7 METRICS_UNAVAILABLE(지표 계산 불가) > 8 ALL_CLEAR. ★ counts.rejected_events > 0 이면 ALL_CLEAR 를 고를 수 없다 — 아래 allOf 가 강제한다. ★ SINK_EMPTY 의 입력은 ingestion_report.totals.events_ingested 이며, 그 status 가 ok 가 아니면 SINK_EMPTY 를 고르지 않는다(모르는 것을 0 으로 읽지 않는다). 구현은 publish.choose_headline_code() 한 곳이다."
+        },
+        "headline_detail": {
+          "type": "string",
+          "minLength": 1
+        },
+        "counts": {
+          "type": "object",
+          "required": [
+            "quality_violations",
+            "checks_not_run",
+            "checks_blocked",
+            "metrics_unavailable",
+            "metrics_not_run",
+            "schema_gaps",
+            "lock_items_pending",
+            "rejected_events"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "quality_violations": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "checks_not_run": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "checks_blocked": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "metrics_unavailable": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "metrics_not_run": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "schema_gaps": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "lock_items_pending": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "rejected_events": {
+              "type": "integer",
+              "minimum": 0
+            }
+          }
+        }
+      }
+    },
+    "static_views": {
+      "type": "array",
+      "description": "★ 게시물 없이 정적으로 그리는 화면. 1:1 불변식의 명시적 예외를 여기에 적는다 — 적지 않으면 '계약에 없는 화면'과 '의도적으로 정적인 화면'을 구분할 수 없다. C1 의 /triggers 가 여기 온다(PRD §71 트리거 5종은 변화를 조건으로 하는데 게시물 이력이 없어 비교 기준이 없다 — C1 작동 0종).",
+      "items": {
+        "type": "object",
+        "required": [
+          "route",
+          "title",
+          "reason_code",
+          "reason_detail"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "route": {
+            "type": "string",
+            "pattern": "^/[a-z0-9/-]*$"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "reason_code": {
+            "$ref": "common.schema.json#/$defs/reason_code"
+          },
+          "reason_detail": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "view_binding": {
+      "type": "object",
+      "required": [
+        "title",
+        "artifact",
+        "route"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": "string",
+          "minLength": 1
+        },
+        "artifact": {
+          "$ref": "common.schema.json#/$defs/artifact_name"
+        },
+        "route": {
+          "type": "string",
+          "pattern": "^/[a-z0-9/-]*$",
+          "description": "대시보드 라우트 경로"
+        }
+      }
+    }
+  },
+  "$comment": "W2 산출물의 W5 정본 사본. 원본 스냅샷: .agent-team/04-architecture/schemas/index.schema.json (2026-09-11 동결). 원본은 고치지 않는다 — W5 이후 정본은 이 파일이고, 스냅샷과의 의도된 차이는 docs/contracts/measurement-publish/v1/CHANGELOG.md 에 전수 등재한다. JSON 에 주석을 쓸 수 없어 $comment 로 남긴다."
+}

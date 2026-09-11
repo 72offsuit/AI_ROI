@@ -1,0 +1,197 @@
+# ECONOMIC RULE v1 — 경제 규칙 상수 (이슈 #47 · GATE 1 Lock 대상)
+#
+# 코드에 하드코딩된 금액을 0건으로 만드는 것이 이 파일의 존재 이유다.
+# 금액이 코드에 있으면 바꿀 때마다 코드 리뷰가 필요하고, 무엇이 가정이고 무엇이
+# 실측인지 구분이 사라진다.
+#
+# ★ 읽는 쪽이 블록마다 다르다 — config_loader.py 가 용도별로 분리해 돌려준다:
+#
+#     product_margin        →  ProductGenerationConfig  (이후 사이클의 시뮬레이터)
+#     그 밖의 5블록          →  CostAccountingConfig     (economics.py)
+#
+#   economics.py 의 시그니처에 ProductGenerationConfig 가 등장하지 않는다. 즉
+#   **원가율을 손에 넣을 방법이 타입 수준에서 없다** (EC-9). 규율이 아니라 구조로
+#   막는다 — 규율은 다음 사람이 모른다.
+#
+# 근거: .agent-team/03-service-planning/economic-rule-v1.md
+# 검증: tests/test_config_loader.py · tests/test_neutrality.py
+
+version: economic-rule-v1.0-draft
+
+# ── 상품 마진 구조 ───────────────────────────────────────────────────────────
+#
+# ★★ economics.py 는 이 블록을 읽지 않는다. 읽으면 EC-1 위반이다.
+#
+# 이 값들은 **생성 파라미터**다. 시뮬레이터가 240개 상품 pool 을 만들 때
+# 카테고리별로 cost_rate 를 적용해 unit_cost 를 정하고, 그 결과가
+# data/raw/products.parquet 에 고정 저장된다. COGS 계산은 그 **저장된 값**을 읽는다.
+#
+#     원가율 → unit_cost 생성 → 저장 → Σ(unit_cost × qty)   ✅ 생성
+#     order_amount × 원가율 → COGS                          ❌ 추정
+#
+# 후자를 하면 contribution_profit 이 revenue 의 상수배가 되어 두 값이 완전히 같은
+# 정보만 담는다. 그러면 PRD §65 의 revenue_up_profit_down 가드레일이 **원리적으로
+# 발동할 수 없다.** 0 으로 채우는 것과 74% 로 채우는 것은 같은 종류의 잘못이고,
+# 74% 가 더 그럴듯해서 더 위험하다.
+#
+# 키는 schema.Category Enum 과 같은 어휘다 (SRS COM-001 영문 코드).
+# 가중평균 기여마진율 26.0% · pool 총 240개. 가격 분포는 LogNormal(ln median, σ=0.35).
+product_margin:
+  fresh_food:
+    display_name: 신선식품
+    cost_rate: 0.78
+    margin_rate: 0.22
+    median_price_krw: 8900
+    frequency_weight: 0.32
+    pool_size: 70
+  meal_solution:
+    display_name: 간편식
+    cost_rate: 0.70
+    margin_rate: 0.30
+    median_price_krw: 6500
+    frequency_weight: 0.24
+    pool_size: 55
+  dairy:
+    display_name: 유제품
+    cost_rate: 0.75
+    margin_rate: 0.25
+    median_price_krw: 4200
+    frequency_weight: 0.18
+    pool_size: 35
+  beverage:
+    display_name: 음료
+    cost_rate: 0.68
+    margin_rate: 0.32
+    median_price_krw: 3500
+    frequency_weight: 0.14
+    pool_size: 40
+  household:
+    display_name: 생활용품
+    cost_rate: 0.72
+    margin_rate: 0.28
+    median_price_krw: 12000
+    frequency_weight: 0.12
+    pool_size: 40
+
+# ── 처치 단위 비용 (T0~T4) ───────────────────────────────────────────────────
+#
+# occurs_at 이 EC-3 발생주의의 핵심이다. 같은 3,000원이라도 T1 은 주문 발생 시,
+# T2 는 쿠폰 사용 시 발생한다 — 최소주문금액 미달로 쿠폰이 안 쓰이면 T2 비용은
+# 0 이 아니라 **발생하지 않는다.** 그 둘은 다르다.
+treatment_cost:
+  T0:
+    name: No Treatment (Control)
+    unit_cost_krw: 0
+    occurs_at: none
+    condition: null
+    mvp: true
+  T1:
+    name: Free Shipping
+    unit_cost_krw: 3000
+    occurs_at: order_placed
+    condition: 40,000원 미만 주문의 배송비 면제
+    mvp: false
+  T2:
+    name: Fixed Coupon
+    unit_cost_krw: 3000
+    occurs_at: coupon_used
+    condition: 30,000원 이상 주문에 3,000원 할인
+    mvp: false
+  T3:
+    name: Strong Win-back Coupon
+    unit_cost_krw: 7000
+    occurs_at: coupon_used
+    condition: 50,000원 이상 주문에 7,000원 할인, 유효 14일
+    mvp: true
+  T4:
+    name: Repurchase Reminder
+    unit_cost_krw: 30
+    occurs_at: message_sent
+    condition: 평균 구매주기 기반 푸시
+    mvp: false
+
+# 쿠폰 계열 처치 — discount 유도 규칙(D-16)이 이 목록을 쓴다.
+coupon_treatments: [T2, T3]
+
+# ── 비용 계상 규칙 (EC-3 · EC-4) ─────────────────────────────────────────────
+cost_accounting:
+  # 발송 시점에 처치군 전원. 반응 여부와 무관하다 — 역효과 고객(Sleeping Dog)에게
+  # 쓴 비용도 계상한다. 지우면 ROI 가 과대평가된다.
+  message_cost_krw: 30
+  # 캠페인 1회당 운영 고정비.
+  campaign_fixed_cost_krw: 100000
+  # 쿠폰이 **실제 사용된** 주문에만 계상한다 (coupon_use 이벤트 기준).
+  discount_cost_krw: 7000
+  # ★ EC-4 — 실제로 메시지가 발송된 고객 수(push_sent 발생 고객 수)다.
+  #   배정된 처치군 전체가 아니고, 반응한 고객 수도 아니다. 발송 실패·제외 고객이
+  #   고정비를 나눠 갖지 않게 하는 정의다.
+  n_targeted_definition: push_sent 이벤트가 발생한 고유 고객 수
+
+# ── 배송 ─────────────────────────────────────────────────────────────────────
+shipping:
+  shipping_fee_krw: 3000
+  free_shipping_threshold_krw: 40000
+
+# ── AI 투자 비용 ─────────────────────────────────────────────────────────────
+#
+# ⚠⚠ 이 블록의 값은 전부 **가정 기반 추정치**다. 외부 출처가 없다.
+#    - 인건비 400만원/월 — 근거 문서 없음
+#    - 상각 12개월 — 관례를 따른 선택이며 검증되지 않았다
+#    - Compute·운영·모니터링 비용 — 실제 청구서가 아니다
+#
+# 가정을 주석으로 남기는 것까지가 C1 의 범위다. 값을 확정하려면 실제 집행 내역이
+# 필요하고 C1 에는 없다. 가정은 시간이 지나면 사실로 읽히므로 여기 적어 둔다.
+ai_investment:
+  model_development_cost_krw: 12000000   # ML/DL 개발 2인 × 1.5개월 (가정: 400만원/월)
+  compute_cost_krw: 600000               # 학습·시뮬레이션 CPU 인스턴스 1.5개월
+  model_operating_cost_krw_per_month: 300000    # 배치 스코어링 + 대시보드 호스팅
+  monitoring_cost_krw_per_month: 200000         # Drift 감시 + 알림 운영
+  amortization_months: 12
+  is_estimate: true
+  estimate_note: 인건비·상각기간·컴퓨트 단가에 외부 출처가 없다. 실제 집행 내역으로 대체해야 한다.
+
+# ── 명시 가정 ────────────────────────────────────────────────────────────────
+#
+# 게시물 notices 로 나른다 (design-patterns.md P-12 — 가정은 문서가 아니라 산출물에
+# 붙인다. 문서는 아무도 다시 열지 않는다).
+assumptions:
+  # ★★ A-REFUND — 결정 D-2 (사용자, 2026-09-11). **확정값이다.**
+  #
+  # `false` 가 뜻하는 것을 정확히 적는다: **환불이 반영되지 않았다.**
+  # "환불을 처리했다" 가 아니다. 환불 미반영을 **확인하고 가정으로 수용**했다.
+  #
+  #   revenue = Σ order_amount        환불·취소를 차감하지 않는다
+  #                                   즉 총매출을 순매출로 간주한다
+  #
+  # ★ 오차 방향 — 이것을 적지 않으면 읽는 사람이 오차가 어느 쪽인지 모른다:
+  #   환불된 매출을 순매출에서 **뺄 수 없으므로** contribution_profit 이
+  #   **위로 치우친다 (과대평가)**. 아래로가 아니다.
+  #
+  # 실험 판정에는 영향이 없다 — MEA-002 가 실험 결과 산출에 시뮬레이터 생성분만
+  # 쓰라고 규정하고, 시뮬레이터는 환불을 생성하지 않는다.
+  #
+  # 왜 환불 이벤트를 추가하지 않는가 — 추가할 수 없다:
+  #   · DATA-003 이 정확히 22컬럼을 규정하고 test_schema.py 가 assertEqual 로 고정
+  #   · 음수 금액 우회는 validate_event() 가 거부
+  #   · event_type 만 추가하는 것도 16종 고정을 깨는 스키마 변경
+  # 셋 다 Plan/ SRS 개정을 요구하고 그것은 이 팀의 권한 밖이다.
+  #
+  # 게시물은 notices 의 REFUND_NOT_ADJUSTED 로 이 가정을 **항상** 나른다 —
+  # 가정은 시간이 지나면 사실로 읽히므로 문서가 아니라 산출물에 붙인다 (P-12).
+  refund_adjusted: false
+
+  # A-DISCOUNT (D-16) — discount 필드가 스키마에 없다. 유도 규칙으로 대체한다.
+  #
+  #   discount(order) := Σ treatment_cost[t].unit_cost_krw
+  #                        for t in (order 에 적용된 처치 ∩ coupon_treatments)
+  #                      단 그 주문에 coupon_use 이벤트가 있을 때만 (EC-3 2원칙)
+  #                      최소주문금액 미달로 미사용이면 0 이 아니라 발생하지 않는다
+  #
+  # 리드 판정: 차단되는 것은 필드의 부재가 아니라 **결정의 부재**다. G-16 의 충족
+  # 조건은 "필드를 추가한다"가 아니라 "유도 규칙을 ECONOMIC RULE v1 에 넣는다"다.
+  # 유도값은 derived: true + derivation 을 함께 싣는다.
+  discount_derived_from_treatment: true
+
+  # A-SHIPPING (D-3) — shipping_subsidy 필드도 없다. 같은 방식으로 유도한다.
+  #   order_amount < free_shipping_threshold_krw ∧ T1 적용 → shipping_fee_krw
+  shipping_subsidy_derived_from_rule: true
