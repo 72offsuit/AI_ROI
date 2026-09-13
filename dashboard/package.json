@@ -8,6 +8,7 @@
     "tokens:test": "node scripts/tokens/verify.mjs",
     "fixture:stage": "node scripts/stage-fixture.mjs",
     "check:state-map": "node scripts/check-state-map.mjs",
+    "check:isolation": "node scripts/check-path-isolation.mjs",
     "predev": "npm run tokens:generate",
     "prebuild": "npm run tokens:generate",
     "dev": "next dev --port 3001",

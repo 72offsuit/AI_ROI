@@ -34,8 +34,12 @@
 
 > ⚠ **`tests/test_isolation.py` 는 `src/` 하위 `.py` 만 본다. `dashboard/` 를 한 줄도 검사하지 않는다.**
 > `tests/test_dashboard_isolation.py` 도입은 **결정 D-22 (W6 Matthias + 사용자 승인)** 이며 **W5 에서 만들지 않는다.**
-> 그때까지 DG-1~DG-8 은 **사람의 규율 + `src/lib/artifacts/paths.ts` 의 런타임 화이트리스트** 두 겹으로만 지켜진다.
+> 그때까지 DG-1~DG-8 은 **세 겹**으로 지켜진다 — 사람의 규율 · `src/lib/artifacts/paths.ts` 의 런타임 화이트리스트 · `npm run check:isolation`.
 > **검사하지 않은 것을 통과로 적지 않는다.**
+>
+> ★ 세 번째 겹은 이슈 `#64`(보안 F1, CVSS 6.5)로 생겼다. 그전까지 화이트리스트는 **문자열만** 보았고, `results/` 안의 심볼릭 링크가 `data/hidden/` 을 가리키면 **여덟 검사 중 일곱을 통과하고 파일이 읽혔다**(실제로 재현했다). `resolveArtifactPath()` 가 이제 realpath 를 재검증하고, `scripts/check-path-isolation.mjs` 가 벡터 10종을 **디스크에 만들어 실행**한다 — 소스에 `realpathSync` 가 있는지 보는 것으로는 그것이 효력 없는 자리에 있어도 통과한다.
+>
+> **`check:isolation` 은 `D-22` 가 아니다.** `D-22` 는 파이썬 격리 검사를 `dashboard/` 까지 넓히는 것이고 여전히 열려 있다 — 이 스크립트는 `paths.ts` 한 함수만 본다. `src/**` import 금지(DG-2)나 `node:fs` 사용처 제한(DG-6)은 **아직 사람이 본다.**
 
 ---
 

@@ -12,7 +12,8 @@
  *
  * `node:fs` must not be imported anywhere outside `src/lib/artifacts/` (DG-6).
  */
-import { isAbsolute, resolve, sep } from "node:path";
+import { realpathSync } from "node:fs";
+import { dirname, isAbsolute, resolve, sep } from "node:path";
 
 /** Thrown when a path would leave the area DB-014 permits. Never caught to a default. */
 export class IsolationError extends Error {
@@ -114,5 +115,76 @@ export function resolveArtifactPath(relative: string): string {
   if (target !== RESULTS_DIR && !target.startsWith(RESULTS_DIR + sep)) {
     throw new IsolationError(`허용 경로 밖 접근: ${relative}`);
   }
+  assertResolvesInsideResults(target, relative);
   return target;
+}
+
+/**
+ * Real path of RESULTS_DIR, resolved once.
+ *
+ * Comparing against the literal string is not enough: the directory itself is
+ * routinely reached through a symlink (`/tmp` is `/private/tmp` on macOS), and a
+ * check written against the unresolved string rejects every legitimate path there.
+ * If the directory does not exist yet the literal is the best available answer —
+ * nothing can be inside a directory that is absent, and the caller's read fails
+ * with ENOENT, which is the honest outcome.
+ */
+function realResultsDir(): string {
+  try {
+    return realpathSync(RESULTS_DIR);
+  } catch {
+    return RESULTS_DIR;
+  }
+}
+
+/**
+ * Rejects a path whose **real** location escapes `results/` (issue #64, CVSS 6.5).
+ *
+ * The string checks above cannot see a symlink. A link placed inside `results/`
+ * that points at `data/hidden/` passed every one of them, and the file was read —
+ * reproduced before this guard existed. `DB-014` is enforced at runtime by this
+ * function alone (the Python isolation suite does not look at `dashboard/`;
+ * extending it is decision D-22, still open), so a check that a symlink walks
+ * straight through is not a guarantee.
+ *
+ * ★ The target usually does not exist yet — callers resolve a path and then handle
+ *   ENOENT. So the deepest **existing** ancestor is resolved instead: if that is
+ *   inside `results/`, no symlink on the way could have escaped, because every
+ *   segment above the missing part was traversed for real.
+ *
+ * ponytail: this is resolve-then-read, so a link swapped between the two calls is
+ * not covered (TOCTOU). Closing that needs `openat(O_NOFOLLOW)`, which Node does
+ * not expose; revisit if this app ever reads a directory other users can write to.
+ */
+function assertResolvesInsideResults(target: string, relative: string): void {
+  const root = realResultsDir();
+  let probe = target;
+  for (;;) {
+    let real: string;
+    try {
+      real = realpathSync(probe);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code !== "ENOENT" && code !== "ENOTDIR") {
+        throw new IsolationError(
+          `경로를 확인할 수 없어 읽지 않습니다 — ${relative}: ${String(error)}`,
+        );
+      }
+      const parent = dirname(probe);
+      if (parent === probe) {
+        // Walked to the filesystem root without finding anything that exists.
+        // Nothing was traversed, so nothing could have escaped.
+        return;
+      }
+      probe = parent;
+      continue;
+    }
+    if (real !== root && !real.startsWith(root + sep)) {
+      throw new IsolationError(
+        `허용 경로 밖 접근: 심볼릭 링크가 results/ 밖을 가리킵니다 — ` +
+          `${relative} → ${real}`,
+      );
+    }
+    return;
+  }
 }
