@@ -104,7 +104,7 @@
       "type": "array",
       "minItems": 9,
       "maxItems": 9,
-      "description": "PRD §22 Lock 9종 전부. C1 에서 다루지 않는 항목도 목록에 남기고 사유를 적는다.",
+      "description": "PRD §22 Lock 9종 전부. C1 에서 다루지 않는 항목도 목록에 남기고 사유를 적는다. ★ 이름·고유성까지 고정한다 (이슈 #61 · 리뷰 M6). 이전에는 `minItems/maxItems: 9` 와 `item` 의 enum 만 있어 **같은 항목이 9번 반복돼도 통과**했다 — 개수는 세면서 무엇이 들어 있는지는 보지 않았다.\n\nJSON Schema 2020-12 에는 '배열 원소를 특정 필드 기준으로 유일하게' 를 직접 쓰는 키워드가 없다(`uniqueItems` 는 객체 전체가 같을 때만 잡으므로 status 만 다른 중복은 놓친다). 대신 **비둘기집 원리**로 표현한다 — 9종 각각에 `contains` 를 걸면 전부 최소 한 번은 나타나야 하고, 자리가 정확히 9개이므로 결과적으로 **각각 정확히 한 번씩**이다. 누락도 중복도 걸린다.",
       "items": {
         "type": "object",
         "required": [
@@ -238,7 +238,135 @@
             }
           }
         ]
-      }
+      },
+      "allOf": [
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "SERVICE_v1"
+              }
+            }
+          },
+          "$comment": "SERVICE_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "CUSTOMER_PERSONA_v1"
+              }
+            }
+          },
+          "$comment": "CUSTOMER_PERSONA_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "HIDDEN_TRAIT_RULE_v1"
+              }
+            }
+          },
+          "$comment": "HIDDEN_TRAIT_RULE_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "BEHAVIOR_RULE_v1"
+              }
+            }
+          },
+          "$comment": "BEHAVIOR_RULE_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "ECONOMIC_RULE_v1"
+              }
+            }
+          },
+          "$comment": "ECONOMIC_RULE_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "CHURN_DEFINITION_v1"
+              }
+            }
+          },
+          "$comment": "CHURN_DEFINITION_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "TREATMENT_RESPONSE_v1"
+              }
+            }
+          },
+          "$comment": "TREATMENT_RESPONSE_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "EVENT_SCHEMA_v1"
+              }
+            }
+          },
+          "$comment": "EVENT_SCHEMA_v1 이 반드시 한 번은 나타난다"
+        },
+        {
+          "contains": {
+            "type": "object",
+            "required": [
+              "item"
+            ],
+            "properties": {
+              "item": {
+                "const": "KPI_DEFINITION_v1"
+              }
+            }
+          },
+          "$comment": "KPI_DEFINITION_v1 이 반드시 한 번은 나타난다"
+        }
+      ]
     },
     "unlocked_items": {
       "type": "array",

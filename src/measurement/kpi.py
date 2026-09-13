@@ -314,7 +314,31 @@ def field_fill_rate(manifest: Mapping[str, object]) -> dict[str, MetricValue]:
     manifest 에 키가 없다 → **분모가 없으므로 `unavailable`** 이다. `0%` 가 아니다.
     """
     coverage = manifest.get("field_coverage") or {}
+    # ★ 분모가 0 이면 계산된 것이 아니다 (이슈 #61 · 리뷰 M2).
+    #
+    #   `MetricValue.ok()` 는 `denominator == 0` 을 생성 시점에 거부한다 —
+    #   잘못된 값이 나가지는 않았다. 대신 **처리되지 않은 `ValueError` 로 죽었다.**
+    #   같은 모듈의 다른 비율 함수 9종은 전부 이 경우를 `unavailable` 로 돌려준다
+    #   (`rejection_rate` 가 대표적이다). 여기만 빠져 있었다 — 설계 오해가 아니라
+    #   국소 누락이다.
+    #
+    #   manifest 에 coverage 항목이 있는데 `rows` 가 0 인 것은 그 자체로 모순이다
+    #   (`sink` 는 `applicable > 0` 인 필드만 coverage 에 넣는다). 정상 Sink 에서는
+    #   나오지 않고, 버전 스큐·손편집·다른 생산자가 만든 manifest 에서 나온다.
+    rows = int(manifest.get("rows", 0) or 0)
     result: dict[str, MetricValue] = {}
+    if rows == 0 and coverage:
+        return {
+            spec.name: MetricValue.unavailable(
+                ReasonCode.NO_SOURCE_EVENT,
+                f"manifest 가 {spec.name} 의 충족률을 담았는데 수집 건수가 0 이다 — "
+                "분모가 없으므로 비율이 성립하지 않는다. 0% 로 적으면 '비어 있었다' 로 "
+                "읽히지만 실제로는 '셀 대상이 없었다' 이며, 두 값이 함께 온 manifest "
+                "자체가 모순이다",
+                unit=Unit.RATIO,
+            )
+            for spec in EVENT_FIELDS
+        }
     for spec in EVENT_FIELDS:
         if spec.name not in coverage:
             result[spec.name] = MetricValue.unavailable(
@@ -334,7 +358,7 @@ def field_fill_rate(manifest: Mapping[str, object]) -> dict[str, MetricValue]:
                 # manifest 는 비율만 담고 분모 원수를 담지 않는다. 비율 지표이므로
                 # 계약이 denominator 를 요구하는데, 없는 수를 지어내지 않고 rows 를
                 # 상한으로 적는다 — basis 문장이 그 사실을 말한다.
-                denominator=int(manifest.get("rows", 0) or 0),
+                denominator=rows,
             ),
         )
     return result

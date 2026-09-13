@@ -319,7 +319,13 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
             "properties.checks.items.allOf.5",
             "properties.checks.items.allOf.6",
         },
-        "field_coverage_report.schema.json": {"$comment"},
+        "field_coverage_report.schema.json": {
+            "$comment",
+            # 이슈 #61 — 개수(22)만 세고 이름은 보지 않았다. propertyNames 로
+            # DATA-003 22컬럼의 이름을 가둔다.
+            "properties.fields.description",
+            "properties.fields.propertyNames",
+        },
         "freeze_status.schema.json": {
             "$comment",
             # 이슈 #60 — 대조 결과가 게시물로 나가지 않아 봉인 변조 경보가
@@ -334,8 +340,19 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
             "properties.mismatches.description",
             "properties.mismatches.items.type",
             "required.11",
+            # 이슈 #61 — minItems/maxItems 9 만 있어 같은 항목 9개도 통과했다.
+            # 9종 각각에 contains 를 걸어 비둘기집으로 유일성을 표현한다.
+            "properties.items.description",
+            "properties.items.allOf",
         },
-        "ingestion_report.schema.json": {"$comment"},
+        "ingestion_report.schema.json": {
+            "$comment",
+            # 이슈 #61 — minProperties 16 만 있어 아무 이름이나 16개면 통과했다.
+            # propertyNames + maxProperties 로 16종을 정확히 한 번씩 강제한다.
+            "properties.by_event_type.description",
+            "properties.by_event_type.propertyNames",
+            "properties.by_event_type.maxProperties",
+        },
         "kpi_report.schema.json": {"$comment"},
         "rejection_report.schema.json": {"$comment"},
     }
