@@ -290,6 +290,16 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
             "properties.verdict.properties.headline_code.enum",
             "properties.verdict.properties.headline_code.description",
             "allOf",
+            # 이슈 #60 — counts 에 freeze_mismatch 가 없어 FREEZE_MISMATCH 판정이
+            # 계약상 도달 불가였다. 읽는 쪽이 additionalProperties:false 로 금지된
+            # 키를 보고 있었다.
+            "properties.verdict.properties.counts.properties.freeze_mismatch.type",
+            "properties.verdict.properties.counts.properties.freeze_mismatch.minimum",
+            "properties.verdict.properties.counts.properties.freeze_mismatch.description",
+            "properties.verdict.properties.counts.required.8",
+            # 이름이 세는 것과 다르다는 사실을 description 에 적었다. 이름 자체의
+            # 정정은 호환 파괴라 별도로 다룬다.
+            "properties.verdict.properties.counts.properties.lock_items_pending.description",
         },
         "common.schema.json": {
             "$comment",
@@ -309,7 +319,21 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
             "properties.checks.items.allOf.6",
         },
         "field_coverage_report.schema.json": {"$comment"},
-        "freeze_status.schema.json": {"$comment"},
+        "freeze_status.schema.json": {
+            "$comment",
+            # 이슈 #60 — 대조 결과가 게시물로 나가지 않아 봉인 변조 경보가
+            # 작동한 적이 없었다. verify() 는 처음부터 이 값을 들고 있었다.
+            "properties.verification.type",
+            "properties.verification.description",
+            "properties.verification.enum.0",
+            "properties.verification.enum.1",
+            "properties.verification.enum.2",
+            "properties.verification.enum.3",
+            "properties.mismatches.type",
+            "properties.mismatches.description",
+            "properties.mismatches.items.type",
+            "required.11",
+        },
         "ingestion_report.schema.json": {"$comment"},
         "kpi_report.schema.json": {"$comment"},
         "rejection_report.schema.json": {"$comment"},

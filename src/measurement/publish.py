@@ -259,7 +259,19 @@ def choose_headline_code(
     """
     if contract_violation:
         return "CONTRACT_VIOLATION"
-    if counts.get("lock_items_pending", 0) and counts.get("freeze_mismatch", 0):
+    # ★ 이전 판은 `lock_items_pending and freeze_mismatch` 였고 **유효하게 발동할 수
+    #   있는 실측 조건이 존재한 적이 없었다** (리뷰 M4 · 보안 F8 · 이슈 #60):
+    #
+    #     겹1  `freeze_mismatch` 는 index 의 counts 에 채워지지 않았다. 게다가
+    #          계약이 `additionalProperties: false` 로 그 키를 **금지**했다 —
+    #          읽는 쪽이 계약상 존재할 수 없는 키를 보고 있었다.
+    #     겹2  `lock_items_pending` 은 이름과 달리 LOCK_ITEMS 의 PENDING 수가 아니라
+    #          **G-선행조건 미충족 수**이고, 16종이 전부 충족이라 실측 0 이다.
+    #          겹1 만 고쳐도 오늘 경보가 뜨지 않았다.
+    #
+    #   봉인 불일치는 **미결 항목이 있든 없든** 알려야 한다. 오히려 전부 봉인된
+    #   상태에서 불일치가 생기는 것이 더 위험하므로, 그때 침묵하는 조건은 정반대다.
+    if counts.get("freeze_mismatch", 0):
         return "FREEZE_MISMATCH"
     if counts.get("quality_violations", 0):
         return "QUALITY_VIOLATION"
@@ -1195,7 +1207,16 @@ def build_index(
         "metrics_unavailable": int(summary.get("unavailable", 0)),
         "metrics_not_run": int(summary.get("not_run", 0)),
         "schema_gaps": 0,  # field_coverage_report 가 채운다 — 아래에서 덮어쓴다
+        # ★ 이름이 세는 것과 다르다. `unlocked_items` 는 LOCK_ITEMS 의 PENDING/PARTIAL
+        #   이 아니라 **G-1~G-16 선행조건 중 미충족** 목록이다(`freeze.py` 가 그렇게
+        #   만들고 주석으로 명시한다). 이름을 고치는 것은 게시 계약 변경이라
+        #   별도로 다루고(이슈 #60), 여기서는 계약의 description 에 무엇을 세는지
+        #   적어 두었다 — 이 이름을 그대로 읽어 조건문을 잘못 쓴 것이 M4 의 겹2 다.
         "lock_items_pending": len(freeze.get("unlocked_items") or []),
+        # 봉인 정본 파일이 봉인 이후 바뀐 건수. `verification == "mismatch"` 일 때만
+        # 0 이 아니다 — 대조하지 않았거나(`not_run`) 기록이 없으면(`missing`) 0 이며,
+        # 그 구분은 `freeze_status.verification` 이 따로 들고 있다.
+        "freeze_mismatch": len(freeze.get("mismatches") or []),
         "rejected_events": _int_metric(
             (ingestion.get("totals") or {}).get("events_rejected")
         ),
