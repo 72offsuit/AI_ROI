@@ -35,7 +35,7 @@ from typing import Mapping, Sequence
 
 from src.measurement import schema as sc
 from src.measurement.config_loader import dump_yaml, load_yaml, yaml_available
-from src.measurement.errors import FreezeViolation
+from src.measurement.errors import ConfigError, FreezeViolation
 
 DEFAULT_LOCK_RECORD = Path("config/gate1_lock.yaml")
 LOCK_RECORD_VERSION = "gate1-lock/v1"
@@ -295,55 +295,16 @@ _GATE1_ROWS: tuple[tuple[str, str, bool | None, str], ...] = (
            "부재다. 유도 규칙을 config assumptions 에 조항으로 넣고 "
            "economics.coupon_cost 가 derived:true + derivation 으로 낸다 (M-03)"),
 )
-
-
-def build_freeze_status() -> dict[str, object]:
-    """V6 — 봉인 상태. ★ **C1 은 GATE 1 을 통과시키지 않는다. 부분 봉인만 한다.**
-
-    `overall` 이 `not_started` 다. `M-09` 가 실제 Lock 기록(`config/gate1_lock.yaml`
-    + `lock_record`)을 만들기 전까지는 **봉인하지 않은 상태를 정직하게** 낸다.
-
-    ★★ **봉인하지 않은 상태가 초록으로 보이는 것이 봉인 검사의 유일한 실패
-    양식이다.** `if not lock_file.exists(): return` 이 그 경로이고, 이 사이클이
-    지목한 가장 위험한 다섯 줄 중 하나다.
-
-    계약이 `sealed` 를 허용하지만 **C1 에서 도달 가능한 최대치는 `partial`** 이다
-    (`gate1-lock-scope.md` §1). `sealed` 는 `EXPERIMENT_ENVIRONMENT_v1` 선언과
-    함께만 쓴다.
-    """
-    return {
-        "gate": "GATE_1",
-        "overall": "not_started",
-        # ★ null 이다. 없는 Lock 을 있는 것처럼 적지 않는다 — M-09 가 채운다.
-        "lock_record": None,
-        "items": [
-            {
-                "item": item, "status": status, "owner_part": owner,
-                "scope_note": note,
-                "reason_code": (
-                    sc.ReasonCode.NOT_RUN.value if status == "PENDING"
-                    else sc.ReasonCode.PRECONDITION_MISSING.value
-                ),
-                "reason_detail": (
-                    "C1 은 GATE 1 을 통과시키지 않고 부분 봉인만 한다. 실제 Lock "
-                    "기록은 M-09 가 수행한다"
-                    if owner == "measurement"
-                    else "이 저장소의 측정 계층이 봉인할 수 없는 항목이다"
-                ),
-            }
-            for item, status, owner, note in _FREEZE_ITEMS
-        ],
-        # ★ 계약이 요구하는 것은 Lock 항목이 아니라 **선행 조건 G-1~G-16 중
-        #   미충족 항목**이다. `met is True` 인 것은 여기 오지 않는다 —
-        #   *"무엇이 아직 열려 있는지가 봉인만큼 중요하다."*
-        "unlocked_items": [
-            {"id": gate_id, "title": title, "met": met, "evidence": evidence}
-            for gate_id, title, met, evidence in _GATE1_PRECONDITIONS
-            if met is not True
-        ],
-    }
-
-
+# ── build_freeze_status() 는 여기 있었다 (이슈 #60 · 리뷰 minor)
+#
+# M-09 이전 판본이었고 `publish.py` 가 `freeze.verify()` 를 부르는 판본으로
+# 대체했다. 남은 사본은 아무도 부르지 않았고, 불렀다면 `_FREEZE_ITEMS` ·
+# `_GATE1_PRECONDITIONS` 두 미정의 이름으로 `NameError` 를 냈을 것이다.
+#
+# ★ 삭제한 이유가 "안 쓰니까" 가 아니다 — **탐지 3층(테스트·게시·화면)이
+#   같은 함수를 쓴다는 것이 AC-4** 인데, 같은 이름의 두 번째 구현이 남아
+#   있으면 누군가 그것을 불러 판정이 갈릴 수 있다. 봉인 상태는 `publish.py`
+#   의 판본 하나가 만든다.
 
 GATE1_PRECONDITIONS: tuple[Precondition, ...] = tuple(
     Precondition(gate_id, title, met, evidence)
@@ -548,6 +509,16 @@ def to_artifact(verification: FreezeVerification) -> dict[str, object]:
     return {
         "gate": "GATE_1",
         "overall": verification.overall,
+        # ★ 이 두 필드가 없어서 봉인 변조 경보가 작동한 적이 없었다 (이슈 #60).
+        #   `verify()` 는 처음부터 대조 결과를 들고 있었는데 게시물로 나가지 않아
+        #   `build_index` 가 `freeze_mismatch` 를 셀 방법이 없었다. 판정이 만들어진
+        #   자리와 판정을 읽는 자리 사이의 배선이 끊겨 있었다.
+        #
+        #   `verification` 은 네 값이고 그중 둘이 "세 번째 값" 이다 —
+        #   `match`/`mismatch` 외에 `missing`(기록이 없다) · `not_run`(대조하지
+        #   않았다). 대조하지 않은 것을 일치로 적지 않는다.
+        "verification": verification.verification,
+        "mismatches": list(verification.mismatches),
         "lock_record": _lock_record_summary(verification),
         "items": [
             {
