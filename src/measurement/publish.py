@@ -1464,7 +1464,22 @@ def _read_manifest(source_root: Path) -> dict[str, object]:
     """
     path = source_root / MANIFEST_NAME
     if path.exists():
-        return json.loads(path.read_text(encoding="utf-8"))
+        try:
+            parsed = json.loads(path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError as error:
+            # ★ 여기로 오는 것은 대개 쓰다 만 파일이다 (`sink.py` 의 manifest 쓰기가
+            #   원자적이지 않다). 그대로 두면 처리되지 않은 예외로 죽는데, 죽는 것
+            #   자체는 옳다 — 조용히 0 으로 읽는 것보다 낫다. 다만 **왜** 죽었는지는
+            #   말해야 한다 (보안 감사 F6).
+            raise ContractViolation(
+                f"{path}: JSON 으로 읽을 수 없다 — {error}. 쓰다 만 파일일 가능성이 "
+                "높다(manifest 쓰기는 원자적이지 않다). 파일이 존재하는데 읽지 못하는 "
+                "것은 '파일이 없다' 와 다르므로 기본값으로 떨어지지 않는다."
+            ) from error
+        # ★ 입력에도 계약을 건다. 산출물 8종은 전부 검증받는데 **모든 지표가
+        #   파생되는 유일한 입력만** 무검증이었다 (리뷰 M1 · 이슈 #59).
+        ct.verify_manifest_invariants(parsed, where=str(path))
+        return parsed
     return {
         "rows": 0, "rejected": 0, "event_type_counts": {}, "field_coverage": {},
         "missing_fields": [], "sources": {},

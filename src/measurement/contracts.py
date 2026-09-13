@@ -436,6 +436,87 @@ def _verify_metric_like(node: Mapping[str, Any], where: str) -> None:
         )
 
 
+#: manifest 에서 없거나 `null` 이면 **결손이 조용히 0 으로 바뀌는** 건수 필드.
+#: 나머지 필드는 없어도 읽는 쪽이 정직하게 처리할 수 있지만, 이 둘은 아니다.
+_MANIFEST_COUNT_FIELDS = ("rows", "rejected")
+
+#: 값이 있으면 그 타입이어야 하는 필드. 타입이 어긋나면 읽는 쪽의
+#: `or {}` / `or []` 가 **조용히 빈 값으로 바꾼다** — 그것이 M1 에서
+#: `unavailable_metrics` 가 0 종이 된 직접 경로다.
+_MANIFEST_SHAPES: tuple[tuple[str, type, str], ...] = (
+    ("sources", dict, "매핑"),
+    ("event_type_counts", dict, "매핑"),
+    ("field_coverage", dict, "매핑"),
+    ("missing_fields", list, "배열"),
+    ("unavailable_metrics", list, "배열"),
+    ("files", list, "배열"),
+)
+
+
+def verify_manifest_invariants(manifest: object, *, where: str = "manifest.json") -> None:
+    """**읽기 전** 마지막 문. `verify_core_invariants()` 의 입력 쪽 대칭이다.
+
+    산출물 8종에는 전부 계약이 있는데 **모든 지표가 파생되는 유일한 입력에만
+    없었다** (리뷰 M1 · 이슈 #59). 그 비대칭이 만든 실제 동작:
+
+        manifest 없음          → SINK_EMPTY · 계산 불가 16종   ✅ 정직
+        rows 키 없음           → SINK_EMPTY · 계산 불가  0종   ❌
+        rows: null             → SINK_EMPTY · 계산 불가  0종   ❌
+
+    **더 망가진 상태가 더 자신 있는 출력을 냈다.** ``rows: null`` 은 manifest 가
+    "모른다"를 명시한 것인데 ``.get("rows", 0) or 0`` 이 그것을 0("세어봤고
+    없었다")으로 바꾼다 — 이 프로젝트가 가장 경계하는 실패 양식이다.
+
+    ★ 고르는 기준은 `verify_core_invariants()` 와 같다. 전체 스키마를 다시
+      구현하지 않고(`jsonschema` 는 dev 전용 — D-21), **위반이 결손을 0 으로
+      보이게 만드는 것만** 고른다. 전체 검증은 테스트층이
+      `manifest.schema.json` 으로 한다. **두 층은 서로를 대체하지 않는다.**
+
+    ★ 트리거를 오해하지 말 것. 비원자적 쓰기가 만드는 것은 **잘린 JSON** 이고
+      그것은 `JSONDecodeError` 로 **시끄럽게** 죽는다. 조용한 0-채움은
+      **유효한 JSON 이 키를 빠뜨리거나 `null` 일 때** 생기며, 원인은 부분 기록이
+      아니라 **버전 스큐·손편집·다른 생산자**다 (보안 감사 F6 가 정정).
+    """
+    if not isinstance(manifest, Mapping):
+        raise ContractViolation(
+            f"{where}: manifest 가 매핑이 아니다 ({type(manifest).__name__}). "
+            "이후 검사가 전부 무의미해지므로 여기서 멈춘다."
+        )
+    for field_name in _MANIFEST_COUNT_FIELDS:
+        if field_name not in manifest:
+            raise ContractViolation(
+                f"{where}: 필수 필드 `{field_name}` 이 없다. 읽는 쪽이 이것을 0 으로 "
+                "읽으면 '세어봤고 없었다' 가 되어, 깨진 manifest 가 '수집 0건인 "
+                "정상 상태' 로 화면에 뜬다. manifest 가 통째로 없는 것과 다르다 — "
+                "그 경우는 읽는 쪽이 계산 불가로 정직하게 처리한다."
+            )
+        value = manifest[field_name]
+        if value is None:
+            raise ContractViolation(
+                f"{where}: `{field_name}` 이 null 이다. null 은 '모른다' 이고 0 은 "
+                "'세어봤고 없었다' 이며 **둘은 다르다**. 모르는 상태를 manifest 로 "
+                "표현하지 않는다."
+            )
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ContractViolation(
+                f"{where}: `{field_name}` 이 정수가 아니다 ({value!r}). 건수 필드다."
+            )
+        if value < 0:
+            raise ContractViolation(
+                f"{where}: `{field_name}` 이 음수다 ({value}). 건수는 음수일 수 없다."
+            )
+    for field_name, expected, korean in _MANIFEST_SHAPES:
+        if field_name not in manifest:
+            continue
+        value = manifest[field_name]
+        if not isinstance(value, expected):
+            raise ContractViolation(
+                f"{where}: `{field_name}` 이 {korean}이 아니다 ({type(value).__name__}). "
+                f"읽는 쪽의 `or` 폴백이 이것을 조용히 빈 값으로 바꾸고, 그러면 "
+                "계산 불가 표시가 사라진다."
+            )
+
+
 def dump(payload: Mapping[str, Any]) -> str:
     """게시물 직렬화. **검증을 통과하지 못하면 문자열을 만들지 않는다.**
 
