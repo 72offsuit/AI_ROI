@@ -60,7 +60,8 @@ const COUNT_LABEL: Record<keyof Verdict["counts"], string> = {
   metrics_unavailable: "계산 불가 지표",
   metrics_not_run: "미실행 지표",
   schema_gaps: "스키마 공백",
-  lock_items_pending: "봉인 대기",
+  lock_items_pending: "선행조건 미충족",
+  freeze_mismatch: "봉인 불일치",
   rejected_events: "거부 이벤트",
 };
 

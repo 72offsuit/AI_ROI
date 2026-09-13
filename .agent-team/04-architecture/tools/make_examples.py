@@ -548,6 +548,10 @@ def build_freeze() -> dict:
     }])
     doc["gate"] = "GATE_1"
     doc["overall"] = "not_started"
+    # 이슈 #60 — 대조 결과가 게시물로 나가야 index 가 freeze_mismatch 를 셀 수 있다.
+    # 기록이 없으면 `missing` 이다. **`match` 가 아니다** — 대조하지 않았다.
+    doc["verification"] = "missing"
+    doc["mismatches"] = []
     doc["lock_record"] = None
 
     def item(name, status, owner, scope, code=None, detail=None, files=None):
@@ -623,6 +627,7 @@ def build_index() -> dict:
             "metrics_not_run": 0,
             "schema_gaps": 4,
             "lock_items_pending": 9,
+            "freeze_mismatch": 0,
             "rejected_events": 0,
         },
     }

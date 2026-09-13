@@ -48,6 +48,7 @@
       "metrics_not_run": 0,
       "schema_gaps": 4,
       "lock_items_pending": 6,
+      "freeze_mismatch": 0,
       "rejected_events": 217
     }
   },
@@ -91,8 +92,8 @@
       "artifact": "freeze_status",
       "path": "results/measurement/freeze_status.json",
       "status": "published",
-      "sha256": "1a22b3fce13672b2e5fe4e3382e92df0926c300e979b614c35f3adcfdd9d3d67",
-      "bytes": 7491
+      "sha256": "ed1603cc96e3ebe0bc6e5876bb6d5015c2f43bf91698b1a19d0bb3af76d9ba6c",
+      "bytes": 7538
     }
   ],
   "static_views": [

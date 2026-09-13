@@ -28,6 +28,8 @@
   ],
   "gate": "GATE_1",
   "overall": "not_started",
+  "verification": "missing",
+  "mismatches": [],
   "lock_record": null,
   "items": [
     {

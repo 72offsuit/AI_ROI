@@ -505,6 +505,13 @@ def build_freeze() -> dict:
     ])
     doc["gate"] = "GATE_1"
     doc["overall"] = "violated"          # ★ 위반 상태의 렌더
+    # 이슈 #60 — 대조 결과를 게시물에 낸다.
+    # ★ 여기서는 `match` 다. 이 픽스처의 목적은 **품질 위반** 화면이고,
+    #   `freeze_mismatch > 0` 으로 두면 판정 우선순위상 headline 이
+    #   FREEZE_MISMATCH 로 바뀌어 픽스처가 자기 목적과 어긋난다.
+    #   봉인 불일치 화면이 필요하면 그 용도의 픽스처를 따로 만든다.
+    doc["verification"] = "match"
+    doc["mismatches"] = []
     doc["lock_record"] = {
         "path": "config/gate1_lock.yaml",
         "sha256": "b7e1d0c4a9f2635e8017c3b5d9a4e2f60817b3c5d9e1a4f60827b3c5d9e1a4f6",
@@ -581,7 +588,8 @@ def build_index() -> dict:
         "headline_detail": "퍼널 정합성 검사에서 위반 3건이 나왔다. 봉인된 정본 파일 1건이 Lock 시점과 다르다. 미실행 검사 8종.",
         "counts": {"quality_violations": 3, "checks_not_run": 8, "checks_blocked": 1,
                    "metrics_unavailable": 7, "metrics_not_run": 0, "schema_gaps": 4,
-                   "lock_items_pending": 6, "rejected_events": REJECTED},
+                   "lock_items_pending": 6, "freeze_mismatch": 0,
+                   "rejected_events": REJECTED},
     }
     doc["artifacts"] = []
     doc["static_views"] = [{
