@@ -67,8 +67,7 @@
       "active_roles": [],
       "entry_gate": "Brief",
       "exit_gate": "Usp",
-      "started": "2026-09-10T14:55:19.611990Z",
-      "completed": "2026-09-10T15:26:05.479268Z"
+      "started": "2026-09-10T14:55:19.611990Z"
     },
     {
       "wave_id": "W2",
@@ -78,8 +77,7 @@
       "active_roles": [],
       "entry_gate": "Usp",
       "exit_gate": "Plan",
-      "started": "2026-09-10T15:48:35.975733Z",
-      "completed": "2026-09-10T17:24:26.427513Z"
+      "started": "2026-09-10T15:48:35.975733Z"
     },
     {
       "wave_id": "W3",
@@ -89,8 +87,7 @@
       "active_roles": [],
       "entry_gate": "Plan",
       "exit_gate": "Implementation",
-      "started": "2026-09-10T18:20:21.115794Z",
-      "completed": "2026-09-10T23:58:00.505027Z"
+      "started": "2026-09-10T18:20:21.115794Z"
     },
     {
       "wave_id": "W4",
@@ -106,16 +103,16 @@
       "status": "done",
       "active_roles": [],
       "entry_gate": "Implementation",
-      "started": "2026-09-11T02:16:45.838355Z",
-      "completed": "2026-09-13T15:58:08.630259Z"
+      "started": "2026-09-11T02:16:45.838355Z"
     },
     {
       "wave_id": "W6",
       "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
       "name": "Verify · Documentation · Report",
-      "status": "pending",
+      "status": "done",
       "active_roles": [],
-      "exit_gate": "Release"
+      "exit_gate": "Release",
+      "completed": "2026-09-13T17:38:07.493004Z"
     }
   ],
   "roles": [],
@@ -164,6 +161,17 @@
       "report_path": "03-story-engineering/readiness-report-kr.md",
       "facilitator": "Paul",
       "decided": "2026-09-10T23:58:00.505027Z"
+    },
+    {
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "wave_id": "W6",
+      "gate_type": "Release",
+      "verdict": "CONCERNS",
+      "issues_total": 10,
+      "issues_critical": 0,
+      "report_path": "12-report/report.html",
+      "facilitator": "Paul",
+      "decided": "2026-09-13T17:37:44.262888Z"
     }
   ],
   "risks": [
@@ -328,6 +336,96 @@
       "status": "open",
       "owner_wave": "W5",
       "logged": "2026-09-10T23:58:00.505049Z"
+    },
+    {
+      "risk_id": "R-ccf0d2fd-d7bb-4c60-aaa1-15fd112a16fc",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "med",
+      "description": "[10-review/code-review.md#M1] M1 manifest 무검증 입력 — 결손이 조용히 0으로 치환. 트리거는 비원자적 쓰기가 아니라 버전 스큐·손편집(리드 정정). sink.py 를 고치면 엉뚱한 것을 고치는 것",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262900Z"
+    },
+    {
+      "risk_id": "R-8a707d63-19ac-4efd-81f2-aba610ac09fb",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "med",
+      "description": "M4/F8 FREEZE_MISMATCH 배선 결함 2겹 — 키 누락 + and 조건. lock_items_pending 은 LOCK_ITEMS 가 아니라 G-선행조건 미충족 수를 세며 실측 0. 키만 채우는 수정으로는 오늘도 경보가 뜨지 않는다 — 유효 발동 조건이 존재한 적이 없다(보안 F8 실측)",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262902Z"
+    },
+    {
+      "risk_id": "R-e6bb19e1-0d81-403d-b950-bc23271f78a5",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "med",
+      "description": "[10-review/code-review.md#M5] M5 freeze.py ConfigError 미임포트 → 봉인 변조 방어가 NameError 로 죽는다. 수정 비용 사실상 0",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262903Z"
+    },
+    {
+      "risk_id": "R-b15c0c1b-e3ec-46ec-9df9-a1736e060438",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "med",
+      "description": "[10-review/code-review.md#M7] M7 METRIC_SPECS computable 선언 vs 구현·계약 부재 3종 + 카탈로그 양방향 불일치",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262904Z"
+    },
+    {
+      "risk_id": "R-f49eaf22-e048-4274-afea-17244eacacd1",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "med",
+      "description": "[10-review/code-review.md] M2·M3·M6·M8·M9·M10 — 분모 가드·Python 3.10·스키마 이름검증·죽은 설정·skip 임계값·doctest 미실행",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262906Z"
+    },
+    {
+      "risk_id": "R-78a54a34-ea4b-4d4d-bd0c-a1670459c16b",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "med",
+      "description": "보안 Medium 4건 — F1 심볼릭 링크로 results/ 격리 우회(CVSS 6.5) · F2 0.0.0.0 바인딩 · F3 staging 선점 · F8 봉인 변조 경보 무효(CVSS 5.6)",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262907Z"
+    },
+    {
+      "risk_id": "R-68590f97-dd6d-4899-bb69-5c774cb283cf",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "med",
+      "description": "[09-docs/design-vs-impl-gaps.md#11] 이슈 #43·#44 가 PR #50·#51 머지 후에도 OPEN — charter 3.1 (2) 미결. Issue close 는 사용자 개별 승인 대상",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262908Z"
+    },
+    {
+      "risk_id": "R-c12f4ead-1f29-47d4-8f5b-bbd27b488bd6",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "low",
+      "description": "[11-qa/qa-summary.md#3-A] 대표 장면(AC-12) 커밋된 재현 경로 전무 — D-17 gitignore + 픽스처 드리프트 중첩. 픽스처 재생성으로 자동 해소",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262911Z"
+    },
+    {
+      "risk_id": "R-1ea6f0f7-25cd-4daa-b3bc-dbe37d48eb7d",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "low",
+      "description": "[09-docs/design-vs-impl-gaps.md] 설계-구현 gap 19건 (KPI 47/26/46 · 유령 지표 8종 · AGENTS.md 현황 낡음 등)",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262913Z"
+    },
+    {
+      "risk_id": "R-df301775-bdcb-4fea-a4e7-d5f052d58231",
+      "gate_id": "gate-d219eac3-ffc7-4fe8-952b-91d72b39ec8d",
+      "severity": "low",
+      "description": "[12-report/report.html#11] 미실행 공개: Python 3.10 직접 재현 불가(인터프리터 부재) · 브랜치 보호 규칙 확인 불가(private+Free 403)",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-13T17:37:44.262914Z"
     }
   ],
   "modules": [],

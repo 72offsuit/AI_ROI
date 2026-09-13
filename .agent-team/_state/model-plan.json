@@ -1,17 +1,13 @@
 {
   "schema": "bathos/model-plan@1",
-  "updated": "2026-09-11T02:16:45.814824Z",
+  "updated": "2026-09-13T16:29:50.022328Z",
   "updated_by": "Paul",
   "session_backend": "claude",
   "defaults": {
     "runtime": "claude"
   },
   "roles": {
-    "thomas-code-reviewer": {
-      "runtime": "claude",
-      "model": "opus"
-    },
-    "andrew-frontend-engineer": {
+    "matthew-story-engineer": {
       "runtime": "claude",
       "model": "opus"
     },
@@ -19,19 +15,15 @@
       "runtime": "claude",
       "model": "opus"
     },
-    "joshua-service-planner": {
+    "caleb-market-analyst": {
       "runtime": "claude",
-      "model": "opus"
-    },
-    "matthew-story-engineer": {
-      "runtime": "claude",
-      "model": "opus"
-    },
-    "jonnathan-chief-designer": {
-      "runtime": "claude",
-      "model": "opus"
+      "model": "sonnet"
     },
     "phillip-backend-engineer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "thomas-code-reviewer": {
       "runtime": "claude",
       "model": "opus"
     },
@@ -39,13 +31,21 @@
       "runtime": "claude",
       "model": "opus"
     },
+    "jonnathan-chief-designer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "andrew-frontend-engineer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
     "john-reverse-specialist": {
       "runtime": "claude",
       "model": "opus"
     },
-    "caleb-market-analyst": {
+    "joshua-service-planner": {
       "runtime": "claude",
-      "model": "sonnet"
+      "model": "opus"
     }
   },
   "waves": {}

@@ -1069,3 +1069,444 @@ Phillip · Andrew 종료. **Stephen 미스폰**(C1 decision layer 없음 · `own
 ```
 /wave6-verify-report /Users/otter/72offsuit/AI_ROI
 ```
+
+---
+
+## W6 — 검증·문서화·리포트 (2026-09-14)
+
+### 모델 선택
+
+`bathos model validate --wave W6` → PASS (6 roles). 사용자 확인: 기본값 유지.
+
+```
+thomas-code-reviewer             opus (plan)
+matthias-qa-validator            opus (plan)
+timothy-doc-specialist           runtime-default
+michael-security-specialist      runtime-default
+hananiah-refactoring-specialist  runtime-default
+martin-monitoring-reporter       runtime-default
+```
+
+### 1단계 — Thomas·Timothy·Matthias 병렬 스폰 (동시 3, 상한 준수)
+
+대상: 현재 브랜치 `feat/measurement-layer-and-dashboard`(PR #57 미병합) 위의 실제 소스.
+
+| 역할 | 소유·출력 | 상태 |
+|---|---|---|
+| Thomas | `10-review/**` | 스폰 |
+| Timothy | `09-docs/**` | 스폰 — 문서 오류 4건 검증 위임(§8 총계·AI비용 산술·resolve 이중접두사·d-01 AC-6) |
+| Matthias | `11-qa/**` + `e2e/` | 스폰 — 407 테스트 재실행·8화면 헤드리스·tokens:test·check:state-map·d-01 AC-6 독립 판단 위임 |
+
+진행 중 — 3명 완료 대기.
+
+### 리드 조사 — Thomas 의 `BLOCKED` 1건 해소
+
+Thomas 가 *"Python 3.10 호환성 의심(major) — 재현 불가"* 로 올린 건을 리드가 대신 특정했다.
+
+**선언 ≠ 실제**: `Plan/…SRS_v2.0.md:9` 가 `Target Runtime: Python 3.10+` 인데 CI 두 잡은 `3.12` 고정, 의존성은 3.12.4 해석. **3.10 은 어디서도 실행되지 않는다.**
+
+**깨지는 지점**: `datetime.fromisoformat()` 의 `Z` 접미사는 **3.11 부터** 지원(bpo-35829). `sink.py:394` 가 전처리 없이 직접 넘긴다. 그리고 이 입력은 우연이 아니라 `sink.py:382` 독스트링이 명시한 **지원 사례**이고, W5 에서 고친 타임존 정규화(UTC→KST) 경로다. 실사용: `test_sink.py:168·180` · `test_schema.py:187` · `test_quality_checks.py:303` · `schema.py:423`.
+
+**증상이 나쁜 이유**: `sink.py:395` 의 `except ValueError` 가 `"timestamp 를 해석할 수 없다"` 로 바꿔 던진다 — 유효한 RFC3339 인데 **입력 데이터 불량으로 위장**된다.
+
+| 실행함 | 결과 |
+|---|---|
+| `python3.12 -m compileall src/ tests/` | OK |
+| `python3.12 -m unittest discover -s tests` | `Ran 407 · OK (skipped=67)` |
+| 3.11+/3.12+ 전용 API 스캔 | **0건** (`Z` 접미사 외 비호환 없음) |
+
+**실행하지 않음**: 3.10 인터프리터 부재로 `ValueError` 직접 재현 못 함. 3.10 실패는 CPython 문서 근거이지 실행 결과가 아니다. §7 "미실행 검증을 통과로 표시하지 않는다" 를 **실패에도 대칭 적용**한다.
+
+**C1 에서 못 고친다** — 선언을 좁히려면 `Plan/`(읽기 전용·범위 밖) 수정, 코드를 맞추려면 Phillip 소유 경로 수정 + CI 에 없는 3.10 잡 필요. 이슈화 여부는 W6 종료 시 사용자 판단.
+
+### 리드 조사 — Thomas F1 확정, 증상/원인 분리
+
+Thomas 가 *"`.get(key, 0)` 이 계층 0 지표 7곳에 반복(major)"* 로 올린 건을 실행 재현했다.
+
+**재현** (`python3.12`, `src/measurement` 직접 호출):
+
+| manifest 상태 | headline | 계산 불가 표시 |
+|---|---|---|
+| ① 아예 없음 | `SINK_EMPTY` | **16종** ✅ |
+| ② 있으나 `rows` 키 없음 | `SINK_EMPTY` | **0종** ❌ |
+| ③ `rows: null` (명시적 "모름") | `SINK_EMPTY` | **0종** ❌ |
+
+**더 망가진 상태가 더 자신 있는 출력을 낸다.** ③ 이 가장 날카롭다 — manifest 가 `null` 로 "모른다"를 명시했는데 `ok, 0` 으로 바뀐다. C1 전체가 없애려던 `?? 0` 트랩이 하필 `SINK_EMPTY` 판정의 입력에 있다.
+
+**증상** — `kpi.py:205·216·224·237·238·295·301·337`. `or 0` 이 키 누락뿐 아니라 명시적 `null` 까지 0 으로 만든다.
+
+**원인** — `publish.py:1467` `_read_manifest()` 가 `json.loads()` 를 무검증 반환. 이걸 실제 결함으로 만드는 두 사실:
+
+1. `sink.py:266` 이 `write_text()` 직접 호출 — **원자적 쓰기 아님**. 중단된 실행이 잘린 manifest 를 남기므로 ② 는 손편집 없이 도달 가능하다.
+2. 계약 스키마 **8종이 전부 산출물용**이고 **`manifest.schema.json` 은 없다**.
+
+> 파이프라인은 **내보내는 것은 전부 검증하고 읽어들이는 것은 검증하지 않는다.** 모든 지표가 파생되는 유일한 입력만 계약이 없다.
+
+8곳을 고치는 것으로는 안 된다 — `field_coverage`·`unavailable_metrics` 도 같은 `or {}`/`or []` 로 조용히 비워진다(②③ 의 계산 불가 0종이 나온 직접 원인은 `manifest.get("unavailable_metrics") or []`). **입력에 계약을 주는 것이 수정이다.**
+
+**오탐이 아닌 근거**: `economics.py:282` 는 주석과 함께 같은 트랩을 의식적으로 피했고, `rejection_rate()` 는 ③ 에서 분모 가드가 정확히 작동한다. 같은 모듈이 다른 자리에서는 규율을 지켰다 — 설계 오해가 아니라 **국소 누락**이다.
+
+### 리드 판정 D-23 — `09-docs/` 단일 쓰기 주체 (E-PATH-COLLISION)
+
+Timothy 의 포크 중 하나가 보고: 자기가 쓴 `dev-definitions.md` 가 같은 "Timothy (Role 11)" 서명의 다른 내용으로 **두 번 교체**됐고, 만들지 않은 `glossary.md` 가 생겼으며 `AGENTS.md` 도 교체됨. `ListAgents` 로 포크 3개를 봤으나 자기가 띄운 건 1개.
+
+**진단 — 중복 스폰이 아니다.** 리드가 스폰한 W6 역할은 Thomas·Timothy·Matthias 3명이고 Role 11 은 Timothy 하나(`ListAgents` 확인). 포크 3개는 전부 **Timothy 의 서브에이전트**이며, 셋이 `09-docs/` 에 **직접** 쓰면서 서로를 덮어썼다.
+
+**판정: 소유 경로의 쓰기 주체는 역할 하나다. 소유는 위임되지 않는다.**
+
+포크는 소유 경로를 갖지 않는다 — **파일을 쓰지 않고 내용을 반환**한다. W3 에서 이미 확립된 원칙과 같다(Thomas·Matthias 는 풀리뷰를 자기 경로에 쓰되 **요약만 Matthew 에 반환**, SS9). W5 스킬의 "소유 경계 겹치면 E-PATH-COLLISION" 은 역할 간에만이 아니라 **역할의 하위 트리 안에서도** 성립한다.
+
+**복구 불가**: `.agent-team/09-docs/` 는 전부 git 미추적(`??`). 덮어쓰인 이전 버전은 복구 불가이며, 살아 있다면 **각 포크의 컨텍스트 안에만** 있다 → 포크를 종료시키기 전에 내용을 회수하도록 지시(순서가 중요).
+
+현재 디스크 상태는 온전: `AGENTS.md` 2,249B · `dev-definitions.md` 18,782B · `glossary.md` 17,765B · `measurement-publish-api-v1.md` 20,601B · `README.md` 1,652B.
+
+**포크의 발견 3건 — 회수 최우선**:
+- `kpi.py` `metric_classification()` 독스트링 **47 주장 vs 실측 46**
+- AI 비용 **실측 2,170,000** vs 문서 ≈2,020,000 — **리드가 독립적으로 같은 결론.** 식대로면 2,170,000 이고 2,020,000 은 역산 불가 → **문서 오류로 확정**
+- `schema_gaps` **실측 5건 vs 설계 문서 4건** — 리드가 넘긴 4건보다 1건 많다
+
+> 라우팅 한계: 리드 세션에서 팀원의 서브에이전트에는 직접 닿지 않는다(`No transcript found`). 포크와의 통신은 **소유 역할을 경유**해야 한다.
+
+### 리드 조사 — 유령 지표 8종 (Timothy 포크 gap #6 확장)
+
+포크가 *"카탈로그엔 있는데 화면에 안 나오는 5종"* 으로 보고한 것을 실행 검증했다. **방향은 맞고 범위가 좁았다 — 8종이다.**
+
+**(A) layer 3 · ML 5종** `precision`·`recall`·`f1`·`pehe`·`corr_tau_hat_tau`
+C1 이 ML 을 범위 밖으로 두므로 미구현은 정당하다. **문제는 일관성** — 같은 ML 계열 9종(`auuc`·`qini_coefficient`·`uplift_by_decile`·`top20_precision`·`persuadables_ratio`·`predicted_clv`·`clv_mape`·`churn_test_auc`·`sleeping_dog_targeting_rate`)은 `NEEDS_MODEL_OUTPUT` 사유와 함께 **"계산 불가"로 정직하게 게시된다.** 5종은 사라지고 9종은 표시되는데 **그 선을 가르는 원칙이 없다.**
+
+**(B) layer 0 · 3종 — 포크가 놓쳤고 이쪽이 더 심각하다**
+
+| 지표 | 구현 | 게시 | 계약 스키마 |
+|---|---|---|---|
+| `missing_field_count` | `kpi.py:343` **있음** | 호출 0회 | 0개 |
+| `source_event_count` | `kpi.py:378` **있음** | 호출 0회 | 0개 |
+| `rejection_reason_count` | **없음** | — | 0개 |
+
+`kpi.py:1131` — `MetricSpec("rejection_reason_count", 0, "collection", "computable")`. **카탈로그가 "계산 가능"을 선언**하는데 구현도 계약 자리도 게시물도 없다. **주장만 있고 근거가 없다** — 이 지표는 "계산 불가"가 될 기회조차 없이 존재하지 않는다.
+
+**반대 방향**: `sleeping_dog_targeting_rate` 는 게시되는데 카탈로그 46종에 없다. → **카탈로그는 정본이 아니며 양방향으로 어긋난다.**
+
+**F1 과 같은 모양이다** — 선언과 실제를 대조하는 장치가 없다. 한쪽은 입력(manifest) 계약이 없고, 한쪽은 카탈로그의 `"computable"` 선언을 검증하지 않는다. 테스트되지 않은 불변식:
+> `METRIC_SPECS` 가 `"computable"` 로 선언한 지표는 구현이 있어야 하고 어떤 게시물의 계약 스키마에 자리가 있어야 한다.
+
+**리드 1차 검사의 오탐 기록**: 문자열 grep 으로 10종을 얻었으나 `event_type_count`·`field_fill_rate` 2종은 **오탐**이었다 — 문자열 리터럴이 아니라 `kpi.field_fill_rate(manifest)` 함수 호출로 게시된다. 재검증 시 **함수 호출 경로까지** 봐야 한다.
+
+### 포크 충돌 후속 — 유실 점검 결과
+
+다른 포크(`a9be5fc3…`)가 gap **11건**으로 보고했으나 디스크 파일은 **15건**이고 1~11 제목이 전부 일치 → 병합이 오히려 4건을 **더했다.** 이 포크분 유실 없음.
+
+유실이 확인된 것은 `schema_gaps` **1건**(실측 5 vs 문서 4, `signup_date` 누락)뿐. → Timothy 에 정정 지시.
+
+> 충돌의 근인: Timothy 가 포크에 **소유자 신원 그대로** 임무를 주어, 각 포크가 자신을 Timothy 이자 `09-docs/` 단독 소유자로 믿었다. 실제로 포크 보고문도 *"제 단독 소유"* 라고 적고 있다. 부주의가 아니라 **신원 위임이 원인**이다.
+
+### 리드 판정 D-24 — 포크 충돌이 `10-review/` 에서 재발, 리뷰 결론이 뒤집혔다
+
+`09-docs/` 와 **같은 원인**(신원 위임)이 Thomas 쪽에서 반복됐다. 디스크의 `code-review.md`(01:53, 21,569 B)는 **finding 6건 · 결론 "blocking 0건"** 인데, Thomas 가 6개 포크에서 보고한 집합의 일부만 담고 있었다.
+
+**빠진 major 7건 이상**:
+
+| 빠진 것 | 출처 |
+|---|---|
+| 검증되지 않은 manifest 입력 (F1) | 포크3 — 리드가 3케이스 실행 재현 제공 |
+| `field_fill_rate` 분모 0 가드 누락 (F2) | 포크3 |
+| Python 3.10 `fromisoformat` `Z` 접미사 | 포크1 — 리드가 BLOCKED 해소 |
+| 카탈로그 `"computable"` 미검증 (유령 8종) | 리드 제공 · Thomas 반영 회신함 |
+| `FREEZE_MISMATCH` 배너 미배선 | 포크5 |
+| `freeze.py` ConfigError → NameError (미import) | 포크5 |
+| JSON Schema "개수만 세고 이름·고유성 미확인" 3건 | 포크4 |
+| `exit_code` 문서 불일치 | 포크1 |
+| minor 5건(하드코딩 treatment ID · 죽은 코드 미정의 이름 · `index.json` 비원자적 · `generated_by` 고정 · 경로 탈출 정규식) | 포크1·3·4·5 |
+
+**"blocking 0건" 은 근거 없는 결론이었다** — `freeze.py` 의 `NameError` 는 예외 경로 진입 시 죽고, `FREEZE_MISMATCH` 미배선은 **봉인 불일치 통지 장치가 작동하지 않는다**는 뜻이다. 둘 다 blocking 후보다. → shutdown 금지 + 단독 병합 지시.
+
+`09-docs/api/` 도 포크가 "썼다"고 보고했으나 **디스크에 없다.** 같은 방식으로 소실.
+
+> **교훈**: 포크에 소유자 신원을 주면 각 포크가 자신을 소유자로 믿고 같은 파일에 쓴다. 디스크에 남는 것은 **마지막에 쓴 포크의 것**이며, 그것이 가장 좁은 버전일 수 있다. 팬아웃 자체가 아니라 **쓰기 주체 단일화 여부**가 문제다.
+
+### 리드 조사 — doctest 18개를 아무도 실행하지 않는다
+
+Timothy 포크 발견을 전수 실행해 확정.
+
+```
+contracts.py 6 · economics.py 4 · kpi.py 1 · publish.py 4 · schema.py 1 · sink.py 2
+합계 18개 · 실패 1개 · CI 가 실행하는 것 0개
+kpi.py:1219  Expected: 47  →  Got: 46   ❌
+```
+`grep -rn "doctest" tests/ .github/workflows/` → **0건**.
+
+"47종" 오류가 전파된 자리가 **셋**으로 확정: ① `kpi-definition-v1.md` §8 ② `kpi_report.schema.json:5` `description`(기계가독 계약) ③ `kpi.py:1219` doctest. **③ 만 실행 가능한 형태였는데 실행기가 없어 놓쳤다** — 나머지 17개는 통과하므로 실행기만 있었으면 처음부터 잡혔다.
+
+수정 시 주의: `isolation.yml`(의존성 없는 잡)에서 import 가능한 모듈만 대상에 넣어야 한다. 확인 없이 추가하면 ISO-005 를 깨고 `ImportError` 로 죽는다.
+
+### ★ W6 관통 주제 — "주장은 있는데 대조하는 장치가 없다"
+
+이번 웨이브의 major 4건이 전부 같은 모양이다:
+
+| 자리 | 주장 | 빠진 장치 |
+|---|---|---|
+| manifest | 싱크가 쓴 입력 | **계약 스키마 부재** — 8종이 전부 산출물용 |
+| `METRIC_SPECS` | `"computable"` 선언 | 구현·계약 존재를 **대조하지 않음** |
+| `Report skip count` | 회귀 감시 | 숫자만 출력, **임계값 없음** |
+| doctest | 실행 가능한 예제 18개 | **실행기 없음** |
+
+이 코드베이스가 잘하는 것은 **계약으로 값을 강제**하는 것이고, 빠뜨린 것은 **그 계약이 실제로 지켜지는지 대조하는 상위 장치**다. W6 리포트의 축으로 쓴다.
+
+### 리드 판정 D-25 — `story-m-01` T3, 기준선 수정 승인은 **필요 없었다**
+
+`backend.md:235` 에서 Phillip 이 올린 판정 요청:
+> *"스토리 T3 의 문언과 기준선 테스트가 충돌한다. … T3 의 의도가 '관용 모드에서 아무것도 저장하지 않는다' 였다면 **기준선 테스트 수정 승인이 필요하다**."*
+
+**요청이 조건부였고 그 조건이 성립하지 않았다.** 실측:
+
+```
+$ git diff $(git merge-base origin/main HEAD) HEAD -- tests/
+11 files changed, 5220 insertions(+), 1 deletion(-)
+```
+
+**삭제 1줄은 단언이 아니라 픽스처 값**이다:
+```
+-        "category": "신선식품",
++        "category": "fresh_food",
+```
+GATE 1 선행조건 **G-4(카테고리 어휘 정본 확정 — 영문)** 에 따른 변경이지 T3 충돌 회피가 아니다.
+
+**기준선 단언은 한 줄도 수정되지 않았다.** Phillip 이 `event_type` 유효성으로 위반을 가른 해석(유효 `event_type`+다른 위반 = 저장+보고 / `event_type` 자체 무효 = 거부)이 양쪽을 모두 만족시켰고 407 OK. 따라서 그가 물은 승인은 **발동하지 않았다** — 미승인으로 남은 것이 아니라 **불필요했던 것**이다.
+
+**남은 것은 문서뿐**: `story-m-01` T3 문언이 실제 구현과 다르다. → Timothy §14 를 "미승인"이 아니라 **"승인 불필요로 판정(D-25) · 스토리 문언만 미정정"** 으로 갱신 지시.
+
+> 이 건이 드러낸 절차 공백: 팀원이 `08-impl-notes/` 에 남긴 **조건부 판정 요청**을 리드가 회수하는 경로가 없다. W5 종료 시 `08-impl-notes/` 의 "리드 판정 요청" 문자열을 훑는 절차가 있었으면 나흘 묵지 않았다.
+
+### 포크 라우팅 한계 (재확인)
+
+Timothy 의 포크 2개가 반복해서 team-lead 로만 보고했다. Timothy 가 세 번 재지시했으나 경로가 바뀌지 않았다. 리드 세션에서도 포크에 직접 닿지 않는다(`No transcript found`). **포크의 메시지는 부모가 아니라 리드로 나가고, 리드는 포크에 답할 수 없다** — 단방향이다. 팬아웃 시 포크 산출물은 **반환값으로만** 받아야 하며 메시지에 의존하면 안 된다.
+
+### Timothy 완료 — `09-docs/` 5종 · gap 19건
+
+디스크 실측 확인: `design-vs-impl-gaps.md` 633줄·gap **19건** · `measurement-publish-api-v1.md` 331줄 · `dev-definitions.md` 289줄 · `README.md` 21 · `AGENTS.md` 27. `glossary.md` 는 중복분을 `dev-definitions.md` 에 병합 후 삭제. `git status --porcelain -- src/ dashboard/ config/ tests/ docs/` **빈 출력** — 제품 코드 변경 0건.
+
+리드 정정 4건 중 3건 반영 확인(`schema_gaps` 5건 · 유령 8종 · `#50`/`#51` 시각 · doctest 7곳 언급). **미반영 2건 재지시**: §14 에 D-25 판정 명시, "대조했으나 불일치 없음" 절 신설.
+
+Timothy 자체 추가 §16~19: `dashboard/AGENTS.md` 의 `value_formatted` 서술 낡음 · GATE 1 Lock CLI 부재 · `PARTIAL 최대4` 예측 vs 실측 2 · `usp.md` D-6 권고가 실제 결정과 다름.
+
+### Matthias 산출물 — 차단 결함 0건, 발견 1건
+
+`11-qa/` 4종(`qa-summary` 14.9KB · `test-cases` · `test-flow` · `latency-report`) + `e2e/` 독립 하네스. **`dashboard/` 미수정**(읽기·`next start` 만).
+
+**보고를 믿지 않고 전부 재현**: 407 OK(skip 67/3) · `test_isolation` 6 OK · `check_ownership` PASS · `npm ci`(369 packages, 0 vulns) · `build` 8라우트 · `tokens:test` 15 · `check:state-map` 25. Playwright **43건 · 41 passed · 2 deliberately red · 31.5초**.
+
+**★ latency NFR 처리가 이번 웨이브 최선의 판단**: PRD NFR-01~09 · SRS NFR-001~006 전수 조회 → **UI 응답시간 NFR 부재** 확인 → 판정 기준으로 쓰지 않고 **기준선으로만** 남김. *"존재하지 않는 기준을 지어내지 않는다"* 를 실제로 지켰다.
+
+**★ W5 가 "육안 확인"으로 남긴 2건을 자동화로 대체**: C-10 대비 8조합(브라우저 `getComputedStyle` + WCAG 상대휘도 재계산, 8쌍 전부 4.5:1 이상) · Pretendard(FontFace·computed font-family·.woff2 응답 3중). 사람이 봐야 했던 것을 **기계가 볼 수 있는 형태로** 바꿨다.
+
+### 리드 재현 — §3-A 픽스처 드리프트 확정 + 영향 범위 확대
+
+```
+empty-sink           value_formatted 누락 3곳  (metrics[0] ×3)
+commerce-connected   value_formatted 누락 9곳  (metrics[0]×3·[1]·[5]×2·[6]·[7]·[12])
+```
+Matthias 보고와 **자리까지 일치**.
+
+**보고보다 한 겹 넓다** — 대표 장면(AC-12)에 도달하는 커밋된 경로가 전부 막혀 있다:
+
+| 경로 | 상태 |
+|---|---|
+| `dashboard/screenshots/` 45장 | **gitignore** (D-17) |
+| `results/` | **gitignore** (D-17) |
+| `.agent-team/04-architecture/examples/` | **커밋됨 · 그러나 낡음** |
+
+새로 클론한 사람이 대표 장면을 보는 커밋된 경로가 지금은 없다. `python -m src.measurement.publish` 로 직접 만드는 길은 살아 있어(Matthias 가 `real` 데이터셋으로 증명) **차단은 아니지만**, **문서가 지시하는 절차가 하필 깨진 쪽을 가리킨다.** gitignore 결정(D-17)과 픽스처 드리프트는 **따로 보면 둘 다 사소한데 겹치면 재현 불가**가 된다.
+
+### Thomas 완료 — 코드 리뷰 20건 (major 10 · minor 10) · blocking 0
+
+병합본 확인. **major 7건 이상 누락 문제 해소.** §0.1 에 리드가 제시한 "관통 패턴"을 세우고 **공통 처방**까지 적었다 — M1·M7·M9·M10 을 한 진단으로 묶은 것이 이 리뷰의 값을 개별 나열 이상으로 올렸다.
+
+| Major | 요지 |
+|---|---|
+| M1 ★ | `manifest` 무검증 입력 → 결손이 조용히 0으로 치환 (리드 3케이스 재현이 결정적 증거) |
+| M2 | `field_fill_rate` 분모 0 가드 누락 |
+| M3 | Python 3.10 선언 vs 실제 미지원 (`Z` 접미사) |
+| M4 | `FREEZE_MISMATCH` 헤드라인이 배선 결함으로 **영원히 선택 불가** |
+| M5 | `freeze.py` `ConfigError` 미임포트 → `NameError` 크래시 |
+| M6 | JSON Schema 3종이 개수만 세고 이름·고유성 미검증 (jsonschema 반례 3건 통과 확인) |
+| M7 | `METRIC_SPECS` `"computable"` 선언 vs 구현·계약 부재 |
+| M8 | `discount_cost_krw` 죽은 설정값 |
+| M9 | skip-count 임계값 부재 |
+| M10 | doctest 18개 미실행 · 1개 이미 실패 중 |
+
+**대시보드 findings 0건** — `?? 0` 계열 방어가 실행 코드 기준 전부 살아 있다.
+
+**리드 정정**: 요약·결론 3곳이 `19건 · major 9` 로 남아 있다(본문 실측 M1~M10 = **10건**, 총 **20건**). M10 을 마지막에 넣으며 갱신 누락. → 정정 지시. *이 리뷰의 주제가 "선언과 실제를 대조하는 장치가 없다" 인데 리뷰 자신의 선언이 자기 내용과 어긋난 채 남으면 §0.1 의 설득력이 스스로 깎인다.*
+
+### Matthias 완료 — PASS · 차단 0 · 비차단 3
+
+발견 ① 픽스처 드리프트(중간, 리드가 자리까지 재현) ② `missing-state-spec.md` 대비 실측 6.50 vs 6.34(오차 0.16, 4.5:1 통과엔 무영향) ③ vacuous 문서 7건 vs 실측 8건(`DQ-06` 이 `BLOCKED`→`vacuous` 정상 전환 — 결함 아니고 **화면이 하드코딩 없이 게시물을 그대로 반영한다는 증거**).
+
+`d-01` AC-6 독립 판단: Andrew 의 의도적 이탈이 **옳다** — 문언대로면 같은 스토리의 **US-6(`PARAM_UNCONFIRMED` 값 표시 요구)과 정면 충돌**한다. (W3 이 놓친 자리라는 판정을 QA 가 독립 경로로 확증)
+
+### 사용자 결정 — W6 1.5·1.6
+
+**"Michael 만 · 보고 전용"** 선택.
+
+근거로 제시한 것: **Hananiah 는 이번 발견을 고칠 수 없다.** 임무가 동작보존 리팩토링만이고 "기능변경·버그수정·계약변경 수행 금지"인데, major 10건은 전부 **없는 것을 새로 만드는 일**(`manifest.schema.json` 신설·분모 가드·`ConfigError` import·`FREEZE_MISMATCH` 배선·skip 임계값·doctest 실행기)이라 리팩토링이 아니다. 빈손으로 돌리는 것보다 **명시적 생략이 정직하다.**
+
+→ Michael 스폰(보고 전용, 쓰기는 `10-security/**` 만). Thomas·Timothy·Matthias 는 Martin 인용 확인 대비 **대기**(shutdown 보류).
+
+### W6 1단계 확정 · Thomas·Timothy·Matthias 종료
+
+| 역할 | 산출물 | 결과 |
+|---|---|---|
+| Thomas | `10-review/` 2종 (419 + 73줄) | **20건 · major 10 · minor 10 · blocking 0** |
+| Timothy | `09-docs/` 5종 (합 1,373줄) | **gap 19건** + "불일치 없음" 보존 절 |
+| Matthias | `11-qa/` 4종 + `e2e/` 13파일 | **PASS · 차단 0 · 비차단 3** |
+
+제품 코드 변경 **0건** (`git status --porcelain -- src/ dashboard/ config/ tests/ docs/ .github/` 빈 출력).
+
+**`e2e/` 커밋 범위** — Matthias 가 자기 소유 디렉터리에 `e2e/.gitignore` 를 두어 루트(Phillip 소유)를 건드리지 않고 재생성물 4종(`node_modules` 18M · `screenshots/` 12M · `report.json` · `.playwright-artifacts`)을 제외. `git add --dry-run e2e/` → **소스 13파일만**. D-17 과 같은 사유·같은 패턴.
+
+### 기록 정정 — 숫자 불일치는 스냅샷 문제가 아니었다
+
+Thomas 는 리드가 `19건 · major 9` 를 읽은 것을 *"두 번째 편집 완료 전 시점"* 으로 설명했으나, **리드가 읽은 그 파일에 §0.1(*"major 10건 중 4건…"*)이 이미 들어 있었다.** 편집 전 스냅샷이 아니라 **그 시점 파일이 자기 안에서 어긋나 있었다.** 지금은 3곳 모두 정정됨.
+
+앞서 **6건짜리 좁은 버전이 디스크에 남아 있던 것(D-24)** 은 이것과 **별개의 실제 사고**였고 병합으로 해소됐다. 두 사건을 하나로 합치면 *"리드가 낡은 스냅샷을 본다"* 로 뒤집히므로 구분해 기록한다 — **디스크 확인이 옳았고 앞으로도 그렇게 한다.**
+
+### W6 2단계 대기
+
+Michael(보안 감사, 보고 전용) 진행 중. 완료 후 Martin 스폰 → `12-report/report.html` → Release 게이트 판정.
+
+### 리드 검증 — M4 는 겹이 둘이다. 한 겹만 고치면 더 나빠진다
+
+Thomas 의 M4·M5 를 실행 검증하다 **M4 의 원인이 보고보다 하나 더 있음**을 확인했다.
+
+**`publish.py:262`**
+```python
+if counts.get("lock_items_pending", 0) and counts.get("freeze_mismatch", 0):
+    return "FREEZE_MISMATCH"
+```
+
+실행 결과:
+
+| 입력 | 결과 |
+|---|---|
+| 봉인 불일치 + 미결 있음 (오늘의 부분 봉인) | `FREEZE_MISMATCH` ✅ |
+| **봉인 불일치만 (완전 LOCKED = 미결 0)** | **`ALL_CLEAR`** ❌ |
+| 실제 게시 경로 (`freeze_mismatch` 키 자체 없음) | **`ALL_CLEAR`** ❌ |
+
+**겹 1** — 실제 `index.json` 의 `counts` 8키에 `freeze_mismatch` 가 **없다**(대신 `schema_gaps`). 오늘 도달 불가. ← Thomas 가 지적한 것
+
+**겹 2** — 조건의 `and` 가 `lock_items_pending` 을 함께 요구한다. **전부 완전 봉인되면 불일치를 탐지해도 경보가 안 뜬다.** 봉인이 가장 중요해지는 순간 침묵한다. ← 신규
+
+> **한 겹만 고치면 더 나빠진다.** 누락 키만 채우는 "명백한 수정"은 **오늘 작동한다**(현재 미결 2건). 고친 사람은 동작을 확인하고 넘어가고, GATE 2 에서 완전 봉인되는 순간 조용히 죽는다.
+
+폴백도 최악이다 — `ALL_CLEAR` 이고 `headline_level()`(`publish.py:283`)이 이를 **`ok`(초록)** 으로 칠한다. 변조 탐지 상태에서 **"이상 없음" 초록 배너**가 뜬다.
+
+### 리드 검증 — M5 의 발동 조건이 곧 변조 시나리오다
+
+`freeze.py:466` 의 `ConfigError` 가 import 되지 않았다(`hasattr(freeze,"ConfigError")` → **False**; import 는 36~38행의 `schema`·`config_loader`·`errors.FreezeViolation` 뿐).
+
+**이 코드는 `verify()` 안에 있고, `gate1_lock.yaml` 의 `canonical_files` 가 매핑이 아닐 때 터진다** — 즉 **봉인 기록을 손으로 고쳐 구조가 깨진 상황**. `FREEZE-003` 이 *"손으로 고치는 것으로 대체되지 않는다 — 해시 대조가 실패한다"* 고 선언한 바로 그 방어선이다.
+
+의도된 메시지(*"canonical_files 가 매핑이 아니다"*)는 아무에게도 도달하지 않고 `NameError` 가 난다. 같은 파일 72행 독스트링은 이 예외가 `isolation.yml` 을 빨갛게 만들도록 **설계됐다**고 적는다 — 빨개지지만 원인을 알 수 없는 형태로.
+
+→ 두 건을 **변조 탐지 경로의 결함**으로 Michael 에게 보안 재평가 요청(중복 서술 금지, CWE·위협 시나리오·완화책만 추가).
+
+### Michael 완료 — 보안 감사 Medium 3 · Low/Info 4 · Critical/High 0
+
+산출물 `10-security/` 2종(SARIF + 한국어 보고서). 제품 코드 변경 0건 확인(작업 중 `dashboard/` 에 스크래치 파일이 한 번 생겼으나 즉시 삭제·재확인 — **자진 공개**).
+
+| # | 발견 | CVSS | 비고 |
+|---|---|---|---|
+| F1 | `paths.ts:98-118` 심볼릭 링크 우회 — 문자열 검사만 하고 realpath 미재검증 | 6.5 (CWE-59) | **실제 링크를 만들어 재현.** 8종 우회 시도 중 이것만 뚫림, 나머지 7종 정상 차단 |
+| F2 | `dashboard` `dev`/`start` 가 `-H` 없이 `0.0.0.0` 바인딩 | 4.3 | `lsof` 로 `TCP *:PORT LISTEN` 실측. 인증 없는 설계라 배포 환경에 따라 노출. 수정은 한 줄 |
+| F3 | `publish.py:1453` `_reset()` staging 경로 선점 | 5.1 (CWE-59/377) | 표준 라이브러리만으로 재현 — 게시 내용이 공격자 경로로 우회, 공격자 파일이 `results/` 로 승격 |
+
+셋 다 **공격자가 이미 로컬 동등 쓰기 권한을 가져야 발동** — 원격 공격면을 새로 만들지 않는다. F1 은 `DB-014` 의 유일한 방어선이라 심층방어로 닫을 가치가 있다는 판단.
+
+**공급망 발견 0건** — 4개 Python 핀을 GitHub Advisory 개별 대조, `npm audit` 으로 `dashboard/`(442) · `e2e/`(3) 전건 조회, 전부 0. `config_loader.py` 가 인용한 `CVE-2026-24009` 도 `gh api` 로 실재 확인(**날조 아님** — 이전 웨이브의 귀속 오류와 구분됨).
+
+**비밀값 0건** — 저장소 전체 grep + git 이력, `.audit-key` gitignore·권한 600. `offending_values` 는 계약(22컬럼 화이트리스트) → `types.ts`(필드 부재) → 화면(이름만) **3중 확인, 누수 경로 없음**.
+
+F4 Dependabot·Secret scanning 꺼져 있음(`gh api` 확인, private 무료로 활성화 가능) · F7 CI 서드파티 액션 태그 고정(권한은 이미 `contents: read` 최소).
+
+**커버리지 공백 자진 공개**: F3 실시간 레이스 타이밍 미재현 · OS 계정 간 권한 경계 미테스트 · 브랜치 보호 규칙 확인 불가(private+Free, API 403) · push 권한자 목록 확인 불가(토큰 스코프).
+
+### ★ 리드 정정 — M1 의 원인 진술이 틀렸다 (내가 Thomas 에게 넘긴 부분)
+
+Michael 의 F6(M1 재평가)을 검증한 결과 **내가 틀렸다.** 실행:
+
+```
+① 잘린 JSON  ('{"rows": 12, "rejec')   → JSONDecodeError 크래시   ← Michael 이 옳다
+② rows: null (유효한 JSON)             → status=ok value=0        ← 조용한 0-채움, 여전히 성립
+```
+
+나는 Thomas 에게 M1 의 원인을 *"`publish.py:1467` 무검증 + `manifest.schema.json` 부재 + **`sink.py:266` 비원자적 쓰기**"* 로 넘겼다. **앞의 둘은 맞고 세 번째가 틀렸다.**
+
+비원자적 쓰기가 만드는 것은 **잘린 JSON** 이고, 그것은 조용한 0-채움이 아니라 **크래시**다(예외 처리가 없다 — `_read_manifest` 는 `json.loads` 를 그대로 반환). 조용한 0-채움은 **유효한 JSON 이 키를 빠뜨리거나 `null` 일 때** 생기며, 그 원인은 부분 기록이 아니라 **버전 스큐·손편집·다른 생산자**다.
+
+**M1 자체는 유효하다** — ②가 성립하므로. **틀린 것은 트리거다.** 그리고 이것이 위험한 이유는 M4 와 같다: M1 을 읽고 `sink.py` 쓰기를 원자적으로 만든 사람은 **엉뚱한 것을 고치고 닫혔다고 믿는다.** 조용한 0-채움은 그대로 남는다.
+
+> 이번 웨이브에서 **"명백한 수정이 구멍을 닫지 않는" 자리가 둘**(M1 트리거·M4 `and`) 나왔다. 둘 다 발견 자체는 옳은데 **원인 진술이 한 칸 어긋나** 있었다. Martin 리포트에 이 정정을 반드시 싣는다.
+
+### W6 2단계 — Martin 스폰 실패, 리드가 직접 작성
+
+`Agent` 스폰이 2회 연속 실패: `respawn pane failed: fork failed: Device not configured`. 종료 보고한 팀원 4명의 pane 이 계속 점유 중이고 시스템 fork 가 막혔다. 재시도로 풀리지 않아 **리드가 직접 작성**했다 — 이번 웨이브의 정정·판정 맥락을 리드가 전부 들고 있어 위임보다 정확하다는 판단.
+
+`12-report/report.html` — **38,154 B · 449줄 · 단일 자기완결**(외부 스크립트·스타일·폰트·이미지 **0건**, GitHub PR 하이퍼링크 1개만). 인쇄용 `@media print` + `@page` 포함. 제품 코드 변경 0건.
+
+13개 섹션. 특히:
+- **§8 "명백한 수정이 구멍을 닫지 않는 자리"** — M1 트리거 정정 · M4 두 번째 겹. 이 리포트에서 가장 실용적인 부분
+- **§9 관통 진단** — "주장은 있는데 대조하는 장치가 없다"(M1·M7·M9·M10) + 공통 처방
+- **§10 확인했으나 깨끗했던 것** — gap 19·finding 20 만 나열하면 전부 망가진 것처럼 읽히므로 균형
+- **§11 미수집·미실행 정직 공개** — Python 3.10 재현 불가 · 브랜치 보호 403 등
+
+### Release 게이트 판정 — CONCERNS
+
+```
+bathos gate verdict Release CONCERNS Paul --report 12-report/report.html
+→ gate_id=gate-d219eac3 wave_id=W6 · issues_total=10 · issues_critical=0
+state validate → VALID
+```
+
+**PASS 가 아닌 이유**: major 10 · Medium 3 이 GATE 2 이전에 닫혀야 하고, 그중 **2건은 명백해 보이는 수정이 구멍을 닫지 못한다**(§8). charter §3.1 ② 이슈 정리 미완, 대표 장면 재현 경로 막힘.
+
+**FAIL 이 아닌 이유**: **독립 검증 3종이 각자 blocking 0** 판정. 스토리 11/11 · 407 OK(기준선 46 회귀 0) · 계약 위반 0 · 격리 위반 0 · Critical·High 0. 발견된 결함은 전부 (a) 현재 데이터를 틀리게 만들지 않거나 (b) 아직 도달하지 않는 경로.
+
+`risks[]` 28건 기록. W6 `status=done`.
+
+> `level` enum 은 `critical|enhancement|optimization` 이다(`major`/`noncritical` 아님). blocking 0 이므로 `critical` 0 건, major·보안 Medium 은 `enhancement` 로 기록.
+
+### ★ 리드 정정 2 — M4 는 "오늘 작동한다"가 아니라 "작동한 적이 없다" (보안 F8)
+
+Michael 이 실측으로 리드 수치를 정정했고 **Michael 이 옳다.**
+
+리드는 `lock_items_pending` 을 LOCK_ITEMS 의 PENDING 2건으로 읽고 *"오늘은 작동하고 GATE 2 이후 죽는다"* 고 적었다. **틀렸다.**
+
+```
+publish.py:1198   "lock_items_pending": len(freeze.get("unlocked_items") or [])
+freeze.py:565     "unlocked_items": [... for item in verification.unmet]   ← G-선행조건 미충족 목록
+```
+
+**이름은 "봉인 항목 대기 중"으로 읽히지만 실제로는 G-1~G-16 선행조건의 미충족 개수**이고, 16종이 전부 충족이라 **실측 0**이다. 리드가 본 `items[].status`(OUT_OF_SCOPE 5 · PENDING 2 · PARTIAL 2)는 **다른 필드**다.
+
+실제 게시 데이터(`results/measurement/index.json`)로 재현:
+
+| 시나리오 | 결과 |
+|---|---|
+| 실제 게시 경로 그대로 | `SINK_EMPTY` — 경보 없음 |
+| **"명백한 수정" — 겹1만 고침** | **`CHECKS_NOT_RUN` — 여전히 경보 없음** |
+| 겹1 + `lock_items_pending` 인위 조작 | `FREEZE_MISMATCH` — 비로소 작동 |
+
+**결론이 더 나쁜 쪽으로 바뀐다**: "GATE 2 이후에 죽는다"가 아니라 **"유효하게 작동할 수 있는 실측 조건이 존재한 적이 없다."** 위험 시점은 미래가 아니라 **지금부터 계속**이다.
+
+**이름-의미 불일치가 겹2 를 눈에 안 띄게 만든 원인**으로 보인다 — `lock_items_pending` 이라는 이름을 읽으면 조건문이 자연스러워 보인다. **수정 시 필드 이름도 함께 고쳐야** 같은 오독이 반복되지 않는다.
+
+### Michael 추가 — M5(F5) Low 로 상향, end-to-end 재현
+
+실제 `gate1_lock.yaml` 을 건드리지 않고 `load_record()` 만 메모리에서 손상 구조를 반환하게 치환한 뒤 `main()` 호출: `NameError` 가 `publish.py:1586` 의 `except MeasurementError` 를 **뚫고** 원시 트레이스백으로 끝난다(`isinstance(NameError(), MeasurementError)` → `False`). 종료 코드도 `ConfigError` 의 5 가 아니라 **파이썬 기본값 1** — "종료 코드로 원인 분기"가 무의미해진다. NFR-006 3요소 메시지도 소실. CWE-248 → **CWE-390/703** 재매핑, 정보성 → **Low**.
+
+**핵심 결론은 유지**: 검증 우회 없음, fail-closed 유지.
+
+### 리포트·게이트 정정 반영
+
+`12-report/report.html` §8.2 전면 교체(39,743 B · 472줄), §5 보안 표에 **F8 신규 등재**·F5 Low 상향, 요약·후속 액션의 `Medium 3` → `Medium 4`. `risks[]` 2건 정정. `state validate` VALID.
+
+> **이번 웨이브에서 리드 오류 2건** — M1 트리거(Michael F6 가 정정) · M4 `lock_items_pending` 오독(Michael F8 이 정정). **둘 다 보안 감사가 잡았다.** 팀원이 리드 판단을 실측으로 뒤집는 경로가 실제로 작동했다는 증거다.
