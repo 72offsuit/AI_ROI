@@ -1,0 +1,23 @@
+# QA e2e harness — everything below is regenerable, none of it is original.
+# Source of truth is package.json/package-lock.json + playwright.config.ts + datasets.ts +
+# tests/*.spec.ts. `npm install && npx playwright test` reproduces everything ignored here.
+
+# npm install from package-lock.json.
+node_modules/
+
+# Playwright's outputDir — only populated on a FAILED test (trace/error-context for
+# debugging); a fully green run leaves it empty. Re-created every `npx playwright test`.
+.playwright-artifacts/
+
+# JSON test reporter output. Rewritten on every run; durations/timestamps make every
+# re-run a full-file diff that says nothing (same reasoning as results/ and
+# dashboard/screenshots/ in the root .gitignore).
+report.json
+
+# Full-page screenshots (~12MB, 24 images). Same reason as dashboard/screenshots/
+# (decision D-17): the pages embed run_id/generated_at (ProvenanceBar), so every
+# re-capture changes all 24 files with a diff that carries no information. The
+# acceptance evidence is the assertion that passed at capture time (test-cases.md /
+# qa-summary.md), not the image bytes. Regenerate with:
+#   npx playwright test tests/pages.spec.ts
+screenshots/

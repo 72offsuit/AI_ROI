@@ -1,0 +1,12 @@
+{
+  "name": "airoi-qa-e2e",
+  "version": "0.1.0",
+  "private": true,
+  "description": "W6 independent QA harness (Matthias/Role 15). Owned by .agent-team/11-qa — does not touch dashboard/ product code. Drives the built dashboard app with Chromium headless and checks acceptance criteria against real HTTP/DOM output rather than trusting prior reports.",
+  "scripts": {
+    "test": "playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.63.0"
+  }
+}
