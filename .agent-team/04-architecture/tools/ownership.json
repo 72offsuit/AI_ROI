@@ -192,6 +192,16 @@
       "why": "#49"
     },
     {
+      "pattern": "tests/test_doctests.py",
+      "owner": "phillip",
+      "why": "docstring 예제 18개를 unittest discover 에 편입 (#59 M10). 모듈 목록은 하드코딩하지 않고 발견한다"
+    },
+    {
+      "pattern": "tests/test_catalog_vs_published.py",
+      "owner": "phillip",
+      "why": "METRIC_SPECS 선언 ↔ 게시물 대조 (#59 M7). 공백을 없애는 것이 아니라 선언되지 않은 공백을 막는다"
+    },
+    {
       "pattern": "tests/test_config_loader.py",
       "owner": "phillip",
       "why": "config_loader"

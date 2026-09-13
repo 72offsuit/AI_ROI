@@ -82,5 +82,6 @@ python3 -m unittest tests.test_isolation -v
 - `src/measurement/`는 구현 완료(M-01~M-09, 모듈 10개 + `__init__.py`). `src/simulator/`·`decision/`·`diagnostics/`·`orchestration/`은 **여전히 지침 파일만 있고 구현 코드가 없다.**
 - `dashboard/`(Next.js, `:3001`)에 **라우트 8종**이 구현됨(d-01·d-02) — 게시물 연동 6(`V1`~`V6`) + 정적 1(`/triggers`, C1 작동 0종) + 개요 1(`/`). `results/`의 게시물을 **읽기만** 한다(`DB-012`·`DB-013`·`DB-014`).
 - GATE 1은 **부분 봉인(`PARTIAL_FREEZE`)** 상태다. 완전 봉인(`LOCKED`)은 **0종**.
-- CI는 `.github/workflows/isolation.yml`(의존성 없이) · `tests-with-deps.yml`(의존성 설치 후) **2종**이다. 저장소 전체 검증은 `python3 -m unittest discover -s tests`(**407건**)이며 lint·build·타입 검사는 여전히 미정의.
+- CI는 `.github/workflows/isolation.yml`(의존성 없이) · `tests-with-deps.yml`(의존성 설치 후) **2종**이다. 저장소 전체 검증은 `python3 -m unittest discover -s tests` 이며 lint·build·타입 검사는 여전히 미정의.
+  - 여기에 **건수를 적지 않는다.** 이전 판은 `407건` 이라고 적었고 테스트를 추가한 바로 다음 커밋에 낡았다 — 아무도 대조하지 않는 숫자를 문서에 두는 것이 이슈 `#59` 가 닫은 결함의 모양이다. 건수는 명령을 실행하면 나온다.
 - **존재하지 않는 명령을 문서·게이트·PR 본문에 쓰지 않는다.** 검증을 실행할 수 없으면 `BLOCKED`로 보고한다.
