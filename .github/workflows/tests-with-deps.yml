@@ -56,9 +56,38 @@ jobs:
         run: python -m unittest discover -s tests -t . -v
 
       # The skip count is the payload of this job. isolation.yml skips the checks that
-      # need a dependency; this one should skip far fewer. A rising number here means a
-      # check quietly stopped running -- that is a regression even though the job is green.
+      # need a dependency; this one should skip far fewer.
+      #
+      # ★ Reporting the number was not enough (review finding M9, issue #59): a rising
+      #   count only meant something if a human read the log, so a check could stop
+      #   running while the job stayed green. The gate below compares instead of prints.
+      #
+      #   It does NOT assert a threshold. A hardcoded maximum goes stale the first time
+      #   someone legitimately adds or removes a skip, and a stale declaration nobody
+      #   updates is the exact defect this issue closes. The assertion is semantic:
+      #   once the dependencies are installed, NO test may still be skipped for a
+      #   missing dependency. That never goes stale, and it catches what actually
+      #   goes wrong -- an install step that failed quietly, or a new dependency
+      #   added to the code but not to requirements.
       - name: Report skip count
         if: always()
         run: |
           python -m unittest discover -s tests -t . 2>&1 | tail -3
+
+      - name: Gate — no dependency-blocked skips remain
+        if: always()
+        run: |
+          python -m unittest discover -s tests -t . -v 2>&1 \
+            | grep -oE "skipped '[^']*'" > /tmp/skips.txt || true
+          echo "--- 이 잡의 skip 사유 전체 ---"
+          sort /tmp/skips.txt | uniq -c | sort -rn || true
+          if grep -q "미설치" /tmp/skips.txt; then
+            echo
+            echo "::error::의존성을 설치했는데도 '미설치' 사유로 건너뛴 검사가 있다."
+            echo "설치 단계가 조용히 실패했거나, 코드가 requirements 에 없는 의존성을 쓴다."
+            echo "건너뛴 검사는 통과가 아니다 — 아래 항목을 확인하라:"
+            grep "미설치" /tmp/skips.txt | sort -u
+            exit 1
+          fi
+          echo
+          echo "OK — 의존성 사유로 건너뛴 검사 0건."
