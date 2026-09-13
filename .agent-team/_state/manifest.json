@@ -83,10 +83,11 @@
       "wave_id": "W3",
       "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
       "name": "Story Engineering & Readiness Gate",
-      "status": "pending",
+      "status": "active",
       "active_roles": [],
       "entry_gate": "Plan",
-      "exit_gate": "Implementation"
+      "exit_gate": "Implementation",
+      "started": "2026-09-10T18:20:21.115794Z"
     },
     {
       "wave_id": "W4",
@@ -99,9 +100,10 @@
       "wave_id": "W5",
       "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
       "name": "Implementation",
-      "status": "pending",
+      "status": "active",
       "active_roles": [],
-      "entry_gate": "Implementation"
+      "entry_gate": "Implementation",
+      "started": "2026-09-11T02:16:45.838355Z"
     },
     {
       "wave_id": "W6",
@@ -136,6 +138,28 @@
       "report_path": "04-architecture/build-plan.md",
       "facilitator": "Paul",
       "decided": "2026-09-10T17:24:26.427513Z"
+    },
+    {
+      "gate_id": "gate-dff7476e-6068-4ea2-8aa4-bfa4d40acbc4",
+      "wave_id": "W3",
+      "gate_type": "Implementation",
+      "verdict": "FAIL",
+      "issues_total": 11,
+      "issues_critical": 7,
+      "report_path": "03-story-engineering/readiness-report-kr.md",
+      "facilitator": "Paul",
+      "decided": "2026-09-10T22:52:17.340193Z"
+    },
+    {
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "wave_id": "W3",
+      "gate_type": "Implementation",
+      "verdict": "CONCERNS",
+      "issues_total": 10,
+      "issues_critical": 3,
+      "report_path": "03-story-engineering/readiness-report-kr.md",
+      "facilitator": "Paul",
+      "decided": "2026-09-10T23:58:00.505027Z"
     }
   ],
   "risks": [
@@ -237,10 +261,81 @@
       "status": "open",
       "owner_wave": "W5",
       "logged": "2026-09-10T17:24:26.427535Z"
+    },
+    {
+      "risk_id": "R-5249de63-d1f1-45c1-9f0d-41f3610e93c0",
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "severity": "med",
+      "description": "[readiness-report §0.6 · §12] jsonschema 미설치로 구조적 미검증 — 픽스처 14파일 전수 · 오류 메시지·json_path 모양 · $ref 해석 · 정규식 방언. 논리로 풀리는 것(not·required·anyOf·allOf·if/then·enum)은 전부 풀었고 실행이 필요한 것만 BLOCKED. M-05(requirements-dev.txt)가 m-06 계약 수정보다 먼저 들어와야 AC-4d 가 실물로 닫힘",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T23:58:00.505036Z"
+    },
+    {
+      "risk_id": "R-aca51ab6-e575-4e19-b939-68f1754c68c7",
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "severity": "med",
+      "description": "[readiness-report §12] W5 순서 제약 — M-05(jsonschema) → m-06 T1(계약 수정 4건) → AC-4d·AC-4e → 나머지. M-05 는 build-plan 상 우선순위가 낮은데 이 제약으로 앞당겨야 함. 당기지 못하면 AC-4d 가 BLOCKED 이고 계약 수정도 함께 보류",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T23:58:00.505039Z"
+    },
+    {
+      "risk_id": "R-880247b7-443f-4ec2-8394-178e07fcc6cc",
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "severity": "med",
+      "description": "[story-m-06 §4.15 · story-m-07] CR-2 픽스처 검사 11종 소실은 W5 로 이월 — make_examples_connected.py 453·456행 하드코딩이라 재생성으로 안 고쳐짐. 3-assert(len==18 + reported==len + ID집합) 가 게시 자기검증 fail closed 에 들어가 publish.py 는 7건을 낼 수 없음. 픽스처는 생산 경로 위에 없음. 두 리뷰어 이월 승인",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T23:58:00.505042Z"
+    },
+    {
+      "risk_id": "R-ab99a5db-cac5-462d-902c-8a5e084dade7",
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "severity": "med",
+      "description": "[story-d-02 · Matthias regate2] N-4 스크린샷 수단 — Ecommerce_Service 에 @playwright/test 1.63.0 과 playwright.config.ts 실재(Matthias 초기 보고 정정). 막힌 것은 npx playwright install 한 번. ⑴수동 ⑵^1.63.0 도입(L1 사용자 결정) ⑶BLOCKED 셋과 절차 명시, DoD 에 ⑶이면 체크하지 않는다 를 달았음",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T23:58:00.505044Z"
+    },
+    {
+      "risk_id": "R-803581ac-ecca-4dc5-832a-b4562d595231",
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "severity": "low",
+      "description": "[readiness-report §2 · story-m-06 AC-4d] 방어 강화 3건 — D2a(경로)/D2b(값) 분리 후 ts/tsx/js 블록까지 확장(tools/d2b_value_existence.py) · source_hash 입력 목록 전 스토리 기록으로 제3자 재현 가능(tools/d3_source_hash_verify.py, 12/12 일치) · AC-4d 신설(계약 수정을 읽어서 판단하지 않는다, 통과·거부 양방향 확인, 하나라도 의도와 다르면 멈춘다)",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T23:58:00.505045Z"
+    },
+    {
+      "risk_id": "R-d877b84a-a6d0-4028-9453-319719c0ce53",
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "severity": "low",
+      "description": "[readiness-report §0.39] §0.39 지배적 실패 양식 9사례 — 검증했다고 적었는데 검증 대상이 실제와 달랐음. 전부 미실행을 통과로 적지 않는다 는 지켰고 실행도 했으나 무엇을 실행했는가가 틀림. 파생 규율 3건: 결함을 표시할 때는 고치는 법까지 같은 자리에 적는다 · 개수를 문장으로 적지 않는다 · 기존 not/required/if-then 을 건드리는 계약 수정은 회귀로 취급한다",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T23:58:00.505047Z"
+    },
+    {
+      "risk_id": "R-f5e8a69e-9d5d-46a9-8503-28398fde2a77",
+      "gate_id": "gate-b3b46971-6433-476b-bc37-20534f617786",
+      "severity": "low",
+      "description": "[readiness-report §0.55] 리드 판정 5건이 팀원에게 정정됨(전부 팀원이 옳았음) — Q-3 JSON Schema 표현 불가 · Q-3 원인은 검사 11종 소실 · repurchase_rate 는 계산 가능 · limit_note 는 선택 필드(두 원칙) · regate_count 계산. limit_note 정정은 실제 결함을 막았음(묶어 적었으면 한계 없는 지표 46종에 빈 문자열 유입)",
+      "status": "open",
+      "owner_wave": "W5",
+      "logged": "2026-09-10T23:58:00.505049Z"
     }
   ],
   "modules": [],
   "artifacts": [],
   "stale_story_keys": [],
-  "approved_fingerprints": []
+  "approved_fingerprints": [
+    {
+      "fingerprint_id": "fp-c8678e282af1",
+      "hash": "c8678e282af139b13502538cbd67e3f570f2c1f3a7c7a563d33f9f0554d4e890",
+      "actor": "Paul",
+      "scope": "ci",
+      "approved": "2026-09-11T03:21:03.130008Z"
+    }
+  ]
 }

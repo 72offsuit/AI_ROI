@@ -1,0 +1,1761 @@
+{
+  "artifact": "kpi_report",
+  "contract_version": "measurement-publish/v1",
+  "definition_version": "kpi-definition-v1.0-draft",
+  "generated_at": "2026-09-11T23:56:58.176+09:00",
+  "index_date": "2026-09-11",
+  "metrics": [
+    {
+      "blocks": [
+        "retention_rate"
+      ],
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "구매 이력 보유 고객 수",
+      "formula": "|{c : days_since_last_purchase(c,D) ≥ no_purchase_days}| / |P_buyer(D)|",
+      "layer": "customer_kpi",
+      "name": "churn_rate",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 churn_rate 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 churn_rate 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "point_in_time",
+        "label": "index_date 시점 상태"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "구매 이력 보유 고객 수 (churn_rate 와 동일 모집단)",
+      "formula": "1 − churn_rate",
+      "layer": "customer_kpi",
+      "name": "retention_rate",
+      "population": "P_buyer",
+      "role": "secondary",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "metric",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "churn_rate"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "churn_rate 를 계산할 수 없어 retention_rate 도 계산할 수 없다 — purchase 이벤트가 0건이라 churn_rate 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "metric",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "churn_rate"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "churn_rate 를 계산할 수 없어 retention_rate 도 계산할 수 없다 — purchase 이벤트가 0건이라 churn_rate 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "point_in_time",
+        "label": "index_date 시점 상태"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "가입월 코호트 인원",
+      "formula": "코호트 m개월차 구매 ≥1건 고객 / 코호트 전체",
+      "layer": "customer_kpi",
+      "name": "cohort_retention_rate",
+      "population": "cohort",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "table",
+                "reason_code": "PRECONDITION_MISSING",
+                "ref": "customers"
+              },
+              {
+                "kind": "schema_gap",
+                "reason_code": "PRECONDITION_MISSING",
+                "ref": "signup_date"
+              }
+            ],
+            "reason_code": "PRECONDITION_MISSING",
+            "reason_detail": "cohort_retention_rate 는 signup_date 로 모집단을 구성해야 하는데 customers 테이블이 미구현이고 events 22컬럼에 signup_date 가 없다. events 첫 등장일은 가입일이 아니므로 근사하지 않는다. 조치: 별도 저장소 이슈 #29 (고객 모델에 가입일 추가와 라이프사이클 기준 확보)",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "table",
+                "reason_code": "PRECONDITION_MISSING",
+                "ref": "customers"
+              },
+              {
+                "kind": "schema_gap",
+                "reason_code": "PRECONDITION_MISSING",
+                "ref": "signup_date"
+              }
+            ],
+            "reason_code": "PRECONDITION_MISSING",
+            "reason_detail": "cohort_retention_rate 는 signup_date 로 모집단을 구성해야 하는데 customers 테이블이 미구현이고 events 22컬럼에 signup_date 가 없다. events 첫 등장일은 가입일이 아니므로 근사하지 않는다. 조치: 별도 저장소 이슈 #29 (고객 모델에 가입일 추가와 라이프사이클 기준 확보)",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "prospective",
+        "label": "M1/M3/M6/M12"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "기간 내 1회 이상 구매 고객 수",
+      "formula": "|{c : purchase_count(c,[D−L,D]) ≥ 2}| / |{c : purchase_count(c,[D−L,D]) ≥ 1}|",
+      "layer": "customer_kpi",
+      "name": "repurchase_rate",
+      "population": "orders",
+      "role": "secondary",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 repurchase_rate 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 repurchase_rate 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "D−L 시점 이탈 고객 수",
+      "formula": "|{c : state(c,D−L)=churn ∧ purchase ∈ (D−L,D]}| / |{c : state(c,D−L)=churn}|",
+      "layer": "customer_kpi",
+      "name": "winback_rate",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "D−42 시점에 이탈 상태인 고객이 0명이라 복귀율의 분모가 없다 — 0% 는 '아무도 복귀하지 않았다' 로 읽히지만 실제로는 '복귀할 대상이 없었다' 다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "D−42 시점에 이탈 상태인 고객이 0명이라 복귀율의 분모가 없다 — 0% 는 '아무도 복귀하지 않았다' 로 읽히지만 실제로는 '복귀할 대상이 없었다' 다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective",
+        "label": "(D−L, D]"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "구매 고객 수 (주문 건수가 아니다)",
+      "formula": "Σ purchase 건수 / |P_buyer(D)|",
+      "layer": "customer_kpi",
+      "name": "purchase_frequency",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 purchase_frequency 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 purchase_frequency 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "구매 간격이 정의되는 고객 수 (제외 인원 병기)",
+      "formula": "median(고객별 median(연속 purchase 간 일수))",
+      "layer": "customer_kpi",
+      "name": "purchase_interval",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 purchase_interval 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "days",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 purchase_interval 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "days",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4",
+      "denominator_definition": "주문 건수 (★ 고객 수가 아니다)",
+      "formula": "Σ order_amount / count(purchase)",
+      "layer": "customer_kpi",
+      "name": "average_order_value",
+      "population": "orders",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 average_order_value 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 average_order_value 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §6.2",
+      "denominator_definition": "라벨 대상 고객 수",
+      "formula": "churn_label_i = 1 if count(purchase | T0 < t ≤ T0+42) == 0",
+      "layer": "customer_kpi",
+      "name": "churn_label",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 churn_label 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 churn_label 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "ratio",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective",
+        "label": "(T0, T0+42]"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §5",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "count(coupon_use)",
+      "layer": "business_kpi",
+      "name": "coupon_usage_count",
+      "population": "events",
+      "role": "none",
+      "source_events": [
+        "coupon_use"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "회고 구간의 coupon_use 이벤트",
+              "source_event_types": [
+                "coupon_use"
+              ],
+              "window": {
+                "days": 42,
+                "direction": "retrospective"
+              }
+            },
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "회고 구간의 coupon_use 이벤트",
+              "source_event_types": [
+                "coupon_use"
+              ],
+              "window": {
+                "days": 42,
+                "direction": "retrospective"
+              }
+            },
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §5",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "count(coupon_exposed)",
+      "layer": "business_kpi",
+      "name": "coupon_exposure_count",
+      "population": "events",
+      "role": "none",
+      "source_events": [
+        "coupon_exposed"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "회고 구간의 coupon_exposed 이벤트",
+              "source_event_types": [
+                "coupon_exposed"
+              ],
+              "window": {
+                "days": 42,
+                "direction": "retrospective"
+              }
+            },
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "회고 구간의 coupon_exposed 이벤트",
+              "source_event_types": [
+                "coupon_exposed"
+              ],
+              "window": {
+                "days": 42,
+                "direction": "retrospective"
+              }
+            },
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §4.2",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "count(coupon_clicked)",
+      "layer": "business_kpi",
+      "name": "campaign_response_count",
+      "population": "events",
+      "role": "none",
+      "source_events": [
+        "campaign_exposed",
+        "coupon_clicked",
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "회고 구간의 coupon_clicked 이벤트",
+              "source_event_types": [
+                "coupon_clicked"
+              ],
+              "window": {
+                "days": 42,
+                "direction": "retrospective"
+              }
+            },
+            "limit_note": "쿠폰 비종속 캠페인(배너·푸시)의 반응은 담을 이벤트가 없어 과소계상된다 — 파라미터가 아니라 스키마의 한계다",
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "회고 구간의 coupon_clicked 이벤트",
+              "source_event_types": [
+                "coupon_clicked"
+              ],
+              "window": {
+                "days": 42,
+                "direction": "retrospective"
+              }
+            },
+            "limit_note": "쿠폰 비종속 캠페인(배너·푸시)의 반응은 담을 이벤트가 없어 과소계상된다 — 파라미터가 아니라 스키마의 한계다",
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          }
+        }
+      },
+      "window": {
+        "days": 42,
+        "direction": "retrospective"
+      }
+    },
+    {
+      "blocks": [
+        "contribution_profit",
+        "incremental_revenue",
+        "roi",
+        "average_order_value"
+      ],
+      "definition_ref": "kpi-definition-v1.md §5",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "Σ order_amount",
+      "layer": "business_kpi",
+      "name": "revenue",
+      "population": "orders",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 매출을 계산할 근거가 없다 — 매출 0원과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 매출을 계산할 근거가 없다 — 매출 0원과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "contribution_profit",
+        "incremental_contribution_profit"
+      ],
+      "definition_ref": "economic-rule-v1.md §3.2 EC-1",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "Σ (unit_cost × quantity)",
+      "layer": "business_kpi",
+      "name": "cogs",
+      "population": "orders",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 매출원가를 계산할 대상이 없다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 매출원가를 계산할 대상이 없다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "marketing_cost",
+        "realized_cost_per_customer"
+      ],
+      "definition_ref": "economic-rule-v1.md §4",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "발송 건수 × message_cost_krw",
+      "layer": "business_kpi",
+      "name": "message_cost",
+      "population": "events",
+      "role": "none",
+      "source_events": [
+        "push_sent"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "캠페인 (캠페인 없음) 의 push_sent 이벤트",
+              "source_event_types": [
+                "push_sent"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "limit_note": "반응 여부와 무관하게 발송 전원에게 계상한다 (EC-3 1원칙)",
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "캠페인 (캠페인 없음) 의 push_sent 이벤트",
+              "source_event_types": [
+                "push_sent"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "limit_note": "반응 여부와 무관하게 발송 전원에게 계상한다 (EC-3 1원칙)",
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "contribution_profit",
+        "marketing_cost"
+      ],
+      "definition_ref": "economic-rule-v1.md §6 D-16",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "Σ treatment_cost[t] for t in (처치 ∩ coupon_treatments), coupon_use 있는 주문만",
+      "layer": "business_kpi",
+      "name": "coupon_cost",
+      "population": "orders",
+      "role": "none",
+      "source_events": [
+        "coupon_use"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "excluded_count": 0,
+              "observed_count": 0,
+              "population": "캠페인 (캠페인 없음) 의 coupon_use 이벤트가 있는 주문",
+              "source_event_types": [
+                "coupon_use"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "derivation": "Σ treatment_cost[t].unit_cost_krw for t in (order.treatment_ids ∩ coupon_treatments), coupon_use 이벤트가 있는 주문에 한해 (D-16 유도 규칙)",
+            "derived": true,
+            "limit_note": "discount 필드가 스키마에 없어 처치 단가에서 유도한 값이다",
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "excluded_count": 0,
+              "observed_count": 0,
+              "population": "캠페인 (캠페인 없음) 의 coupon_use 이벤트가 있는 주문",
+              "source_event_types": [
+                "coupon_use"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "derivation": "Σ treatment_cost[t].unit_cost_krw for t in (order.treatment_ids ∩ coupon_treatments), coupon_use 이벤트가 있는 주문에 한해 (D-16 유도 규칙)",
+            "derived": true,
+            "limit_note": "discount 필드가 스키마에 없어 처치 단가에서 유도한 값이다",
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "marketing_cost"
+      ],
+      "definition_ref": "economic-rule-v1.md §4",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "campaign_fixed_cost_krw × 캠페인 수",
+      "layer": "business_kpi",
+      "name": "campaign_fixed_cost",
+      "population": "not_applicable",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "실행된 캠페인",
+              "window": {
+                "direction": "none"
+              }
+            },
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "실행된 캠페인",
+              "window": {
+                "direction": "none"
+              }
+            },
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "contribution_profit"
+      ],
+      "definition_ref": "economic-rule-v1.md §6 D-3",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "order_amount < 무료배송 기준 ∧ T1 → shipping_fee_krw",
+      "layer": "business_kpi",
+      "name": "shipping_subsidy",
+      "population": "orders",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "excluded_count": 0,
+              "observed_count": 0,
+              "population": "T1(무료배송) 처치가 적용된 무료배송 기준 미달 주문",
+              "source_event_types": [
+                "purchase"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "derivation": "order_amount < 40000 ∧ T1 ∈ treatment_ids → 3000원 (D-3 유도 규칙)",
+            "derived": true,
+            "limit_note": "shipping_subsidy 필드가 스키마에 없어 규칙에서 유도한 값이다",
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "excluded_count": 0,
+              "observed_count": 0,
+              "population": "T1(무료배송) 처치가 적용된 무료배송 기준 미달 주문",
+              "source_event_types": [
+                "purchase"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "derivation": "order_amount < 40000 ∧ T1 ∈ treatment_ids → 3000원 (D-3 유도 규칙)",
+            "derived": true,
+            "limit_note": "shipping_subsidy 필드가 스키마에 없어 규칙에서 유도한 값이다",
+            "status": "ok",
+            "unit": "krw",
+            "value": 0,
+            "value_formatted": "0원"
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "roi",
+        "ai_roi",
+        "realized_cost_per_customer"
+      ],
+      "definition_ref": "economic-rule-v1.md §5",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "message_cost + coupon_cost + campaign_fixed_cost",
+      "layer": "business_kpi",
+      "name": "marketing_cost",
+      "population": "not_applicable",
+      "role": "guardrail",
+      "source_events": [
+        "push_sent",
+        "coupon_use"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 3,
+              "population": "캠페인 (캠페인 없음) 의 마케팅 비용 구성요소",
+              "source_event_types": [
+                "push_sent",
+                "coupon_use"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "status": "ok",
+            "unit": "krw",
+            "value": 0.0,
+            "value_formatted": "0원"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 3,
+              "population": "캠페인 (캠페인 없음) 의 마케팅 비용 구성요소",
+              "source_event_types": [
+                "push_sent",
+                "coupon_use"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "status": "ok",
+            "unit": "krw",
+            "value": 0.0,
+            "value_formatted": "0원"
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "incremental_contribution_profit",
+        "roi",
+        "ai_roi"
+      ],
+      "definition_ref": "economic-rule-v1.md §3",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "revenue − cogs − coupon_cost − shipping_subsidy − message_cost − campaign_fixed_cost",
+      "layer": "business_kpi",
+      "name": "contribution_profit",
+      "population": "orders",
+      "role": "none",
+      "source_events": [
+        "purchase",
+        "push_sent",
+        "coupon_use"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "metric",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "cogs"
+              },
+              {
+                "kind": "metric",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "revenue"
+              }
+            ],
+            "reason_code": "NO_COST_BASIS",
+            "reason_detail": "기여이익 구성요소 6개 중 2개를 계산할 수 없다 (cogs, revenue) — 계산된 항목만 더하면 부분 합계가 전체처럼 보인다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "metric",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "cogs"
+              },
+              {
+                "kind": "metric",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "revenue"
+              }
+            ],
+            "reason_code": "NO_COST_BASIS",
+            "reason_detail": "기여이익 구성요소 6개 중 2개를 계산할 수 없다 (cogs, revenue) — 계산된 항목만 더하면 부분 합계가 전체처럼 보인다",
+            "status": "unavailable",
+            "unit": "krw",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "blocks": [
+        "realized_cost_per_customer",
+        "campaign_fixed_cost"
+      ],
+      "definition_ref": "economic-rule-v1.md §4 EC-4",
+      "denominator_definition": "분모 없음 (합계)",
+      "formula": "push_sent 가 발생한 고유 고객 수",
+      "layer": "business_kpi",
+      "name": "n_targeted",
+      "population": "events",
+      "role": "none",
+      "source_events": [
+        "push_sent"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "캠페인 (캠페인 없음) 에서 push_sent 가 발생한 고유 고객",
+              "source_event_types": [
+                "push_sent"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          },
+          "simulator": {
+            "basis": {
+              "denominator": null,
+              "denominator_definition": "분모 없음 (합계)",
+              "observed_count": 0,
+              "population": "캠페인 (캠페인 없음) 에서 push_sent 가 발생한 고유 고객",
+              "source_event_types": [
+                "push_sent"
+              ],
+              "window": {
+                "direction": "none"
+              }
+            },
+            "status": "ok",
+            "unit": "count",
+            "value": 0,
+            "value_formatted": "0건"
+          }
+        }
+      },
+      "window": {
+        "direction": "none"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §6.1 · 리드 판정 G-8",
+      "denominator_definition": "분모 없음 (합계)",
+      "layer": "customer_kpi",
+      "name": "derived_state_count[inactive]",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 derived_state_count[inactive] 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 derived_state_count[inactive] 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "point_in_time",
+        "label": "index_date 시점 상태"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §6.1 · 리드 판정 G-8",
+      "denominator_definition": "분모 없음 (합계)",
+      "layer": "customer_kpi",
+      "name": "derived_state_count[at_risk]",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 derived_state_count[at_risk] 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 derived_state_count[at_risk] 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "point_in_time",
+        "label": "index_date 시점 상태"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §6.1 · 리드 판정 G-8",
+      "denominator_definition": "분모 없음 (합계)",
+      "layer": "customer_kpi",
+      "name": "derived_state_count[churn]",
+      "population": "P_buyer",
+      "role": "none",
+      "source_events": [
+        "purchase"
+      ],
+      "value": {
+        "by_source": {
+          "commerce": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 derived_state_count[churn] 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          },
+          "simulator": {
+            "blocked_by": [
+              {
+                "kind": "event_type",
+                "reason_code": "NO_SOURCE_EVENT",
+                "ref": "purchase"
+              }
+            ],
+            "reason_code": "NO_SOURCE_EVENT",
+            "reason_detail": "purchase 이벤트가 0건이라 derived_state_count[churn] 를 계산할 근거가 없다 — 값 0 과 근거 없음은 다르다",
+            "status": "unavailable",
+            "unit": "count",
+            "value": null
+          }
+        }
+      },
+      "window": {
+        "direction": "point_in_time",
+        "label": "index_date 시점 상태"
+      }
+    },
+    {
+      "blocks": [
+        "ai_net_incremental_value"
+      ],
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "CP_strategy − CP_S1_rule. 95% CI 하한 > 0 이어야 한다",
+      "layer": "experiment",
+      "name": "incremental_contribution_profit",
+      "population": "test_holdout",
+      "role": "primary",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "strategy",
+            "reason_code": "NEEDS_TWO_STRATEGIES",
+            "ref": "S1_rule_based"
+          }
+        ],
+        "reason_code": "NEEDS_TWO_STRATEGIES",
+        "reason_detail": "C1 에 비교 전략이 없다 — 두 전략의 차이가 정의되지 않는다",
+        "status": "unavailable",
+        "unit": "krw",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "Qini 곡선의 계수. Random 정책(Qini=0) 대비 유의해야 한다",
+      "layer": "experiment",
+      "name": "qini_coefficient",
+      "population": "test_holdout",
+      "role": "primary",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "revenue_strategy − revenue_S1_rule",
+      "layer": "experiment",
+      "name": "incremental_revenue",
+      "population": "test_holdout",
+      "role": "secondary",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "strategy",
+            "reason_code": "NEEDS_TWO_STRATEGIES",
+            "ref": "S1_rule_based"
+          }
+        ],
+        "reason_code": "NEEDS_TWO_STRATEGIES",
+        "reason_detail": "C1 에 비교 전략이 없다 — 두 전략의 차이가 정의되지 않는다",
+        "status": "unavailable",
+        "unit": "krw",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "(incremental_contribution_profit − marketing_cost) / marketing_cost",
+      "layer": "experiment",
+      "name": "roi",
+      "population": "test_holdout",
+      "role": "secondary",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "strategy",
+            "reason_code": "NEEDS_TWO_STRATEGIES",
+            "ref": "S1_rule_based"
+          }
+        ],
+        "reason_code": "NEEDS_TWO_STRATEGIES",
+        "reason_detail": "C1 에 비교 전략이 없다 — 두 전략의 차이가 정의되지 않는다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "(incremental_profit − ai_investment_cost) / ai_investment_cost",
+      "layer": "experiment",
+      "name": "ai_roi",
+      "population": "test_holdout",
+      "role": "secondary",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "strategy",
+            "reason_code": "NEEDS_TWO_STRATEGIES",
+            "ref": "S1_rule_based"
+          }
+        ],
+        "reason_code": "NEEDS_TWO_STRATEGIES",
+        "reason_detail": "C1 에 비교 전략이 없다 — 두 전략의 차이가 정의되지 않는다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "incremental_contribution_profit − ai_investment_cost",
+      "layer": "experiment",
+      "name": "ai_net_incremental_value",
+      "population": "test_holdout",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "strategy",
+            "reason_code": "NEEDS_TWO_STRATEGIES",
+            "ref": "S1_rule_based"
+          }
+        ],
+        "reason_code": "NEEDS_TWO_STRATEGIES",
+        "reason_detail": "C1 에 비교 전략이 없다 — 두 전략의 차이가 정의되지 않는다",
+        "status": "unavailable",
+        "unit": "krw",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "Test 홀드아웃의 ROC AUC. ≥ 0.78",
+      "layer": "experiment",
+      "name": "churn_test_auc",
+      "population": "test_holdout",
+      "role": "guardrail",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "역효과 고객(Sleeping Dog) 중 처치를 받은 비율",
+      "layer": "experiment",
+      "name": "sleeping_dog_targeting_rate",
+      "population": "test_holdout",
+      "role": "guardrail",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "Area Under Uplift Curve",
+      "layer": "experiment",
+      "name": "auuc",
+      "population": "test_holdout",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "Uplift 십분위 분포",
+      "layer": "experiment",
+      "name": "uplift_by_decile",
+      "population": "test_holdout",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "Persuadables 4분면 비율",
+      "layer": "experiment",
+      "name": "persuadables_ratio",
+      "population": "test_holdout",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "예측 CLV",
+      "layer": "experiment",
+      "name": "predicted_clv",
+      "population": "test_holdout",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "CLV 예측의 MAPE",
+      "layer": "experiment",
+      "name": "clv_mape",
+      "population": "test_holdout",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    },
+    {
+      "definition_ref": "kpi-definition-v1.md §7",
+      "denominator_definition": "Test 20% 최종 홀드아웃 (P1) 또는 모델 산출 대상",
+      "formula": "상위 20% 정밀도",
+      "layer": "experiment",
+      "name": "top20_precision",
+      "population": "test_holdout",
+      "role": "none",
+      "source_events": [],
+      "value": {
+        "blocked_by": [
+          {
+            "kind": "model_output",
+            "reason_code": "NEEDS_MODEL_OUTPUT",
+            "ref": "churn_model"
+          }
+        ],
+        "reason_code": "NEEDS_MODEL_OUTPUT",
+        "reason_detail": "C1 에 모델 산출물이 없다 — ML/DL 은 이 사이클의 범위 밖이다",
+        "status": "unavailable",
+        "unit": "ratio",
+        "value": null
+      },
+      "window": {
+        "days": 42,
+        "direction": "prospective"
+      }
+    }
+  ],
+  "notices": [
+    {
+      "code": "INGESTION_GAP_UNDECIDABLE",
+      "level": "limitation",
+      "message": "이벤트가 0건인 날짜가 수집 중단인지 활동 없음인지 현재 데이터로 구분할 수 없다 — heartbeat 레코드가 없다",
+      "reference": "api-contracts.md §5.1.2 X-5"
+    },
+    {
+      "code": "GATE1_NOT_PASSED",
+      "level": "info",
+      "message": "C1 은 GATE 1 을 통과시키지 않는다. 부분 봉인만 하며 전 항목이 pending 이다",
+      "reference": "gate1-lock-scope.md §1"
+    },
+    {
+      "code": "CHURN_THRESHOLDS_UNCONFIRMED",
+      "level": "assumption",
+      "message": "이탈 임계값 28/42/60 은 가설값이다 — data_spec §5.1 확정 절차가 시뮬레이터를 요구하고 C1 에 없다. 해당 지표는 unconfirmed 로 나간다",
+      "reference": "kpi-definition-v1.md §1.1 D-5"
+    },
+    {
+      "code": "REFUND_NOT_ADJUSTED",
+      "level": "assumption",
+      "message": "환불·취소를 차감하지 않는다 (확정 가정 A-REFUND · 결정 D-2). revenue = Σ order_amount 이므로 총매출을 순매출로 간주하며, 환불된 매출을 뺄 수 없어 contribution_profit 이 **위로 치우친다 (과대평가)**. 아래로가 아니다. 실험 판정에는 영향이 없다 — MEA-002 가 실험 결과 산출에 시뮬레이터 생성분만 쓰도록 규정하고 그쪽은 환불을 생성하지 않는다.",
+      "reference": "economic-rule-v1.md §6.4 A-REFUND · 결정 D-2 (2026-09-11)"
+    },
+    {
+      "code": "AI_INVESTMENT_IS_ESTIMATE",
+      "level": "assumption",
+      "message": "AI 투자 비용이 가정 기반 추정치다 — 인건비·상각기간·컴퓨트 단가에 외부 출처가 없다. 실제 집행 내역으로 대체해야 한다.",
+      "reference": "economic-rule-v1.md §5"
+    }
+  ],
+  "provenance": {
+    "config_hashes": {
+      "config/economic_config.yaml": "35f24003586e01afa06e278bddf6a24d22ebc3dd2dd8d8595f8adec9fbb6a3f4"
+    },
+    "data_version": null,
+    "generated_by": "src.measurement.publish",
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "repo_commit": "3ba2d34133fba8c2f14a43547b32ff122f306b72",
+    "schema_version": "event-schema-v1.0-draft",
+    "simulator_commit": null,
+    "source_root": "data/raw"
+  },
+  "run_id": "MR-20260911-235658-4543b78c",
+  "summary": {
+    "blocked": 0,
+    "not_run": 0,
+    "ok": 18,
+    "total": 62,
+    "unavailable": 44,
+    "unconfirmed": 0
+  },
+  "timezone": "Asia/Seoul"
+}

@@ -1,0 +1,103 @@
+{
+  "artifact": "rejection_report",
+  "by_reason": [],
+  "contract_version": "measurement-publish/v1",
+  "generated_at": "2026-09-11T23:56:58.174+09:00",
+  "notices": [
+    {
+      "code": "INGESTION_GAP_UNDECIDABLE",
+      "level": "limitation",
+      "message": "이벤트가 0건인 날짜가 수집 중단인지 활동 없음인지 현재 데이터로 구분할 수 없다 — heartbeat 레코드가 없다",
+      "reference": "api-contracts.md §5.1.2 X-5"
+    },
+    {
+      "code": "GATE1_NOT_PASSED",
+      "level": "info",
+      "message": "C1 은 GATE 1 을 통과시키지 않는다. 부분 봉인만 하며 전 항목이 pending 이다",
+      "reference": "gate1-lock-scope.md §1"
+    },
+    {
+      "code": "CHURN_THRESHOLDS_UNCONFIRMED",
+      "level": "assumption",
+      "message": "이탈 임계값 28/42/60 은 가설값이다 — data_spec §5.1 확정 절차가 시뮬레이터를 요구하고 C1 에 없다. 해당 지표는 unconfirmed 로 나간다",
+      "reference": "kpi-definition-v1.md §1.1 D-5"
+    },
+    {
+      "code": "REFUND_NOT_ADJUSTED",
+      "level": "assumption",
+      "message": "환불·취소를 차감하지 않는다 (확정 가정 A-REFUND · 결정 D-2). revenue = Σ order_amount 이므로 총매출을 순매출로 간주하며, 환불된 매출을 뺄 수 없어 contribution_profit 이 **위로 치우친다 (과대평가)**. 아래로가 아니다. 실험 판정에는 영향이 없다 — MEA-002 가 실험 결과 산출에 시뮬레이터 생성분만 쓰도록 규정하고 그쪽은 환불을 생성하지 않는다.",
+      "reference": "economic-rule-v1.md §6.4 A-REFUND · 결정 D-2 (2026-09-11)"
+    },
+    {
+      "code": "AI_INVESTMENT_IS_ESTIMATE",
+      "level": "assumption",
+      "message": "AI 투자 비용이 가정 기반 추정치다 — 인건비·상각기간·컴퓨트 단가에 외부 출처가 없다. 실제 집행 내역으로 대체해야 한다.",
+      "reference": "economic-rule-v1.md §5"
+    }
+  ],
+  "provenance": {
+    "config_hashes": {
+      "config/economic_config.yaml": "35f24003586e01afa06e278bddf6a24d22ebc3dd2dd8d8595f8adec9fbb6a3f4"
+    },
+    "data_version": null,
+    "generated_by": "src.measurement.publish",
+    "null_reason": {
+      "data_version": "PRECONDITION_MISSING",
+      "simulator_commit": "PRECONDITION_MISSING"
+    },
+    "repo_commit": "3ba2d34133fba8c2f14a43547b32ff122f306b72",
+    "schema_version": "event-schema-v1.0-draft",
+    "simulator_commit": null,
+    "source_root": "data/raw"
+  },
+  "run_id": "MR-20260911-235658-4543b78c",
+  "samples": [],
+  "timezone": "Asia/Seoul",
+  "totals": {
+    "distinct_reasons": {
+      "basis": {
+        "denominator": null,
+        "denominator_definition": "분모 없음 (합계)",
+        "observed_count": 0,
+        "population": "거부 레코드의 사유 분류",
+        "window": {
+          "direction": "point_in_time"
+        }
+      },
+      "status": "ok",
+      "unit": "count",
+      "value": 0,
+      "value_formatted": "0건"
+    },
+    "events_rejected": {
+      "basis": {
+        "denominator": null,
+        "denominator_definition": "분모 없음 (합계)",
+        "observed_count": 0,
+        "population": "스키마 검증에서 거부된 이벤트",
+        "window": {
+          "direction": "point_in_time",
+          "label": "Sink manifest 기록 시점"
+        }
+      },
+      "status": "ok",
+      "unit": "count",
+      "value": 0,
+      "value_formatted": "0건"
+    },
+    "rejection_rate": {
+      "blocked_by": [
+        {
+          "kind": "metric",
+          "reason_code": "NO_SOURCE_EVENT",
+          "ref": "events_ingested"
+        }
+      ],
+      "reason_code": "NO_SOURCE_EVENT",
+      "reason_detail": "수집 시도가 0건이라 거부율의 분모가 없다 — 0% 로 적으면 '거부가 없었다' 로 읽히지만 실제로는 '시도가 없었다' 다",
+      "status": "unavailable",
+      "unit": "ratio",
+      "value": null
+    }
+  }
+}

@@ -1,21 +1,21 @@
 {
   "schema": "bathos/model-plan@1",
-  "updated": "2026-09-10T15:48:30.131947Z",
+  "updated": "2026-09-11T02:16:45.814824Z",
   "updated_by": "Paul",
   "session_backend": "claude",
   "defaults": {
     "runtime": "claude"
   },
   "roles": {
-    "caleb-market-analyst": {
-      "runtime": "claude",
-      "model": "sonnet"
-    },
-    "james-architect": {
+    "thomas-code-reviewer": {
       "runtime": "claude",
       "model": "opus"
     },
-    "jonnathan-chief-designer": {
+    "andrew-frontend-engineer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "matthias-qa-validator": {
       "runtime": "claude",
       "model": "opus"
     },
@@ -23,9 +23,29 @@
       "runtime": "claude",
       "model": "opus"
     },
+    "matthew-story-engineer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "jonnathan-chief-designer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "phillip-backend-engineer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "james-architect": {
+      "runtime": "claude",
+      "model": "opus"
+    },
     "john-reverse-specialist": {
       "runtime": "claude",
       "model": "opus"
+    },
+    "caleb-market-analyst": {
+      "runtime": "claude",
+      "model": "sonnet"
     }
   },
   "waves": {}

@@ -611,3 +611,416 @@ Joshua(1단계) · James · Jonnathan(2단계) 전원 종료.
 ```
 /wave3-story-gate /Users/otter/72offsuit/AI_ROI
 ```
+
+---
+
+## 2026-09-11 · W3 Story Gate — 1단계 착수 (Matthew)
+
+### 모델 선택 (User Sovereignty 절차 완료)
+
+| 역할 | runtime | model |
+|---|---|---|
+| matthew-story-engineer | claude | **opus** |
+| thomas-code-reviewer | claude | **opus** |
+| matthias-qa-validator | claude | **opus** |
+
+`model validate --wave W3` → **PASS** (4 roles). `wave activate W3` → Active.
+사용자 판단: 독립 리뷰가 W3의 반 — 검증 품질이 낮으면 이중 게이트가 형식이 된다.
+
+### ⚠ 커맨드가 지정한 필독 문서가 존재하지 않는다
+
+`04-architecture/w3-story-engine-design.md` — **저장소·BATHOS 설치본 어디에도 없다**(리드 검색 확인).
+W2에서 James가 만들 대상이 아니었다(BATHOS 프레임워크 문서이지 프로젝트 아키텍처 문서가 아님).
+
+**대응:** 없는 문서를 있는 것처럼 인용하지 말라고 Matthew에게 명시했다. 대체 근거는 둘이다.
+- 알고리즘 6단계 + Zero-Context-Loss 4중 방어(D1~D4) → 커맨드 본문에 전문이 있어 지시문에 그대로 옮김
+- **`assets/checklists/story-context-quality.md`** — **실재한다.** 6단계 적대적 자가검증이 참조하는 체크리스트. 8대 치명적 실수 + 5단계 재분석 절차 포함
+
+`SS1~SS14`와 같은 부류다 — 커맨드 문구가 참조하는 대상이 실재하지 않는 경우. 지어내지 않는다.
+
+### Matthew에게 전달한 W2 함정 6건
+
+스토리파일이 **개별 명시**해야 할 것으로 지목했다. 구현자가 문서를 찾아가지 않아도 되도록.
+
+1. **`?? 0` 함정** — `(null).toLocaleString()`이 던지므로 구현자가 **예외를 막으려고** `?? 0`을 쓴다. 그 한 줄에서 USP-1이 끝난다
+2. 파트 격리 — `economics.py`에 소스 문자열 0건, 테스트로 고정
+3. 결손 0 채우기 금지 — 계약이 스키마로 막지만 화면·계산에서 다시 깨질 수 있다
+4. 봉인 순서 — `#54` 없이 `#49`로 가면 되돌릴 수 없다
+5. 어휘 정본 — 기획 문서 7종 vs 계약 9종이면 **계약이 정본**
+6. 미해결 2건 — B-11 · X-5
+
+### 상태
+
+**진행 중** — Matthew 스토리파일 완료 후 **shutdown하지 않고** 2단계(Thomas·Matthias 독립 리뷰) 병렬 스폰 → 3단계 종합 판정.
+
+---
+
+## 2026-09-11 · W3 Story Gate 완료 — Implementation Readiness **CONCERNS**
+
+`gate_id=gate-b3b46971-6433-476b-bc37-20534f617786` · facilitator=Paul · wave_id=W3
+**선행 기록:** `gate-dff7476e` (FAIL, 1차) → regate 1 (FAIL) → **regate 2 (CONCERNS)** · 상한 3 미도달
+
+### 판정 추이 — 게이트가 세 번 작동했다
+
+| | critical | noncritical | 판정 |
+|---|---|---|---|
+| 1차 | **7** | 15 | FAIL |
+| regate 1 | **2** | 12 | FAIL |
+| **regate 2** | **0** | 3 | **CONCERNS** |
+
+`verdict: CONCERNS` · 스토리 11종 `ready-for-dev` · `regate_count: 2`
+
+### ★ 가장 값어치 있었던 구간은 regate 1→2 이다
+
+여기서 나온 critical 2건은 **1차 리뷰에 존재하지도 않던, 수정이 만든 결함**이다.
+
+| # | 결함 | 성격 |
+|---|---|---|
+| **F-F** | `value_formatted`를 기존 `not:{required:["basis"]}` 배열에 추가하면 **`basis` 금지까지 무력화** | 막고 있던 것을 통과시킴 |
+| **F-E** | `vacuous` 제약을 절 추가로 하면 현행 `allOf[2]`와 합성돼 **만족 불가능** — 오늘의 정상 상태를 게시 못 함 | 통과시켜야 할 것을 전부 막음 |
+
+**방향은 반대인데 원인이 같다 — `allOf`·`not`이 이미 점유한 자리를 빈 칸으로 보고 더했다.** 둘 다 **가장 짧은 자연스러운 편집**에서 나온다.
+
+**F-F는 픽스처에 위반 레코드가 0건이라 기존 테스트가 전부 통과하는 조용한 회귀였다** (리드 실측: 계산 불가 레코드 125건 중 `basis` 보유 0건).
+
+→ 파생 규율: **기존 `not`·`required`·`if/then`을 건드리는 계약 수정은 "추가"가 아니라 "회귀"로 취급하고, 수정 전 거부되던 레코드를 먼저 목록으로 만든다.**
+
+### 세 경로가 독립적으로 같은 답에 도달했다
+
+`F-E`·`F-F` 둘 다 — 리드(순수 파이썬) · Matthew(venv `jsonschema 4.26.0`) · **Matthias(draft 2020-12 부분집합 평가기 자체 구현)** 가 각각 계산했고 **한 칸도 다르지 않았다.**
+Matthias는 미구현 키워드에 걸리면 중단하도록 만들어 **커버리지 완전성까지 확인**했다.
+
+### `jsonschema` 벽 — 구분이 생겼다
+
+리드 지적으로 §0.6에 구분표가 들어갔고, 결과가 그대로 기록됐다:
+
+> *"regate 1에서 이 구분을 적용했더니 **'읽어서 판단'으로 남겼던 2건이 전부 틀렸다.** 논리로 풀 수 있었는데 안 푼 것이었다. **`jsonschema` 미설치는 그 2건의 핑계가 되지 못했다.**"*
+
+| 성격 | 무엇 |
+|---|---|
+| **논리로 풀린다 — 미루지 않는다** | `not`·`required`·`anyOf`·`allOf`·`if/then`·`enum`·키 존재 |
+| **실행이 필요하다 — `BLOCKED`** | 정규식 방언 · `format` · `$ref` 해석 · **오류 메시지·`json_path` 모양** · 픽스처 전수 |
+| **경계** | 규모 추정("149개가 전부 실패") — **추정이라고 적는다** |
+
+### 세 사람이 각각 자기 오류를 정정했다
+
+| | 무엇 |
+|---|---|
+| **Thomas** | 자기 제안 철회 — *"dataclass 필드 추가와 직렬화 권장은 양립하지 않는다. 결론은 맞게 짚고 그것이 ①을 무효로 만든다는 걸 놓쳤다"* |
+| **Matthias** | 실측 범위 오류 — *"d-01 토큰 생성기는 옆 저장소에서 확인했으면서 스크린샷 도구는 안 봤다. 일관되지 않았다"* (`@playwright/test 1.63.0` 실재) |
+| **Matthew** | 자기 검사기 버그 — D3 1차판이 12종 전부 불일치. 경로를 *"`/`가 있는 줄"*로 걸러 `AGENTS.md`가 빠짐. **"틀린 건 해시가 아니라 검사기였다."** `NR-4`·`L-10`을 적은 바로 다음에 같은 실수 |
+| **리드(Paul)** | **팀원에게 5번 정정당했고 5번 다 팀원이 옳았다** (§0.55) |
+
+### ★ 리드 판정 정정 5건 — 하나가 실제 결함을 막았다
+
+| # | 리드 판정 | 정정 |
+|---|---|---|
+| Q-3 | "스키마로 막을 수 있다" | **JSON Schema로 교차 필드 비교 불가** (Matthew) |
+| Q-3 심화 | `reported_checks=len(checks)`면 해소 | **그건 증상, 원인은 검사 11종 소실** (Matthias) |
+| `repurchase_rate` | `PRECONDITION_MISSING` | **계산 가능. 틀린 건 모집단 선언** (Matthias→Matthew) |
+| **계약 4건** | **"한 원칙의 4회 적용"** | **"두 원칙이다. `limit_note`는 선택 필드"** (Matthew) |
+| `regate_count` | "2가 된다" | **1 유지가 맞다** (Matthew) |
+
+**`limit_note` 정정의 계보 (§0.55):** 리드가 묶음 → W3이 *"두 원칙"* 으로 정정 → 그 구분이 C-1을 닫을 때 살아남음 → **`unit`에서 유도 가능한가**로 갈림 → Thomas가 *"이번 수정에서 가장 좋다"* 고 평가.
+**묶어 적었으면 `한계` 없는 지표 46종이 계약 위반이 되거나 빈 문자열이 들어간다 — `?? 0`과 같은 자리다.**
+
+### `§0.39` — 아홉 사례의 지배적 실패 양식
+
+> **검증했다고 적었는데, 검증 대상이 실제와 달랐다.**
+> 전부 *"미실행을 통과로 적지 않는다"* 는 지켰다. **실행도 했다. 틀린 것은 무엇을 실행했는가다.**
+
+`ADR-0010`이 데이터 층에서 `vacuous`로 막은 것과 같은 자리이고, W3이 그 규율을 **검증 기록 자체에** 적용했다(실행 검증 표에 `scope` 열).
+
+**파생 규율 3건:**
+1. **결함을 표시할 때는 무엇을 어떻게 바꾸는지까지 같은 자리에 적는다** — m-07이 `⚠ 충돌한다`만 적어 Matthias가 *"표시가 있으니 처리됐다"* 고 읽음. Matthew: *"읽는 쪽이 그렇게 읽은 게 아니라 내가 그렇게 읽히게 썼다"*
+2. **개수를 문장으로 적지 않는다** — "의도된 실패 3종"이 3→4→5로 **두 번 어긋남.** `Q-3`·`G-2`와 같은 원칙을 산문에서 다시 어김
+3. **기존 제약을 건드리는 계약 수정은 회귀로 취급한다** (위 F-E·F-F)
+
+### 산출물
+
+`03-story-engineering/` 15개 — 스토리 11 · `project-context-kr.md` · `readiness-report-kr.md` · **검사도구 2**(`d2b_value_existence.py` · `d3_source_hash_verify.py`) + `reviews/` 7파일
+
+**4중 방어 최종 상태:** D1 §0~§9 11/11 · **D2a(경로)/D2b(값) 분리 후 ts 블록까지 확장** · **D3 12/12 일치·MISSING 0** · D4 §8·§9.5 양방향
+
+### W5 인계 — ★ 순서 제약
+
+```
+M-05 (jsonschema) ─▶ m-06 T1 (계약 수정 4건) ─▶ AC-4d·AC-4e ─▶ 나머지
+```
+
+**M-05는 `build-plan.md` 상 우선순위가 낮은데 이 제약으로 앞당겨야 한다.** 당기지 못하면 `AC-4d`가 `BLOCKED`이고 **계약 수정도 함께 보류**한다. *"확인 못 하는 채로 계약을 고치지 않는다"* — 이번에 지불하고 배운 것.
+
+W5가 먼저 읽을 5개: `not` 회귀표 → `vacuous` 교체 → 의도된 실패 목록 → 포맷 주체 → `unit` 필수
+
+### 최종 검증
+
+`unittest discover -s tests` **Ran 46 · OK** · `check_ownership.py` **exit 0** · **D3 12/12** · D2b 의도하지 않은 결함 **0** · 유령 명령 4차 전수 **0건**(명령 집합 7종 불변) · `git status` **`03-story-engineering/`만 신규 · `Plan`·`Ecommerce_Service` 무변경**
+
+### 팀원 shutdown
+
+Matthew · Thomas · Matthias 전원 종료.
+
+### 다음
+
+```
+/wave5-implement /Users/otter/72offsuit/AI_ROI
+```
+
+**단, 사용자 결정 대기 항목이 W5를 막는다** — 아래 별도 정리.
+
+---
+
+## 2026-09-11 · W5 Implementation — 착수
+
+### 전제 조건
+
+`readiness-report-kr.md` → `verdict: CONCERNS` · `regate_count: 2` → **W5 진입 가능.** `wave activate W5` → Active.
+
+### 모델 선택 (User Sovereignty 절차 완료)
+
+| 역할 | runtime | model |
+|---|---|---|
+| phillip-backend-engineer | claude | **opus** |
+| andrew-frontend-engineer | claude | **opus** |
+| stephen-ml-engineer | — | **미스폰** |
+
+`model validate --wave W5` → **PASS** (3 roles).
+사용자 판단: W5는 실제 코드를 쓰는 유일한 웨이브 — W3이 3회차 돌아 막은 것을 구현에서 다시 깨뜨리면 게이트가 무의미해진다.
+
+### ★ 커맨드 기본 경로가 이 저장소와 다르다 — `ownership.json` 이 정본
+
+커맨드는 `core/**`·`src/server/**`·`src/web/**`·`src/ml/**` 를 소유 경로로 지정하나 **이 저장소에 그 경로가 존재하지 않는다.**
+W2 James가 만든 `04-architecture/tools/ownership.json`(47 규칙)이 정본이고 `check_ownership.py` 가 실행으로 강제한다.
+
+| 역할 | 실제 소유 | 규칙 수 |
+|---|---|---|
+| **Phillip** | `src/measurement/*.py` · `config/*.yaml` · `requirements*.txt` · `docs/contracts/**` · `docs/{measurement_contract,gate1_checklist,event_schema}.md` · `scripts/*.py` · `tests/test_{schema,sink,neutrality}.py` · `.gitignore` | **24** |
+| **Andrew** | `dashboard/**` | **1** |
+| **Stephen** | — | **0** |
+| **sealed** | `tests/test_isolation.py` · `.github/workflows/**` · `src/{simulator,decision,diagnostics,orchestration}/**` · `Plan/**` · `docs/data_spec.*` | **13** |
+
+### Stephen 미스폰 — 판정 근거
+
+task-graph §1이 C1에서 **Stephen 미가동**으로 확정했고(decision layer 없음), `ownership.json` 에 **stephen 규칙 0건**이다.
+스폰해도 만질 파일이 없고, `check_ownership.py` 의 "빠짐 0" 검사가 이미 모든 경로에 소유자가 있음을 확인했다.
+→ **동시 2명.** 커맨드의 "동시 3명"은 상한이지 요구가 아니다.
+
+### 규율 주입
+
+- **사다리 정본:** `/Users/otter/72offsuit/.claude/agents/_preamble/ponytail-inject-kr.md` (워크스페이스 루트 — AI_ROI 안에는 없다)
+- **intensity: `full`** (`session-flags.json` 부재 → 기본값)
+- **축 분리 §0 명시** — 사다리는 *무엇을 만들지*, ETHOS Boil the Ocean은 *얼마나 완전히*. **사다리를 근거로 검증·에러처리·보안·테스트·접근성을 잘라내면 FAIL**
+- 코드 주석 **영어**, 도입부 목적 + "무엇을·왜", stale 금지
+- `ponytail:` 마커에 **업그레이드 트리거 필수** (없으면 `/bathos-debt` 가 `no-trigger` 로 잡음)
+
+### W3이 넘긴 하드 순서 제약을 Phillip 프롬프트 최상단에 박았다
+
+```
+M-05 (jsonschema) ─▶ m-06 T1 (계약 수정 4건) ─▶ AC-4d·AC-4e ─▶ 나머지
+```
+
+`AC-4d`: *"확인 못 하는 채로 계약을 고치지 않는다. `jsonschema` 없으면 `BLOCKED` 이고 계약 수정도 함께 보류."*
+
+### 회귀 2건을 실측 표와 함께 주입
+
+| # | 위험 |
+|---|---|
+| **F-F** | `not` 배열에 이름을 더하면 **기존 `basis` 금지까지 소멸.** 픽스처에 위반 레코드 0건이라 **기존 테스트가 전부 통과하는 조용한 회귀** |
+| **F-E** | `vacuous` 제약을 "추가"하면 **만족 불가능** — `empty-sink` 의 `vacuous` 7건(오늘의 정상 상태)을 게시 못 함. **교체가 정답** |
+
+→ 규율: **기존 `not`·`required`·`if/then` 을 건드리는 계약 수정은 "회귀"로 취급하고, 수정 전 거부되던 레코드를 먼저 목록으로 만든다.**
+
+### Andrew 프롬프트 최상단 — `?? 0` 함정
+
+`(null).toLocaleString()` 이 던지므로 **구현자는 예외를 막으려고 `?? 0` 을 쓴다. 선의로 쓴 그 한 줄에서 USP가 끝난다.**
+차트 함정(`filter(v > 0)` · `null` 을 0으로 플로팅 · 선을 이음)과 **선 대신 막대를 쓰는 이유**도 함께 주입.
+픽스처 결함(7종 vs 정본 18종, `reported_checks` 6 vs 실린 7)도 숫자로 명시.
+
+### 상태
+
+**진행 중** — 완료 후 리드가 산출물 Read 검수 → 거절 기준 대조 → shutdown → W6.
+
+---
+
+## 2026-09-11 · W3 사후 — 게이트 기록 후 도착한 발견 2건 (리드 처리)
+
+Matthew·Thomas·Matthias shutdown 직전 큐잉된 최종 보고가 게이트 기록(`gate-b3b46971`, CONCERNS) **이후** 도착했다.
+**둘 다 noncritical 이라 CONCERNS 판정은 유효하다.** 게이트를 다시 열지 않았다.
+
+### N-12 — 검사기가 fail-open 이었다 (리드가 고침)
+
+Matthias 발견. **그리고 그가 regate 2 에서 한 진술을 스스로 정정했다** — *"`readiness-report-kr.md` 는 `source_hash` 가 없으므로 해당 없음"* 이라 적었는데 **26행에 있다.** 확인 방법이 `head -18 | grep` 이었다.
+
+> *"`N-4`(저장소를 좁게 봄)에 이어 두 번째로 좁게 보고 '없다'를 결론냈습니다. 그때는 옆 저장소를 안 봤고, 이번엔 파일 안을 끝까지 안 봤습니다. **없다는 결론은 있다는 결론보다 넓게 봐야 합니다.**"*
+
+**결함 본체:** `tools/d3_source_hash_verify.py` 가 두 경우를 하나로 묶었다.
+
+```python
+if not (declared and block):
+    skipped += 1; continue
+...
+return 1 if bad else 0        # skipped 를 무시
+```
+
+- 선언 자체가 없음 → **정당한 skip**
+- 선언은 있는데 입력 목록이 없음 → **검증 불가한 주장 = 실패**
+
+둘이 같이 `skipped` 로 가고 종료 코드가 이를 무시해, **"목록 없음 1"을 출력하면서 exit 0** 이었다.
+`validate_examples.py` 가 `jsonschema` 부재에 **exit 2** 로 fail closed 하는 것과 대비된다.
+
+**이것이 이 사이클의 지배적 실패 양식 그 자체다** — 검사기가 문제를 보고하면서 통과시킨다. `ADR-0010` 의 `vacuous`(*"검사했지만 검사 대상이 0행이었다"*)와 같은 자리.
+
+**리드 조치** (팀원 전원 종료 상태라 직접 수정):
+```
+버킷 3분할     skipped / unverifiable / ok·bad
+종료 코드      return 1 if (bad or unverifiable) else 0
+자체 검증      assert ok + bad + unverifiable + skipped == 문서 수
+주석           영어 (코드 주석 표준)
+
+실행 결과      일치 12 · 불일치 0 · 검증불가 1 · 선언없음 0   →  exit=1  ✅ fail closed
+               ★검증불가 readiness-report-kr.md  968e6c27ef3ef83d 선언 · 입력 목록 없음
+```
+
+**남은 사실:** `readiness-report-kr.md` 의 선언값이 `project-context-kr.md` 와 **완전히 동일**하다. 상류 집합이 정말 같은 것인지 값이 옮겨 붙은 것인지 **문서만 읽어서는 구분되지 않는다** → `검증불가` 분류가 맞다. W6 Timothy 항목으로 남긴다.
+
+### N-13 (낮음 · 미조치)
+
+`INTENDED_FIXTURE_FAILURES` 안에 `판별: validator == 'not'` 주석이 **두 자리**에 있다 — 일부러 **등록 안 한** `value_formatted:forbidden`(0-채움 회귀)과 **등록된** `vacuous:reason_code`.
+키가 `(fixture, artifact, 위치)` 튜플이라 **실제로는 안전하나**, `판별:` 주석이 매칭 규칙으로 읽히면 잡아야 할 회귀가 등록 항목에 매칭될 수 있다. 주석 1줄이면 닫힌다. **W6 항목.**
+
+### Matthias 가 추가한 한계 CL-5 — 기록해 둘 값어치가 있다
+
+> **D3 재계산은 "선언된 목록"에 대한 것이다.** 목록 자체가 실제 상류를 다 덮는지는 검증하지 않았다 — **목록에서 빠진 문서가 바뀌면 해시는 그대로다.** `Q-4`(목록 절단)와 같은 구조의 한계.
+
+그가 **개수 교차 검증**(선언 `source_files` vs 실제 목록 길이, 12/12 일치)을 한 이유가 이것이다 — *"목록이 잘려도 해시는 그 잘린 목록에 대해 맞게 나온다."*
+
+### 검사기 상호 불신이 작동한 사례
+
+Matthias 가 Matthew 의 D3 검사기 결과를 **근거로 쓰지 않고 다른 필터 로직으로 재구현**했다. 근거: *"그가 '1차판이 `/` 없는 줄을 걸러 `AGENTS.md` 를 빠뜨렸다'고 적은 이상 그 결과를 쓸 수 없다."*
+
+**그리고 그의 재구현도 한 번 틀렸다** — `project-context-kr.md` 를 `files=0` 실패로 냈는데, 원인은 그 문서 475행의 **설명용 리터럴** `<!-- source_hash inputs: … -->` 를 정규식이 먼저 잡은 것이었다.
+
+> *"그의 실패와 제 실패가 같은 종류입니다 — **검사기가 '불일치'라고 하면 먼저 검사기를 의심해야 합니다.**"*
+
+§0.39 아홉 사례에 이어지는 열 번째 형태다.
+
+---
+
+## 2026-09-11 · W5 Implementation 완료
+
+### 최종 검증 — 전부 실행 확인
+
+| | 결과 |
+|---|---|
+| 테스트 | **46 → 407** · no-deps `OK`(skip 67) · with-deps `OK`(skip 3) · **회귀 0** |
+| A7-4 (이름 대조) | no-deps 기준선 skip **0건** |
+| `check_ownership.py` | **PASS** |
+| 게시물 7종 × 계약 | **위반 0건** |
+| `import yaml` | `config_loader.py` **하나** |
+| 봉인 `isolation.yml` | **0줄** |
+| `Plan/` · `Ecommerce_Service` | **0 / 0** |
+| 스크린샷 | **45장** (empty-sink 10 · commerce-connected 13 · real 10 · representative-scene 12) |
+
+### 거절 기준 대조 — 해당 0건
+
+| 기준 | 실측 |
+|---|---|
+| 공유 계약 무단 변경 | 없음 — 계약 수정 4건 전부 W3 승인분 |
+| 핵심 기능 테스트 부재 | 407건 |
+| 소유 경로 충돌 | `check_ownership` **PASS** |
+| **요청받지 않은 추상화** | 구현체 1개뿐인 ABC/Protocol **0** · Factory/Builder/Manager **0** · `src/measurement` **11파일** |
+| **사다리로 검증·에러처리 잘라냄** | 없음 — 오히려 검사가 17건을 잡음 |
+| **`ponytail:` 마커** | **7건 · 트리거 없는 것 0건** |
+
+### 스토리 11종 전부 `done`
+
+Phillip M-01~M-09 · Andrew d-01·d-02
+
+### ★ GATE 1 부분 봉인 실행
+
+```
+선행 조건 G-1~G-16    충족 16 / 미충족 0
+overall: partial · verification: match · LOCKED 0종
+locked_by: Danto7632 · simulator_commit: null + PRECONDITION_MISSING
+items 9종: OUT_OF_SCOPE 5 · PENDING 2 · PARTIAL 2
+assumptions 4종: A-REFUND · A-DISCOUNT · A-SHIPPING · A-AI-INVESTMENT
+```
+
+**C1은 GATE 1을 통과시키지 않았다** — 설계 그대로 부분 봉인만.
+
+### 사용자 결정 4건 (전부 이 웨이브에서 소화)
+
+| # | 결정 | 결과 |
+|---|---|---|
+| Playwright | 도입 | `d-02` AC-12 닫힘 · 스크린샷 45장 |
+| **D-19** | CI 워크플로 신설 | `tests-with-deps.yml` · `isolation.yml` **0줄** · 두 잡 skip 차 67 vs 3 |
+| **D-17** | `results/` gitignore | `check_ownership` FAIL → **PASS** |
+| **D-2** | 가정 `A-REFUND`로 Lock | G-10 `null` → `true`(확인함 · 미반영 수용) · **오차 방향(과대평가)까지 명시** |
+
+### ★★ 같은 원칙이 네 층에 구현됐다 — 이 사이클의 결론
+
+| 층 | 둘로 안 되는 것 | 세 번째 값 |
+|---|---|---|
+| 품질 검사 | 통과/실패 + **"대상 0행"** | `vacuous` |
+| 지표 | 값/0 + **"근거 없음"** | 계산 불가 |
+| 선행 조건 | 충족/미충족 + **"확인 안 함"** | **`met: null`** |
+| 봉인 대조 | 일치/불일치 + **"대조 안 함"** | **`verification: not_run`** |
+
+**`met: null`이 게시물까지 살아간 덕에 D-2 결정이 났다.** `false`로 적었으면 미충족 항목 하나로 조용히 넘어갔다.
+
+**`verification: not_run`은 Phillip이 정의해 두고 한 번도 쓰지 않던 값이었다** — Lock 기록이 YAML이라 no-deps CI에서 못 읽어 전체가 `ERROR`로 떨어졌을 때, 터뜨리면 CI가 깨지고 `None`으로 떨어뜨리면 *"봉인 안 함"* 이 되어 거짓말이었다. `overall`/`verification` **두 축이 분리돼 있어서** 정직한 쌍이 가능했다.
+
+### 두 사람이 서로의 오류를 잡았다
+
+**Andrew → Phillip 4건** — 전부 Phillip 오류. 가장 무거운 것은 **`ADR-0002` 위반**(게시물이 전부 `results/` 루트). Phillip: *"제가 자력으로 못 찾았을 것입니다."*
+
+**핵심은 Andrew가 화면을 맞추지 않고 `✕ 계약 위반`으로 드러낸 것이다.** 맞췄으면 틀린 경로·틀린 라우트·빈 `role`이 전부 정상으로 보였다.
+
+**게시 쪽이 고쳐지자 화면은 한 줄도 안 고치고 위반 칩 셋이 사라지고 `[P1]`·`[G1]` 배지가 나타났다** — `DB-012`("화면이 판정하지 않는다")가 실제로 작동한 증거.
+
+### Andrew의 자기 분석 — 왜 그 한 건만 틀렸나
+
+`index.json` 위치만 그가 화면을 게시물에 맞췄고 **그 하나가 틀렸다.**
+
+> **권위 순서: 계약 → ADR → 픽스처 → (셋 다 침묵할 때만) 생산자**
+> **JSON Schema로 표현할 수 없다는 것이 "정해지지 않았다"는 뜻이 아니다.**
+> **맞추는 순간 불일치는 사라지는 게 아니라 내 쪽으로 옮겨온다.**
+
+마지막 줄이 `Q-3`(스키마로 못 막는 결정도 결정)의 다른 면이다.
+
+### 검사가 잡은 Phillip 자신의 오류 17건 — 셋을 기록
+
+1. **런타임 7불변식 통과 ≠ 계약 준수.** 1차 게시물이 7불변식은 통과하고 전체 스키마 검증은 **233건**을 냈다. **두 층이 서로를 대체하지 않는다** (`backend.md` §11)
+2. **`assertIn`이 물지 않았다** — *"어딘가 있으면 통과"* 라 §1 표가 틀려도 §8 초안이 같은 값을 담으면 놓쳤다. 절 단위 파싱 + 양방향 대조로 8/8
+3. **자기 웨이브의 진행으로 자기 테스트가 두 번 낡았다** — `G-15`를 `met=False`로, `overall`을 `not_started`로 박아뒀는데 M-09가 둘 다 바꿨다. 상수를 박지 않고 `freeze.verify()`를 정본으로 대조
+
+**"검사 대상이 주장보다 좁다" 패턴이 W5에서만 세 번** — `kpi.py` 미검사 · `glob("*.json")`이 `measurement/` 미포함(대상 7→1로 줄었는데 통과) · D3 검사기 필터.
+
+### 리드(Paul) 정정 — 이 웨이브 2건
+
+| # | 제 판정 | 정정 |
+|---|---|---|
+| **PyYAML CVE** | *"CVE-2026-24009 실재 · W5 전 처리 필요"* | **`docling-core` 권고이고 PyYAML의 CVE가 아니다.** 원 CVE는 `CVE-2020-14343`(PyYAML `< 5.4`), 6.0.3은 해당 없음 (Phillip · Advisory API 원문) |
+| **대표 장면 배지** | *"실제 `results/`로 찍으면 배지 불필요"* | **대표 장면은 입력이 합성이므로 배지가 필요하다.** 배지가 말하는 건 파이프라인이 아니라 **입력** (Andrew) |
+
+W3까지 5건 + W5 2건 = **세션 누적 7건. 전부 팀원이 옳았다.**
+
+### W6 인계
+
+- `dashboard-architecture.md` §3 예시 코드 버그 — `resolve(RESULTS_DIR, relative)` 이중 접두사
+- `d-01` AC-6 문언대로 구현 불가 (모든 정상 `unconfirmed`를 던짐) — **W3이 놓친 자리**
+- `kpi-definition-v1.md` §8 총계 47 vs §5 실명 26 · AI 비용 산술 2,170,000 vs ≈2,020,000 — 둘 다 문서 오류
+- `D-22` 대시보드 격리 검사 미도입 · `design-rules.css`가 `tokens:check` 범위 밖
+- C-10(대비 8조합 실측) · Pretendard 글리프 — **육안 확인 2건**
+- N-12 `readiness-report` `source_hash` 입력 목록 부재 · N-13 `판별:` 주석 중복
+- `m-03 T3` 문언 ↔ 기준선 테스트 충돌 (Phillip이 `event_type` 유효성으로 갈라 둘 다 만족)
+
+### 팀원 shutdown
+
+Phillip · Andrew 종료. **Stephen 미스폰**(C1 decision layer 없음 · `ownership.json` 규칙 0건).
+
+### 다음
+
+```
+/wave6-verify-report /Users/otter/72offsuit/AI_ROI
+```
