@@ -75,9 +75,12 @@ python3 -m unittest tests.test_isolation -v
 
 **CI에서도 자동 실행된다** — `.github/workflows/isolation.yml`이 모든 PR과 `main` push에서 이 검사를 돌린다. `Plan` 서브모듈은 private이라 체크아웃하지 않으며, 검사 대상이 `src/`·`tests/`뿐이라 필요도 없다.
 
-## 프로젝트 현황 (2026-09-10)
+## 프로젝트 현황 (2026-09-14)
 
-- 스택은 Python(SRS NFR-004: `>= 3.10`, CI는 3.12)으로 확정. **의존성 매니페스트는 아직 없다.**
-- `src/`에 파트 디렉터리와 지침 파일만 있고 **구현 코드는 아직 없다.**
-- CI는 `.github/workflows/isolation.yml` 하나뿐이다. 실행 가능한 검증 명령도 `tests.test_isolation` 하나뿐이며 lint·build·타입 검사는 미정의.
+- 스택은 Python으로 확정. 의존성 매니페스트는 `requirements.txt`(`pyarrow`·`PyYAML`)와 `requirements-dev.txt`(`jsonschema`·`referencing`) 2종이며, **버전은 CI와 같은 3.12에서 해석해 고정했다.**
+  - ★ SRS NFR-004는 `>= 3.10`이라고 적지만 **실제로는 3.10에서 동작하지 않는다.** `datetime.fromisoformat()`의 `Z` 접미사가 3.11부터 지원되는데(bpo-35829) `sink.py:394` 외 6곳이 전처리 없이 그 값을 넘긴다. CI가 3.12 고정이라 드러나지 않을 뿐이다. 선언을 좁히거나 코드를 맞추거나 — **아직 결정되지 않았다** (코드 리뷰 M3).
+- `src/measurement/`는 구현 완료(M-01~M-09, 모듈 10개 + `__init__.py`). `src/simulator/`·`decision/`·`diagnostics/`·`orchestration/`은 **여전히 지침 파일만 있고 구현 코드가 없다.**
+- `dashboard/`(Next.js, `:3001`)에 **라우트 8종**이 구현됨(d-01·d-02) — 게시물 연동 6(`V1`~`V6`) + 정적 1(`/triggers`, C1 작동 0종) + 개요 1(`/`). `results/`의 게시물을 **읽기만** 한다(`DB-012`·`DB-013`·`DB-014`).
+- GATE 1은 **부분 봉인(`PARTIAL_FREEZE`)** 상태다. 완전 봉인(`LOCKED`)은 **0종**.
+- CI는 `.github/workflows/isolation.yml`(의존성 없이) · `tests-with-deps.yml`(의존성 설치 후) **2종**이다. 저장소 전체 검증은 `python3 -m unittest discover -s tests`(**407건**)이며 lint·build·타입 검사는 여전히 미정의.
 - **존재하지 않는 명령을 문서·게이트·PR 본문에 쓰지 않는다.** 검증을 실행할 수 없으면 `BLOCKED`로 보고한다.
