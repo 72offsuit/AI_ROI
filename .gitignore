@@ -62,3 +62,10 @@ dashboard/src/styles/tokens.generated.css
 # 증거 사본은 `.agent-team/08-impl-notes/results-sample/` 에 있다. 그것은 형태
 # 확인용이고 앱이 그 경로를 읽게 만들지 않는다 — 사본이 정본 노릇을 하면 갈라진다.
 results/
+
+# ── 대시보드 스크린샷 (dashboard/screenshots/)
+# `npm run shots:empty` · `shots:connected` · `shots:real` 로 재생성한다.
+# results/ 와 같은 이유로 제외한다 — 이미지 안에 run_id·생성 시각이 그려져 있어
+# 재촬영마다 45장 전수가 diff 로 잡히고, 그 diff 는 아무 의미가 없다.
+# 인수조건(US-11·US-13)의 증거는 촬영 시점에 실행한 assertion 이지 파일 자체가 아니다.
+dashboard/screenshots/
