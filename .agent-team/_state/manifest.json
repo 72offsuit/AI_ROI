@@ -63,31 +63,34 @@
       "wave_id": "W1",
       "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
       "name": "Discovery & Market Research",
-      "status": "active",
+      "status": "done",
       "active_roles": [],
       "entry_gate": "Brief",
       "exit_gate": "Usp",
-      "started": "2026-09-10T14:55:19.611990Z"
+      "started": "2026-09-10T14:55:19.611990Z",
+      "completed": "2026-09-10T15:26:05.479268Z"
     },
     {
       "wave_id": "W2",
       "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
       "name": "Planning · Architecture · Design",
-      "status": "active",
+      "status": "done",
       "active_roles": [],
       "entry_gate": "Usp",
       "exit_gate": "Plan",
-      "started": "2026-09-10T15:48:35.975733Z"
+      "started": "2026-09-10T15:48:35.975733Z",
+      "completed": "2026-09-10T17:24:26.427513Z"
     },
     {
       "wave_id": "W3",
       "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
       "name": "Story Engineering & Readiness Gate",
-      "status": "active",
+      "status": "done",
       "active_roles": [],
       "entry_gate": "Plan",
       "exit_gate": "Implementation",
-      "started": "2026-09-10T18:20:21.115794Z"
+      "started": "2026-09-10T18:20:21.115794Z",
+      "completed": "2026-09-10T23:58:00.505027Z"
     },
     {
       "wave_id": "W4",
@@ -100,10 +103,11 @@
       "wave_id": "W5",
       "project_id": "bathos-227c74cf-e06b-4651-bb0b-c7f837620c1d",
       "name": "Implementation",
-      "status": "active",
+      "status": "done",
       "active_roles": [],
       "entry_gate": "Implementation",
-      "started": "2026-09-11T02:16:45.838355Z"
+      "started": "2026-09-11T02:16:45.838355Z",
+      "completed": "2026-09-13T15:58:08.630259Z"
     },
     {
       "wave_id": "W6",

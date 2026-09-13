@@ -1024,3 +1024,48 @@ Phillip · Andrew 종료. **Stephen 미스폰**(C1 decision layer 없음 · `own
 ```
 /wave6-verify-report /Users/otter/72offsuit/AI_ROI
 ```
+
+---
+
+## W5 배송 — 푸시·PR (2026-09-14)
+
+### 브랜치 `feat/measurement-layer-and-dashboard`
+
+```
+0602e9a  docs: BATHOS W3 스토리 게이트·W5 구현 기록
+46a293f  feat: GA형 관측 대시보드 구현 — 8화면·결손 상태 표현 (d-01·d-02)
+7153c26  feat: 측정 계층 구현 — KPI·경제규칙·게시·품질검증·GATE 1 봉인 (M-01~M-09)
+8b3b80b  ci: 의존성 설치 후 전체 테스트 워크플로 추가 (D-19)
+```
+
+**PR #57** — https://github.com/72offsuit/AI_ROI/pull/57
+`123 files · +48,716 / −29 · MERGEABLE`
+
+### 1차 푸시 실패 — HTTP 400
+
+`dashboard/screenshots/` 45장 = **17.8MB**. 사용자 결정 D-17: gitignore + 커밋 재적재.
+
+`git reset --soft`로 되감고(§6이 금지하는 것은 `--hard`) → `.gitignore` 추가 → `git rm -r --cached dashboard/screenshots` → 재커밋. **디스크의 52개 항목은 그대로**, 인덱스에서만 제거.
+
+> 이미지 안에 `run_id`·생성 시각이 그려져 있어 재촬영마다 45장 전수가 diff로 잡힌다. `results/`와 같은 이유. **인수조건의 증거는 촬영 시점의 assertion**(`commerce-connected` 13/13 · `representative-scene` 12 passed)**이지 파일이 아니다.**
+
+### PR 본문 — `Closes` 대신 `Refs`
+
+`docs/GIT_WORKFLOW.md` §6이 **Issue close를 항상 개별 승인** 대상으로 둔다. `Closes`를 쓰면 머지 시 자동으로 닫혀 그 승인을 우회한다. 닫을 수 있다고 보는 이슈 8종은 근거와 함께 본문에 표로 적고 **판단은 사용자에게 남겼다.**
+
+### 배송 게이트 (§7)
+
+| 항목 | 결과 |
+|---|---|
+| `python3 -m unittest discover -s tests` (의존성 없이) | `Ran 407 · OK (skipped=67)` |
+| 동일 명령 (의존성 설치 후) | `Ran 407 · OK (skipped=3)` |
+| `check_ownership.py` | PASS — Phillip 46 ∩ Andrew 95 = 0 |
+| 기준선 46종 skip 교집합 | **0건** — 수가 아니라 **이름**으로 판정 |
+| 봉인 파일 diff | `isolation.yml` · `test_isolation.py` · `src/{simulator,decision,diagnostics,orchestration}` **0줄** |
+| `Plan` · `Ecommerce_Service` | 변경 **0건** (서브모듈 포인터 미커밋) |
+
+### 다음
+
+```
+/wave6-verify-report /Users/otter/72offsuit/AI_ROI
+```
