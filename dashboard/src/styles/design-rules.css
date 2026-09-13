@@ -1,0 +1,81 @@
+/* ===========================================================================
+ * design-rules.css — rules that live outside the YAML token groups
+ *
+ * Ported from Ecommerce_Service — do not diverge silently (ADR-0006).
+ *   source path   src/styles/design-rules.css
+ *   source commit 6b186d0f20a3d134389ef84b490d9a374c760e37
+ *   source sha256 810415a43e2ac0f21a9597cfc14fb418be3ab8ffd0ad39a9ed6a26dadaeef1da
+ *
+ * ★ This file is NOT generated. `npm run tokens:check` compares only
+ *   tokens.generated.css against the Plan/DESIGN.md frontmatter, so nothing
+ *   verifies these values automatically — the shadow/motion/z-layer numbers come
+ *   from the DESIGN.md prose, which the generator does not parse. Treat drift
+ *   here as a manual review item (handed to W6 Timothy).
+ *
+ * ★ The rgb(0 0 0 / a) literals below are inherited verbatim from the port and
+ *   are the only colour literals in this app. They are shadow/backdrop alphas
+ *   defined by the DESIGN.md prose, not new palette entries — every semantic
+ *   colour still resolves through --ds-* (DG-17).
+ * =========================================================================== */
+
+:root {
+  --ds-shadow-popover: 0 4px 16px rgb(0 0 0 / 0.08);
+  --ds-shadow-dialog: 0 12px 32px rgb(0 0 0 / 0.14);
+  --ds-color-backdrop: rgb(0 0 0 / 0.40);
+  --ds-focus-width: 2px;
+  --ds-focus-offset: 2px;
+  --ds-motion-duration: 120ms;
+  --ds-motion-easing: ease-out;
+  --ds-layer-content: 0;
+  --ds-layer-header: 10;
+  --ds-layer-popover: 20;
+  --ds-layer-backdrop: 30;
+  --ds-layer-dialog: 40;
+  --ds-layer-notification: 50;
+}
+
+@theme inline {
+  --shadow-popover: var(--ds-shadow-popover);
+  --shadow-dialog: var(--ds-shadow-dialog);
+  --color-backdrop: var(--ds-color-backdrop);
+  --default-transition-duration: var(--ds-motion-duration);
+  --default-transition-timing-function: var(--ds-motion-easing);
+}
+
+@utility z-content {
+  z-index: var(--ds-layer-content);
+}
+
+@utility z-header {
+  z-index: var(--ds-layer-header);
+}
+
+@utility z-popover {
+  z-index: var(--ds-layer-popover);
+}
+
+@utility z-backdrop {
+  z-index: var(--ds-layer-backdrop);
+}
+
+@utility z-dialog {
+  z-index: var(--ds-layer-dialog);
+}
+
+@utility z-notification {
+  z-index: var(--ds-layer-notification);
+}
+
+@layer base {
+  :focus-visible {
+    @apply ring-(length:--ds-focus-offset) ring-on-primary;
+    outline: var(--ds-focus-width) solid var(--ds-colors-focus);
+    outline-offset: var(--ds-focus-offset);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --ds-motion-duration: 0ms;
+  }
+}

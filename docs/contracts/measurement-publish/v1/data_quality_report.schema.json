@@ -1,0 +1,433 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/measurement-publish/v1/data_quality_report.schema.json",
+  "title": "results/data_quality_report.json — V5 데이터 품질",
+  "description": "docs/data_spec.html §9 검사 결과. 경로와 파일명은 정본이 규정한 것이며 발명하지 않았다 — data_spec §9: '모든 검사는 src/measurement/validate.py 에서 실행하고 results/data_quality_report.json 에 결과를 남긴다.' 이 파일만 results/ 루트에 있고 나머지 게시물은 results/measurement/ 아래에 있다(ADR-0002).",
+  "type": "object",
+  "required": [
+    "contract_version",
+    "artifact",
+    "run_id",
+    "generated_at",
+    "timezone",
+    "provenance",
+    "notices",
+    "gate_result",
+    "checks",
+    "spec_coverage"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "$ref": "common.schema.json#/$defs/contract_version"
+    },
+    "artifact": {
+      "const": "data_quality_report"
+    },
+    "run_id": {
+      "$ref": "common.schema.json#/$defs/run_id"
+    },
+    "generated_at": {
+      "$ref": "common.schema.json#/$defs/kst_timestamp"
+    },
+    "timezone": {
+      "const": "Asia/Seoul"
+    },
+    "provenance": {
+      "$ref": "common.schema.json#/$defs/provenance"
+    },
+    "notices": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/notice"
+      }
+    },
+    "gate_result": {
+      "enum": [
+        "pass",
+        "fail",
+        "incomplete"
+      ],
+      "description": "pass = 실행한 검사가 전부 통과했고 실행하지 못한 검사도 공허한 통과도 없다. incomplete = 통과했으나 not_run·blocked·vacuous 가 있다. ★ pass 와 incomplete 를 나누는 이유는 미실행을 통과로 적지 않기 위해서다. fail = 하나라도 위반했다 → 파이프라인 중단(data_spec §9, 경고로 넘어가지 않는다)."
+    },
+    "checks": {
+      "type": "array",
+      "minItems": 1,
+      "description": "data_spec §9 의 검사 항목과 1:1 대응한다(이슈 #48 완료 조건). C1 에서 실행할 수 없는 항목도 목록에 남기고 not_run 으로 적는다 — 목록에서 빼면 '검사하지 않았다'가 보이지 않는다.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "spec_ref",
+          "title",
+          "status",
+          "scope"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^DQ-[0-9]{2}[a-z]?$"
+          },
+          "spec_ref": {
+            "type": "string",
+            "description": "docs/data_spec.html 의 검사 항목명"
+          },
+          "title": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail",
+              "vacuous",
+              "not_run",
+              "blocked"
+            ],
+            "description": "pass=검사했고 통과 · fail=위반 · ★vacuous=검사는 실행했으나 검사 대상이 0행이었다('공허한 통과' — 아무것도 검사하지 않았다) · not_run=실행하지 않음 · blocked=환경 제약"
+          },
+          "scope": {
+            "type": "string",
+            "minLength": 1,
+            "description": "★ 이 검사가 실제로 무엇을 검사했는지의 범위 한정 문구. 예: 'events 테이블에 한정한다. orders 테이블이 없어 전역 유일성은 검사하지 않았다.' 범위를 적지 않으면 부분 검사가 전체 검사로 읽힌다."
+          },
+          "reason_code": {
+            "$ref": "common.schema.json#/$defs/reason_code"
+          },
+          "reason_detail": {
+            "type": "string",
+            "minLength": 1
+          },
+          "violations": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "examined_rows": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0
+          },
+          "threshold": {
+            "type": [
+              "string",
+              "number",
+              "null"
+            ]
+          },
+          "samples": {
+            "type": "array",
+            "maxItems": 50,
+            "description": "위반 사례. 레코드 원문이 아니라 식별자와 사유만 담는다.",
+            "items": {
+              "type": "object",
+              "required": [
+                "detail"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "detail": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "event_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "order_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "customer_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "partition_date": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "allOf": [
+          {
+            "$comment": "실행하지 않았거나 막힌 검사는 사유가 필수이고 위반 건수를 숫자로 적지 않는다 — 0건으로 적으면 통과처럼 읽힌다.",
+            "if": {
+              "properties": {
+                "status": {
+                  "enum": [
+                    "not_run",
+                    "blocked"
+                  ]
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "reason_code",
+                "reason_detail"
+              ],
+              "properties": {
+                "violations": {
+                  "type": "null"
+                }
+              }
+            }
+          },
+          {
+            "$comment": "★ V-12 — 검사 대상이 0행이면 pass 일 수 없다. denominator==0 → ok 불가 와 같은 패턴이다. 화면 규율로 남기면 구현자 한 명이 놓치는 순간 뚫린다.",
+            "if": {
+              "properties": {
+                "examined_rows": {
+                  "const": 0
+                }
+              },
+              "required": [
+                "examined_rows"
+              ]
+            },
+            "then": {
+              "properties": {
+                "status": {
+                  "not": {
+                    "const": "pass"
+                  }
+                }
+              }
+            }
+          },
+          {
+            "$comment": "공허한 통과는 검사 대상이 0행이었다는 사실을 낸다. status 가 이미 사유이므로 reason_code 는 금지한다. ★ 이 절은 '교체'된 것이다 — 같은 내용을 새 allOf 절로 추가하면 reason_code 가 있어도 없어도 거부되어 vacuous 가 만족 불가능해진다.",
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "vacuous"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "examined_rows",
+                "reason_detail"
+              ],
+              "properties": {
+                "examined_rows": {
+                  "const": 0
+                },
+                "violations": {
+                  "type": "null"
+                }
+              },
+              "not": {
+                "required": [
+                  "reason_code"
+                ]
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "pass"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "violations",
+                "examined_rows"
+              ],
+              "properties": {
+                "violations": {
+                  "const": 0
+                },
+                "examined_rows": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          {
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "fail"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "required": [
+                "violations"
+              ],
+              "properties": {
+                "violations": {
+                  "type": "integer",
+                  "minimum": 1
+                }
+              }
+            }
+          },
+          {
+            "$comment": "Q-2 — blocked(환경 제약으로 못 했다)는 BLOCKED 만 쓴다.",
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "blocked"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason_code": {
+                  "const": "BLOCKED"
+                }
+              }
+            }
+          },
+          {
+            "$comment": "Q-2 — not_run(안 했다)은 NOT_RUN 또는 PRECONDITION_MISSING 이다. 실행 안 한 것을 못 한 것으로 적으면 책임이 환경으로 넘어간다.",
+            "if": {
+              "properties": {
+                "status": {
+                  "const": "not_run"
+                }
+              },
+              "required": [
+                "status"
+              ]
+            },
+            "then": {
+              "properties": {
+                "reason_code": {
+                  "enum": [
+                    "NOT_RUN",
+                    "PRECONDITION_MISSING"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "spec_coverage": {
+      "type": "object",
+      "description": "★ 검사 정본 목록을 게시물이 준다. 화면이 정본 목록을 상수로 들고 있으면 정본이 두 벌이 되고, 게시물이 주는 것만 그리면 빠진 검사가 사라진다 — 사라진 것은 통과처럼 읽힌다.",
+      "required": [
+        "spec_items",
+        "reported_checks",
+        "unmapped_spec_items"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "spec_items": {
+          "type": "array",
+          "minItems": 1,
+          "description": "docs/data_spec.html §9 의 검사 항목 정본 목록과 각 항목을 덮는 DQ id",
+          "items": {
+            "type": "object",
+            "required": [
+              "spec_ref",
+              "covered_by",
+              "worst_status"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "spec_ref": {
+                "type": "string",
+                "minLength": 1
+              },
+              "covered_by": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^DQ-[0-9]{2}[a-z]?$"
+                }
+              },
+              "worst_status": {
+                "enum": [
+                  "pass",
+                  "fail",
+                  "vacuous",
+                  "not_run",
+                  "blocked"
+                ]
+              }
+            }
+          }
+        },
+        "reported_checks": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unmapped_spec_items": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "정본에 있는데 어떤 검사도 덮지 않는 항목. 비어 있어야 정상이며, 비어 있지 않으면 화면이 그 사실을 표시한다."
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "$comment": "★ V-12 게이트 층 — 전부 pass 여야 gate_result 가 pass 다. vacuous 가 하나라도 있으면 pass 일 수 없다(위 규칙에 의해 examined_rows>0 도 함께 강제된다).",
+      "if": {
+        "properties": {
+          "gate_result": {
+            "const": "pass"
+          }
+        },
+        "required": [
+          "gate_result"
+        ]
+      },
+      "then": {
+        "properties": {
+          "checks": {
+            "items": {
+              "properties": {
+                "status": {
+                  "const": "pass"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$comment": "W2 산출물의 W5 정본 사본. 원본 스냅샷: .agent-team/04-architecture/schemas/data_quality_report.schema.json (2026-09-11 동결). 원본은 고치지 않는다 — W5 이후 정본은 이 파일이고, 스냅샷과의 의도된 차이는 docs/contracts/measurement-publish/v1/CHANGELOG.md 에 전수 등재한다. JSON 에 주석을 쓸 수 없어 $comment 로 남긴다."
+}

@@ -1,0 +1,290 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/measurement-publish/v1/ingestion_report.schema.json",
+  "title": "results/measurement/ingestion_report.json — V1 수집 현황",
+  "description": "'이벤트가 쌓이고 있는가? 언제·무엇이 얼마나?' 에 답한다. 원천은 Event Sink 의 manifest.json 이며, 대시보드는 data/raw/ 를 읽지 않는다(SRS DB-014).",
+  "type": "object",
+  "required": [
+    "contract_version",
+    "artifact",
+    "run_id",
+    "generated_at",
+    "timezone",
+    "provenance",
+    "notices",
+    "totals",
+    "by_event_type",
+    "partitions",
+    "sources"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "contract_version": {
+      "$ref": "common.schema.json#/$defs/contract_version"
+    },
+    "artifact": {
+      "const": "ingestion_report"
+    },
+    "run_id": {
+      "$ref": "common.schema.json#/$defs/run_id"
+    },
+    "generated_at": {
+      "$ref": "common.schema.json#/$defs/kst_timestamp"
+    },
+    "timezone": {
+      "const": "Asia/Seoul"
+    },
+    "provenance": {
+      "$ref": "common.schema.json#/$defs/provenance"
+    },
+    "notices": {
+      "type": "array",
+      "items": {
+        "$ref": "common.schema.json#/$defs/notice"
+      }
+    },
+    "totals": {
+      "type": "object",
+      "description": "계층 0 수집 건전성 지표 (kpi-definition-v1.md §3). 관측 건수는 0 이 정상값일 수 있다 — 관측 결과로서의 0 과 계산 불가는 다르다(api-contracts.md §4.3).",
+      "required": [
+        "events_ingested",
+        "events_rejected",
+        "rejection_rate",
+        "event_type_coverage",
+        "partition_day_count",
+        "ingestion_days_gap",
+        "unavailable_metric_count",
+        "ingestion_gap_attribution"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "events_ingested": {
+          "$ref": "common.schema.json#/$defs/source_split"
+        },
+        "events_rejected": {
+          "$ref": "common.schema.json#/$defs/metric_value"
+        },
+        "rejection_rate": {
+          "$ref": "common.schema.json#/$defs/metric_value"
+        },
+        "event_type_coverage": {
+          "$ref": "common.schema.json#/$defs/metric_value"
+        },
+        "partition_day_count": {
+          "$ref": "common.schema.json#/$defs/metric_value"
+        },
+        "ingestion_days_gap": {
+          "$ref": "common.schema.json#/$defs/metric_value",
+          "$comment": "파티션 구간 안에서 이벤트가 0건인 날짜 수. 수집이 멈춘 것과 그날 활동이 없던 것을 화면에서 구분하기 위한 지표다."
+        },
+        "unavailable_metric_count": {
+          "$ref": "common.schema.json#/$defs/metric_value"
+        },
+        "ingestion_gap_attribution": {
+          "$ref": "common.schema.json#/$defs/metric_value",
+          "$comment": "★ 이벤트 0건인 날짜가 '수집 중단'인가 '활동 없음'인가의 판정. C1 에서는 status='not_run' · reason_code='PRECONDITION_MISSING' 이다 — 두 경우가 같은 흔적을 남기고 구분하려면 수집 시도를 남기는 heartbeat 레코드가 필요한데 Event Sink 에 없다. 계약이 '구분 불가'를 명시적 값으로 준다."
+        }
+      }
+    },
+    "by_event_type": {
+      "type": "object",
+      "description": "event_type 16종 전부가 키로 존재해야 한다. 한 건도 없는 타입을 목록에서 빼면 '없다'가 화면에서 사라진다.",
+      "minProperties": 16,
+      "additionalProperties": {
+        "$ref": "common.schema.json#/$defs/source_split"
+      }
+    },
+    "partitions": {
+      "type": "array",
+      "description": "일자별 수집량. 이벤트가 0건인 날짜도 행으로 존재한다(present=false). 화면이 날짜 목록을 재구성하지 않게 배열로 준다.",
+      "items": {
+        "type": "object",
+        "required": [
+          "date",
+          "present",
+          "rows",
+          "in_observed_range"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "date": {
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "present": {
+            "type": "boolean"
+          },
+          "rows": {
+            "$ref": "common.schema.json#/$defs/source_split"
+          },
+          "in_observed_range": {
+            "type": "boolean",
+            "description": "★ 이 날짜가 관측 구간(first_event_at ~ last_event_at) 안에 있는가. 구간 안의 0건은 '수집 구간 내 공백'이고 밖은 '구간 밖'이다. ⚠ 이것으로도 '수집 중단'과 '활동 없음'은 구분되지 않는다 — 두 경우가 같은 흔적을 남기고, 구분하려면 heartbeat 레코드가 필요한데 Sink 에 없다. 화면은 구분하지 않고 구분할 수 없다고 쓴다."
+          }
+        }
+      }
+    },
+    "sources": {
+      "type": "object",
+      "description": "출처별 관측 상태. ★ 판정 주체는 게시물이다 — 화면이 '첫 수신이 null 이면 미연결'을 추론하지 않는다(DB-012).",
+      "required": [
+        "commerce",
+        "simulator"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "commerce": {
+          "type": "object",
+          "required": [
+            "link_state",
+            "first_event_at",
+            "last_event_at",
+            "event_count",
+            "staleness"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "first_event_at": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/kst_timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/kst_timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "event_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "link_state": {
+              "enum": [
+                "never_connected",
+                "connected"
+              ],
+              "description": "★ 결정 가능한 것만 담는다. never_connected=이 출처로 수신한 이벤트가 한 건도 없다(정상일 수 있다) · connected=수신 이력이 있다. 'stale(멈췄다)'을 값으로 두지 않는 이유는 staleness 필드를 보라."
+            },
+            "staleness": {
+              "$ref": "common.schema.json#/$defs/metric_value",
+              "$comment": "★ '마지막 수신 이후 멈춘 것인가'의 판정. C1 에서는 status='not_run' · reason_code='PARAM_UNCONFIRMED' 다 — 정지 판정 임계값이 확정되지 않았고 C1 에서 그 상태에 도달할 수 없어 검증도 불가능하다. 값 대신 사유를 주어 화면이 추측하지 않게 한다. 도달 불가 분기를 enum 에 넣지 않는다."
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "link_state": {
+                    "const": "never_connected"
+                  }
+                },
+                "required": [
+                  "link_state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "first_event_at": {
+                    "type": "null"
+                  },
+                  "last_event_at": {
+                    "type": "null"
+                  },
+                  "event_count": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "simulator": {
+          "type": "object",
+          "required": [
+            "link_state",
+            "first_event_at",
+            "last_event_at",
+            "event_count",
+            "staleness"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "first_event_at": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/kst_timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "last_event_at": {
+              "anyOf": [
+                {
+                  "$ref": "common.schema.json#/$defs/kst_timestamp"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "event_count": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "link_state": {
+              "enum": [
+                "never_connected",
+                "connected"
+              ],
+              "description": "★ 결정 가능한 것만 담는다. never_connected=이 출처로 수신한 이벤트가 한 건도 없다(정상일 수 있다) · connected=수신 이력이 있다. 'stale(멈췄다)'을 값으로 두지 않는 이유는 staleness 필드를 보라."
+            },
+            "staleness": {
+              "$ref": "common.schema.json#/$defs/metric_value",
+              "$comment": "★ '마지막 수신 이후 멈춘 것인가'의 판정. C1 에서는 status='not_run' · reason_code='PARAM_UNCONFIRMED' 다 — 정지 판정 임계값이 확정되지 않았고 C1 에서 그 상태에 도달할 수 없어 검증도 불가능하다. 값 대신 사유를 주어 화면이 추측하지 않게 한다. 도달 불가 분기를 enum 에 넣지 않는다."
+            }
+          },
+          "allOf": [
+            {
+              "if": {
+                "properties": {
+                  "link_state": {
+                    "const": "never_connected"
+                  }
+                },
+                "required": [
+                  "link_state"
+                ]
+              },
+              "then": {
+                "properties": {
+                  "first_event_at": {
+                    "type": "null"
+                  },
+                  "last_event_at": {
+                    "type": "null"
+                  },
+                  "event_count": {
+                    "const": 0
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$comment": "W2 산출물의 W5 정본 사본. 원본 스냅샷: .agent-team/04-architecture/schemas/ingestion_report.schema.json (2026-09-11 동결). 원본은 고치지 않는다 — W5 이후 정본은 이 파일이고, 스냅샷과의 의도된 차이는 docs/contracts/measurement-publish/v1/CHANGELOG.md 에 전수 등재한다. JSON 에 주석을 쓸 수 없어 $comment 로 남긴다."
+}

@@ -1,0 +1,29 @@
+# 개발·검증 의존성. 런타임(requirements.txt)에 들어가지 않는 것만 여기 적는다.
+#
+# Resolved on Python 3.12.4 (CI parity). See requirements.txt for why 3.12 and not 3.14.
+#
+# Decision D-21 / M05-a: jsonschema is DEV-ONLY.
+# Consequence, stated so nobody is surprised at publish time: publish-time
+# self-validation in src/measurement/ checks core invariants with the standard library
+# only (json + explicit predicates) and raises ContractViolation, while full
+# draft-2020-12 schema validation of docs/contracts/** runs in the test suite. That keeps
+# the runtime dependency count at two and keeps isolation.yml installable-free (A7).
+
+-r requirements.txt
+
+# draft 2020-12 validator. Our contracts declare
+# "$schema": "https://json-schema.org/draft/2020-12/schema", so the validator must
+# support 2020-12 — 4.26.0 does, via referencing.jsonschema.DRAFT202012.
+jsonschema==4.26.0
+
+# $ref resolution across sibling contract files. docs/contracts/*.schema.json reference
+# common.schema.json#/$defs/... by relative URI, which plain jsonschema cannot fetch
+# offline; a referencing.Registry maps those URIs to local files instead of hitting
+# the network. Pinned separately because it is imported directly by the tests, not
+# only pulled in as a transitive dependency of jsonschema.
+referencing==0.37.0
+
+# Transitive deps (attrs · jsonschema-specifications · rpds-py · typing_extensions) are
+# intentionally NOT pinned. NFR-001 reproducibility is about the bytes of published
+# artifacts; these packages never touch them. A full lockfile is not requested and would
+# be one more thing to keep honest.

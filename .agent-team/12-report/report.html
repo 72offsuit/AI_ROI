@@ -1,0 +1,473 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI_ROI 사이클 C1 — W6 통합 리포트</title>
+<style>
+:root{
+  --ink:#16181d; --ink2:#4a5060; --ink3:#767d8e; --line:#dfe3ea; --bg:#fff;
+  --surface:#f7f8fa; --ok:#1a7f4b; --ok-s:#e8f5ee; --warn:#8a5a00; --warn-s:#fdf3e0;
+  --bad:#b3261e; --bad-s:#fdecea; --info:#4a3fb5; --info-s:#eeecfb; --mono:#e9ecf2;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);
+  font:15px/1.65 -apple-system,BlinkMacSystemFont,"Apple SD Gothic Neo","Malgun Gothic",sans-serif;
+  -webkit-font-smoothing:antialiased}
+.wrap{max-width:980px;margin:0 auto;padding:48px 28px 96px}
+h1{font-size:28px;line-height:1.3;margin:0 0 6px;letter-spacing:-.3px}
+h2{font-size:20px;margin:52px 0 14px;padding-top:20px;border-top:2px solid var(--ink);letter-spacing:-.2px}
+h3{font-size:16px;margin:30px 0 10px;color:var(--ink)}
+h4{font-size:14px;margin:20px 0 8px;color:var(--ink2)}
+p{margin:0 0 12px}
+.sub{color:var(--ink3);font-size:14px;margin:0 0 4px}
+code{background:var(--mono);padding:1px 5px;border-radius:3px;
+  font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace}
+pre{background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--ink3);
+  padding:12px 14px;overflow-x:auto;border-radius:4px;margin:12px 0}
+pre code{background:none;padding:0;font-size:12.5px;line-height:1.6}
+table{border-collapse:collapse;width:100%;margin:14px 0;font-size:13.5px}
+th,td{border:1px solid var(--line);padding:8px 10px;text-align:left;vertical-align:top}
+th{background:var(--surface);font-weight:600;font-size:13px}
+td.n{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}
+.hero{background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:22px 24px;margin:24px 0 8px}
+.hero h2{border:0;margin:0 0 14px;padding:0;font-size:17px}
+.kpis{display:flex;flex-wrap:wrap;gap:10px;margin:0}
+.kpi{flex:1 1 150px;background:#fff;border:1px solid var(--line);border-radius:6px;padding:12px 14px}
+.kpi b{display:block;font-size:22px;line-height:1.2;font-variant-numeric:tabular-nums}
+.kpi span{display:block;font-size:12px;color:var(--ink3);margin-top:3px}
+.pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:12px;font-weight:600;white-space:nowrap}
+.p-ok{background:var(--ok-s);color:var(--ok)} .p-warn{background:var(--warn-s);color:var(--warn)}
+.p-bad{background:var(--bad-s);color:var(--bad)} .p-info{background:var(--info-s);color:var(--info)}
+.p-mute{background:var(--mono);color:var(--ink3)}
+.note{border-left:3px solid var(--ink3);background:var(--surface);padding:12px 16px;margin:16px 0;border-radius:0 4px 4px 0}
+.note.bad{border-left-color:var(--bad);background:var(--bad-s)}
+.note.warn{border-left-color:var(--warn);background:var(--warn-s)}
+.note.ok{border-left-color:var(--ok);background:var(--ok-s)}
+.note.info{border-left-color:var(--info);background:var(--info-s)}
+.note p:last-child{margin-bottom:0}
+.src{font-size:12px;color:var(--ink3)}
+.src code{font-size:11.5px;background:none;color:var(--ink3);padding:0}
+ul,ol{margin:0 0 12px;padding-left:22px} li{margin:4px 0}
+hr{border:0;border-top:1px solid var(--line);margin:28px 0}
+.foot{margin-top:56px;padding-top:16px;border-top:1px solid var(--line);font-size:12px;color:var(--ink3)}
+@media print{
+  body{font-size:11pt} .wrap{max-width:none;padding:0}
+  h2{page-break-after:avoid;margin-top:26px} h3,h4{page-break-after:avoid}
+  table,pre,.note,.hero{page-break-inside:avoid}
+  .kpi{border:1px solid #999}
+}
+@page{margin:16mm}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<p class="sub">BATHOS 7웨이브 · 사이클 C1 · W6 통합 리포트</p>
+<h1>AI_ROI 측정 계층 + GA형 관측 대시보드</h1>
+<p class="sub">
+대상 브랜치 <code>feat/measurement-layer-and-dashboard</code> · PR <a href="https://github.com/72offsuit/AI_ROI/pull/57">#57</a>(미병합) ·
+HEAD <code>99e7cd0</code> · 작성 2026-09-14 · 리드 Paul
+</p>
+
+<div class="hero">
+<h2>한 장 요약</h2>
+<div class="kpis">
+  <div class="kpi"><b>11 / 11</b><span>스토리 done</span></div>
+  <div class="kpi"><b>407</b><span>테스트 OK (기준선 46)</span></div>
+  <div class="kpi"><b>0</b><span>blocking 결함</span></div>
+  <div class="kpi"><b>0</b><span>Critical·High 취약점</span></div>
+  <div class="kpi"><b>0</b><span>제품 코드 변경 (W6)</span></div>
+</div>
+<p style="margin:16px 0 0">
+범위 M(측정 계층)과 관측 대시보드는 <b>완주했다</b>. 검증 3종(코드 리뷰·QA·보안)이 독립적으로
+<b>머지 차단 사유를 찾지 못했다</b>. 다만 <b>major 10건 · Medium 4건</b>이 GATE 2 이전에 닫혀야 하고,
+그중 <b>2건은 "명백해 보이는 수정"이 실제로는 구멍을 닫지 못한다</b>(§8).
+</p>
+</div>
+
+<div class="note info">
+<p><b>이 리포트를 읽는 순서.</b> 급하면 <b>§8(명백한 수정이 구멍을 닫지 않는 자리)</b>과
+<b>§12(후속 액션)</b>만 읽어도 된다. §9는 이번 사이클이 무엇을 잘했고 어디가 비었는지에 대한 진단이고,
+§10은 균형을 위해 <b>확인했으나 깨끗했던 것</b>을 남긴 기록이다.</p>
+</div>
+
+<h2>1. 완료 현황</h2>
+
+<h3>1.1 웨이브</h3>
+<table>
+<tr><th style="width:60px">웨이브</th><th>내용</th><th style="width:110px">상태</th><th>게이트</th></tr>
+<tr><td>W0</td><td>Analysis</td><td><span class="pill p-mute">skipped</span></td><td>—</td></tr>
+<tr><td>W1</td><td>Discovery &amp; 시장 리서치</td><td><span class="pill p-ok">done</span></td><td>USP · <span class="pill p-warn">CONCERNS</span></td></tr>
+<tr><td>W2</td><td>기획 · 아키텍처 · 디자인</td><td><span class="pill p-ok">done</span></td><td>Plan · <span class="pill p-warn">CONCERNS</span></td></tr>
+<tr><td>W3</td><td>스토리 엔지니어링 · 준비도 게이트</td><td><span class="pill p-ok">done</span></td><td>Implementation · <span class="pill p-bad">FAIL</span> → <span class="pill p-warn">CONCERNS</span>(재게이트 1회)</td></tr>
+<tr><td>W4</td><td>IP &amp; 연구</td><td><span class="pill p-mute">skipped</span></td><td>—</td></tr>
+<tr><td>W5</td><td>구현</td><td><span class="pill p-ok">done</span></td><td>—</td></tr>
+<tr><td>W6</td><td>검증 · 문서화 · 리포트</td><td><span class="pill p-info">진행 중</span></td><td>Release · <b>이 리포트로 판정</b></td></tr>
+</table>
+<p class="src">출처: <code>_state/manifest.json</code> <code>waves[]</code> · <code>gates[]</code></p>
+
+<h3>1.2 스토리 11종 — 전부 <code>done</code></h3>
+<table>
+<tr><th style="width:70px">스토리</th><th>내용</th><th>비고</th></tr>
+<tr><td>M-01</td><td>Sink 결함 수정</td><td>AC-1~4. 벤치 건수·바이트 정확 일치</td></tr>
+<tr><td>M-02</td><td>스키마 값 강제</td><td>AC-1~7. <code>#53</code>과 한 PR로 묶음</td></tr>
+<tr><td>M-03</td><td>경제 규칙</td><td>AC-1~9. <code>test_neutrality</code> 8건 negative control</td></tr>
+<tr><td>M-04</td><td>KPI</td><td>AC-1~6. 지표 <b>46종</b>(문서 §8의 47은 자기 지표표보다 1 많다)</td></tr>
+<tr><td>M-05</td><td>의존성</td><td>T1~T7. D-19로 <code>tests-with-deps.yml</code> 신설, <code>isolation.yml</code> 변경 <b>0줄</b></td></tr>
+<tr><td>M-06</td><td>게시</td><td>T1~T8 + Andrew 지적 4건 수정. 게시물 7종 <b>계약 위반 0건</b></td></tr>
+<tr><td>M-07</td><td>데이터 품질</td><td>검사 18종 · 8검사 × 3축 negative control · <code>DQ-06</code>이 M-01로 BLOCKED 해소(7→8종 실행)</td></tr>
+<tr><td>M-08</td><td>측정 계약 문서</td><td>AC-1~9. 표현력 공백 4건 전부 결론 있음(차단 0)</td></tr>
+<tr><td>M-09</td><td>GATE 1 봉인</td><td>AC-1~7. D-2로 G-10 닫고 <b>부분 봉인 실행</b>. 탐지 3층 일치</td></tr>
+<tr><td>d-01</td><td>대시보드 기반</td><td>AC-1~7 전부</td></tr>
+<tr><td>d-02</td><td>관측 화면군</td><td>AC-1~13 전부. AC-12는 L1 승격(사용자 승인) 후 Playwright로 닫음</td></tr>
+</table>
+<p class="src">출처: <code>03-story-engineering/story-*.md</code> 각 파일 프론트매터 <code>status:</code></p>
+
+<h2>2. 성공 기준 대비 (charter §3.1)</h2>
+<table>
+<tr><th style="width:34px"></th><th>조건</th><th style="width:96px">판정</th><th>근거</th></tr>
+<tr><td>①</td><td>커머스 갭 정리 — 이슈 작업만, 코드 편집 0건</td><td><span class="pill p-ok">충족</span></td><td><code>Ecommerce_Service</code> 변경 0건. 이슈 <code>#29</code> 수정 + E7·D1·D2·E9 신규</td></tr>
+<tr><td>②</td><td>측정 계층 완주 (범위 M, <code>#42</code>)</td><td><span class="pill p-warn">부분</span></td><td>M-3~M-7 전부 구현 완료. <b>다만 <code>#43</code>·<code>#44</code> 이슈 정리가 미완</b> — §7 gap 11</td></tr>
+<tr><td>③</td><td>GA형 대시보드 — 출처 구분 · 계산 불가를 0으로 표시하지 않음</td><td><span class="pill p-ok">충족</span></td><td>QA가 <b>실제 <code>results/</code>에서 라이브 확인</b> — 계산 불가 셀 숫자 누출 0건, 측정된 0(18개)이 <code>—</code>로 뭉개진 사례 0건</td></tr>
+<tr><td>④</td><td>회귀 없음 — 기준선 46 유지 · 격리 CI 통과</td><td><span class="pill p-ok">충족</span></td><td>407 OK. <b>기준선 46종을 이름으로 대조</b>해 의존성 없는 환경 skip <b>0건</b> 확인</td></tr>
+</table>
+
+<div class="note warn">
+<p><b>②가 "부분"인 이유는 코드가 아니라 이슈 상태다.</b>
+<code>#43</code>(M-1)·<code>#44</code>(M-2)를 해결한 PR <code>#50</code>(2026-09-10 13:34)·<code>#51</code>(14:03)이
+<b>머지된 지 나흘째인데 이슈가 OPEN</b>이다. charter §3.1 ②의 마지막 체크박스가 바로 이것이고,
+Issue close는 <code>docs/GIT_WORKFLOW.md</code> §6이 <b>항상 개별 승인</b> 대상으로 두므로 리드가 닫지 않았다.
+<b>사용자 판단이 필요한 유일한 미결이다.</b></p>
+</div>
+
+<h2>3. QA — <span class="pill p-ok">PASS</span></h2>
+
+<p>QA는 <b>보고를 신뢰하지 않고 전부 재현</b>했고, 리드가 그 결과를 다시 교차 검증했다.</p>
+
+<table>
+<tr><th>검증</th><th>결과</th><th style="width:90px">보고와 일치</th></tr>
+<tr><td><code>unittest discover -s tests</code> (의존성 없이)</td><td><code>Ran 407 · OK (skipped=67)</code></td><td><span class="pill p-ok">일치</span></td></tr>
+<tr><td>동일 (의존성 설치 후)</td><td><code>Ran 407 · OK (skipped=3)</code></td><td><span class="pill p-ok">일치</span></td></tr>
+<tr><td><code>tests.test_isolation -v</code></td><td><code>Ran 6 · OK</code></td><td><span class="pill p-ok">일치</span></td></tr>
+<tr><td><code>check_ownership.py</code></td><td>PASS — Phillip 46 ∩ Andrew 50 = 0</td><td><span class="pill p-ok">일치</span></td></tr>
+<tr><td><code>npm ci</code> · <code>npm run build</code></td><td>369 packages · 0 vulnerabilities · 8라우트 컴파일</td><td><span class="pill p-ok">일치</span></td></tr>
+<tr><td><code>npm run tokens:test</code></td><td>15 / 15</td><td><span class="pill p-ok">일치</span></td></tr>
+<tr><td><code>npm run check:state-map</code></td><td>25 / 25</td><td><span class="pill p-ok">일치</span></td></tr>
+<tr><td>독립 e2e (Chromium 헤드리스)</td><td><b>43건 · 41 passed · 2 의도적 red</b> · 31.5초</td><td>신규</td></tr>
+</table>
+<p class="src">출처: <code>11-qa/qa-summary.md</code> §1 · <code>e2e/report.json</code> <code>stats</code></p>
+
+<h3>3.1 latency vs NFR — <b>정량 NFR이 존재하지 않는다</b></h3>
+<div class="note ok">
+<p>QA가 <code>Plan/AI_Retention_ROI_PRD_v2.md</code>(NFR-01~09)와
+<code>Plan/AI_Customer_Retention_ROI_SRS_v2.0.md</code>(NFR-001~006)를 <b>전수 조회</b>한 결과,
+<b>UI·응답시간에 대한 정량 NFR은 어느 정본에도 없다.</b></p>
+<p>따라서 latency를 <b>이번 게이트의 판정 기준으로 쓰지 않는다</b>. 측정값은 향후 NFR이 정의될 때
+대조할 <b>기준선(baseline)</b>으로만 남겼다. 없는 기준을 지어내 ✅를 그리지 않았다는 뜻이며,
+이것이 <code>AGENTS.md</code>의 <i>"존재하지 않는 기준을 지어내지 않는다"</i>를 실제로 지킨 자리다.</p>
+</div>
+<p class="src">출처: <code>11-qa/latency-report.md</code> §0</p>
+
+<h2>4. 코드 리뷰 — finding 20건 · <span class="pill p-ok">blocking 0</span></h2>
+
+<table>
+<tr><th style="width:46px">#</th><th>Major 10건</th><th style="width:150px">위치</th></tr>
+<tr><td><b>M1</b></td><td><b>검증되지 않은 <code>manifest</code> 입력 → 결손이 조용히 0으로 치환</b> ★ 가장 중요</td><td><code>kpi.py</code> 8곳 · <code>publish.py:1467</code></td></tr>
+<tr><td>M2</td><td><code>field_fill_rate</code>에 분모 0 가드가 없다 (같은 파일 다른 비율 함수엔 있다)</td><td><code>kpi.py</code></td></tr>
+<tr><td>M3</td><td>Python 3.10 지원 선언 vs 실제 미지원 (<code>fromisoformat</code>의 <code>Z</code> 접미사는 3.11+)</td><td><code>sink.py:394</code> 외 6곳</td></tr>
+<tr><td><b>M4</b></td><td><b><code>FREEZE_MISMATCH</code> 헤드라인이 배선 결함으로 선택되지 않는다</b></td><td><code>publish.py:262</code></td></tr>
+<tr><td>M5</td><td><code>ConfigError</code> 미임포트 → 방어 코드가 <code>NameError</code>를 던진다</td><td><code>freeze.py:466</code></td></tr>
+<tr><td>M6</td><td>JSON Schema 3종이 "개수"만 세고 "이름·고유성"은 검증하지 않는다</td><td>계약 스키마 3파일</td></tr>
+<tr><td>M7</td><td><code>METRIC_SPECS</code>가 <code>"computable"</code>로 선언한 3종이 구현·계약 어디에도 없다</td><td><code>kpi.py:1131</code> 외</td></tr>
+<tr><td>M8</td><td><code>discount_cost_krw</code>가 죽은 설정값</td><td><code>economic_config.yaml</code></td></tr>
+<tr><td>M9</td><td>skip-count 스텝에 임계값 비교가 없어 회귀를 막지 못한다</td><td><code>tests-with-deps.yml</code></td></tr>
+<tr><td>M10</td><td>doctest 18개가 어디서도 실행되지 않고, 그중 1개는 이미 실패 중</td><td><code>kpi.py:1219</code> 외</td></tr>
+</table>
+<p>Minor 10건: <code>exit_code</code> 문서 불일치 · 불변식 검사기의 "모양 기반" 노드 판별 ·
+<code>EventSink</code> 동시성 경쟁 조건 · AI 투자비용 문서-코드 수치 불일치 · 처치 ID 하드코딩 ·
+<code>freeze.py</code> 죽은 함수 + 미정의 이름 · <code>index.json</code> 비원자적 쓰기 ·
+<code>generated_by</code> 고정 문자열 · 경로 탈출 정규식 미비 · <code>-O</code>에서 <code>assert</code> 소실.</p>
+
+<div class="note ok">
+<p><b>대시보드는 findings 0건.</b> <code>?? 0</code> · <code>|| 0</code> · <code>Number(value)</code> 계열
+금지 패턴이 <b>실행 코드 기준 0건</b>으로 확인됐다 — 주석 안의 예시 문자열만 잡힌다.</p>
+</div>
+
+<h3>4.1 blocking 판정 — "검토했고 아니다"와 "안 봤다"는 다르다</h3>
+<p>M4·M5는 <b>blocking 후보로 개별 검토된 뒤 근거와 함께 내려왔다</b>:</p>
+<ul>
+<li><b>M4</b> — <code>/freeze</code> 화면의 정보 자체는 살아 있고 배너 배선만 깨졌다. GATE 1이 아직 <code>LOCKED</code> 0종이라 오늘 물리적으로 트리거 불가.</li>
+<li><b>M5</b> — 현재 lock 파일이 정상이라(해시 4/4 일치 재확인) 이 방어 코드에 도달하는 정상 경로가 없다.</li>
+</ul>
+<p class="src">출처: <code>10-review/code-review.md</code> · <code>blocking-issues.md</code></p>
+
+<h2>5. 보안 감사 — Medium 4 · Low/Info 4 · <span class="pill p-ok">Critical·High 0</span></h2>
+
+<div class="note">
+<p><b>위협 모델이 보통의 웹앱과 다르다.</b> HTTP API가 없고(<code>DB-013</code>), 인증·세션·사용자 입력 폼이 없으며,
+외부 네트워크 입력을 받지 않는다. OWASP Top 10을 기계적으로 대입하면 대부분 "해당 없음"이 되므로,
+감사는 <b>실제 위협면 6개</b>(경로 이탈 · 공급망 · 역직렬화 · 비밀값 · 정보 노출 · CI)에 집중했다.</p>
+</div>
+
+<table>
+<tr><th style="width:40px">#</th><th>발견</th><th style="width:120px">CVSS 3.1</th><th style="width:96px">CWE</th></tr>
+<tr><td><b>F1</b></td><td><b>대시보드 읽기 경로가 심볼릭 링크를 따라가 <code>results/</code> 격리를 우회한다</b> — <code>resolveArtifactPath()</code>가 문자열 검사만 하고 realpath를 재검증하지 않는다</td><td><b>6.5</b> Medium<br><span class="src"><code>AV:L/AC:L/PR:L/S:C/C:H</code></span></td><td>CWE-59</td></tr>
+<tr><td>F2</td><td>인증 없는 대시보드가 <code>-H</code> 없이 실행돼 <code>0.0.0.0</code>에 바인딩된다 — <code>lsof</code>로 <code>TCP *:PORT LISTEN</code> 실측</td><td><b>4.3</b> Medium-Low<br><span class="src">공인 호스트 배포 시 5.3</span></td><td>—</td></tr>
+<tr><td>F3</td><td>게시 staging 경로가 예측 가능하고 심볼릭 링크 선점에 취약 — 게시 내용이 공격자 경로로 우회, 공격자 파일이 <code>results/</code>로 승격</td><td><b>5.1</b> Medium</td><td>CWE-59<br>CWE-377</td></tr>
+<tr><td><b>F8</b></td><td><b>봉인 변조 경보(<code>FREEZE_MISMATCH</code>)가 유효하게 발동할 수 있는 조건이 존재한 적이 없다</b> — 실제 게시 데이터로 재현. <b>§8.2 참조</b></td><td><b>5.6</b> Medium</td><td>CWE-390</td></tr>
+<tr><td>F4</td><td>Dependabot alerts · Secret scanning이 저장소에서 <b>비활성</b> (private 무료로 활성화 가능)</td><td>Low</td><td>—</td></tr>
+<tr><td>F5</td><td>M5 재평가 — <b>검증 우회는 없다(fail-closed 유지)</b>. 다만 end-to-end 재현 결과 <code>NameError</code>가 <code>publish.py:1586</code>의 <code>except MeasurementError</code>를 <b>뚫고</b> 원시 트레이스백으로 끝나고, 종료 코드가 <code>ConfigError</code>의 5가 아닌 <b>파이썬 기본값 1</b>이 되어 "종료 코드로 원인 분기"가 무의미해진다</td><td>Low</td><td>CWE-390<br>CWE-703</td></tr>
+<tr><td>F6</td><td>M1 재평가 — <code>json.loads()</code>에 예외 처리가 없다. <b>§8 참조</b></td><td>Low</td><td>—</td></tr>
+<tr><td>F7</td><td>CI 서드파티 액션이 커밋 SHA가 아닌 태그로 고정 (권한은 이미 <code>contents: read</code> 최소)</td><td>Info</td><td>—</td></tr>
+</table>
+
+<div class="note">
+<p><b>F1·F2·F3은 모두 공격자가 이미 로컬에 동등한 쓰기 권한을 가져야 발동한다</b>(F8은 공격자가 없어도 성립하는 배선 결함이다) — 이 앱에 없는
+원격 공격면을 새로 만들지 않는다. 그럼에도 <b>F1은 <code>DB-014</code>의 유일한 런타임 방어선</b>이라
+심층방어로 닫을 가치가 있다. 8종 우회를 시도해 <b>이것 하나만 뚫리고 7종은 정상 차단</b>됨을 실측했다.</p>
+</div>
+
+<h3>5.1 발견 0건인 영역 — 이것도 결과다</h3>
+<ul>
+<li><b>공급망 0건.</b> <code>pyarrow==25.0.1</code> · <code>PyYAML==6.0.3</code> · <code>jsonschema==4.26.0</code> ·
+<code>referencing==0.37.0</code>을 GitHub Advisory Database와 <b>개별 범위 대조</b>(추정 아님),
+<code>npm audit</code>으로 <code>dashboard/</code>(442) · <code>e2e/</code>(3) 전건 조회 — 전부 0.</li>
+<li><b>비밀값 0건.</b> 저장소 전체 grep + git 이력. <code>.audit-key</code>는 gitignore 확인 + 권한 600 확인.</li>
+<li><b>정보 노출 경로 없음.</b> <code>offending_values</code>가 계약(22컬럼 화이트리스트) → <code>types.ts</code>(필드 자체 부재) →
+화면(이름만 렌더) <b>3중</b>으로 막힘을 직접 읽어 확인.</li>
+</ul>
+<p class="src">출처: <code>10-security/security-audit-kr.md</code> · <code>security-findings.json</code>(SARIF)</p>
+
+<h2>6. 리팩토링 — <span class="pill p-mute">생략</span></h2>
+<div class="note">
+<p><b>Hananiah(Role 14)는 스폰하지 않았다. 사용자 결정이다.</b></p>
+<p>근거: Hananiah의 임무는 <b>동작보존 리팩토링만</b>이며 "기능변경·버그수정·계약변경은 수행 금지"다.
+그런데 major 10건은 전부 <b>없는 것을 새로 만드는 일</b>이다 —
+<code>manifest.schema.json</code> 신설 · 분모 가드 추가 · <code>ConfigError</code> import ·
+<code>FREEZE_MISMATCH</code> 배선 · skip 임계값 · doctest 실행기.
+<b>리팩토링이 아니라 버그 수정이므로 그 역할의 임무 밖이다.</b>
+빈손으로 돌리는 것보다 명시적 생략이 정직하다고 판단했다.</p>
+<p>따라서 이 섹션에 보고할 <b>동작보존 증거·잔여 위험은 없다</b>(수행하지 않았으므로).</p>
+</div>
+
+<h2>7. 설계-구현 gap — 19건</h2>
+<table>
+<tr><th style="width:34px">#</th><th>항목</th><th style="width:70px">심각도</th></tr>
+<tr><td>1</td><td>KPI 지표 개수 — 47(§8) vs 26(§5) vs <b>46</b>(구현)</td><td>중</td></tr>
+<tr><td>2</td><td>AI 투자비용 산술 — 문서 ≈2,020,000 vs 실측 <b>2,170,000</b> (코드가 옳다)</td><td>낮</td></tr>
+<tr><td>3</td><td><code>dashboard-architecture.md</code> §3 예시 코드 경로 이중 접두사 (구현은 이미 수정됨)</td><td>낮</td></tr>
+<tr><td>4</td><td><code>d-01</code> AC-6 문언 — 문자대로면 모든 정상 <code>unconfirmed</code>를 던진다</td><td>중</td></tr>
+<tr><td>5</td><td><code>cohort_retention_rate</code> 분류 — 문서 ✅ vs 실제 <code>unavailable</code></td><td>중</td></tr>
+<tr><td><b>6</b></td><td><b>카탈로그 46종 중 게시물에 절대 도달하지 않는 것 8종 — 양방향 불일치</b></td><td>중</td></tr>
+<tr><td>7</td><td>§7 Secondary 9종 vs 실제 역할 배정 5종 (교집합 3)</td><td>중</td></tr>
+<tr><td>8</td><td><code>ReasonCode</code> 7종(기획) vs 9종(계약·구현)</td><td>낮</td></tr>
+<tr><td>9</td><td><code>AGENTS.md</code> "프로젝트 현황" 문단이 실측과 어긋난다</td><td>중</td></tr>
+<tr><td>10</td><td><code>data_spec.html</code> §17.4 접근 주체 목록에 <code>measurement</code> 없음</td><td>낮</td></tr>
+<tr><td><b>11</b></td><td><b>이슈 <code>#43</code>·<code>#44</code>가 머지 이후에도 OPEN</b> — charter §3.1 ② 미결</td><td>낮</td></tr>
+<tr><td>12</td><td>계약 스키마 <code>description</code>에 "47종" 인용이 남아 있다</td><td>낮</td></tr>
+<tr><td>13</td><td><code>data_spec.html</code> §7.2 메타 4필드 <code>Nullable=N</code> 표기가 낡음</td><td>낮</td></tr>
+<tr><td>14</td><td><code>story-m-01</code> T3 문언 — 리드 판정 <b>D-25로 해소</b>(승인 불필요), 문언만 미정정</td><td>낮</td></tr>
+<tr><td>15</td><td>토큰 전략 규약의 예외가 원 규약 문서에 미반영</td><td>낮</td></tr>
+<tr><td>16</td><td><code>dashboard/AGENTS.md</code>의 <code>value_formatted</code> 서술이 낡음</td><td>중</td></tr>
+<tr><td>17</td><td>GATE 1 Lock CLI가 설계 문서대로 구현되지 않음(실제는 인라인 호출)</td><td>낮</td></tr>
+<tr><td>18</td><td>Lock 상태 예측("PARTIAL 최대 4") vs 실측(2)</td><td>낮</td></tr>
+<tr><td>19</td><td><code>usp.md</code> D-6 권고가 실제 리드 결정과 다름 (타 문서엔 정확히 반영됨)</td><td>참고</td></tr>
+</table>
+
+<div class="note">
+<p><b>gap 6이 가장 멀리 간다.</b> <code>METRIC_SPECS</code>(46종 카탈로그)에 있으나 어떤 게시물에도
+도달하지 않는 것이 <b>8종</b>이고, 반대로 <code>sleeping_dog_targeting_rate</code>는
+<b>게시되는데 카탈로그에 없다</b>. 즉 <b>카탈로그는 정본이 아니며 양방향으로 어긋난다</b>.</p>
+<p>그중 layer 0의 3종(<code>missing_field_count</code> · <code>source_event_count</code> ·
+<code>rejection_reason_count</code>)은 카탈로그가 <code>"computable"</code>(계산 가능)이라고
+<b>선언</b>하는데 구현·계약·게시물이 전부 없다 — 이 지표들은 "계산 불가"가 될 기회조차 없이 존재하지 않는다.</p>
+</div>
+<p class="src">출처: <code>09-docs/design-vs-impl-gaps.md</code> (705줄)</p>
+
+<h2>8. ★ 명백한 수정이 구멍을 닫지 않는 자리 — 2건</h2>
+
+<div class="note bad">
+<p><b>이 섹션이 이 리포트에서 가장 실용적이다.</b> 두 건 모두 <b>발견 자체는 옳은데 원인 진술이 한 칸 어긋나</b>
+있었다. 적힌 대로 고치면 <b>고친 사람은 닫혔다고 믿고 구멍은 남는다.</b></p>
+</div>
+
+<h3>8.1 M1 — 트리거가 틀렸다</h3>
+<p><code>code-review.md</code>의 M1은 원인에 <b><code>sink.py:266</code>의 비원자적 쓰기</b>를 포함한다.
+<b>그 부분이 틀렸다.</b> 리드가 잘못 전달한 것을 보안 감사 F6가 잡았고, 리드가 실행으로 확인했다:</p>
+<pre><code>① 잘린 JSON  '{"rows": 12, "rejec'   →  JSONDecodeError 크래시   (조용한 0-채움 아님)
+② rows: null (유효한 JSON)            →  status=ok  value=0       (조용한 0-채움 성립)</code></pre>
+<p>비원자적 쓰기가 만드는 것은 <b>잘린 JSON</b>이고, <code>_read_manifest()</code>에 예외 처리가 없으므로
+그것은 <b>시끄러운 크래시</b>다. 조용한 0-채움은 <b>유효한 JSON이 키를 빠뜨리거나 <code>null</code>일 때</b>
+생기며, 그 원인은 부분 기록이 아니라 <b>버전 스큐 · 손편집 · 다른 생산자</b>다.</p>
+<div class="note warn">
+<p><b>M1 자체는 유효하다</b>(②가 성립하므로). <b>틀린 것은 트리거다.</b>
+M1을 읽고 <code>sink.py</code> 쓰기를 원자적으로 만든 사람은 <b>엉뚱한 것을 고치고 닫혔다고 믿는다.</b>
+조용한 0-채움은 그대로 남는다. 올바른 수정은 <b>입력에 계약을 주는 것</b>이다 —
+<code>manifest.schema.json</code> 신설 + <code>_read_manifest()</code>에서 검증.</p>
+</div>
+
+<h3>8.2 M4 — 겹이 둘이고, 유효하게 작동한 적이 없다</h3>
+<pre><code>publish.py:262
+if counts.get("lock_items_pending", 0) and counts.get("freeze_mismatch", 0):
+    return "FREEZE_MISMATCH"      # "봉인된 대상이 봉인 이후 변경됐다"</code></pre>
+
+<p><b>겹 1</b> — 실제 <code>index.json</code>의 <code>counts</code> 8키에 <code>freeze_mismatch</code>가
+<b>없다</b>(대신 <code>schema_gaps</code>). 이 분기는 도달 불가다. <i>← 코드 리뷰가 지적한 것</i></p>
+
+<p><b>겹 2</b> — 조건의 <code>and</code>가 <code>lock_items_pending</code>을 함께 요구한다.
+그런데 <b>이 필드는 이름과 다른 것을 센다</b>:</p>
+<pre><code>publish.py:1198   "lock_items_pending": len(freeze.get("unlocked_items") or [])
+freeze.py:565     "unlocked_items": [... for item in verification.unmet]   # G-선행조건 미충족 목록</code></pre>
+
+<p>이름은 "봉인 항목 대기 중"으로 읽히지만 실제로는 <b>LOCK_ITEMS의 PENDING/PARTIAL 개수가 아니라
+G-1~G-16 선행조건의 <u>미충족</u> 개수</b>다. 그리고 <b>16종이 전부 충족</b>이므로 실측값은 <b>0</b>이다.</p>
+
+<div class="note bad">
+<p><b>따라서 이 경보는 "GATE 2 이후에 죽는" 것이 아니라 <u>유효하게 작동할 수 있는 실측 조건이 존재한 적이 없다</u>.</b></p>
+<p>실제 게시 데이터(<code>results/measurement/index.json</code>, 2026-09-11 실행분)로 재현한 결과:</p>
+</div>
+
+<table>
+<tr><th>시나리오</th><th style="width:190px">결과</th></tr>
+<tr><td>실제 게시 경로 그대로</td><td><code>SINK_EMPTY</code> <span class="pill p-bad">경보 없음</span></td></tr>
+<tr><td><b>"명백한 수정" — 겹 1만 고침</b>(<code>freeze_mismatch</code> 키만 채움)</td><td><code>CHECKS_NOT_RUN</code> <span class="pill p-bad">여전히 경보 없음</span></td></tr>
+<tr><td>겹 1 + <code>lock_items_pending</code>을 인위로 1로 조작</td><td><code>FREEZE_MISMATCH</code> <span class="pill p-ok">비로소 작동</span></td></tr>
+</table>
+
+<div class="note bad">
+<p><b>코드 리뷰가 제안한 "누락된 키를 채운다"만으로는 오늘도 경보가 뜨지 않는다.</b>
+<code>lock_items_pending</code>이 이미 0이기 때문이다. <b>겹 1과 겹 2를 함께 고치지 않으면 안 된다.</b></p>
+<p>폴백도 최악이다 — 이 분기를 지나친 뒤 조건이 전부 비면 <code>ALL_CLEAR</code>가 되고
+<code>headline_level()</code>(<code>publish.py:283</code>)이 이를 <b><code>ok</code>(초록)</b>으로 칠한다.
+<b>변조가 탐지된 상태에서 "이상 없음" 초록 배너가 뜰 수 있다.</b></p>
+<p><b>이름-의미 불일치가 겹 2를 눈에 띄지 않게 만든 원인으로 보인다</b> —
+<code>lock_items_pending</code>이라는 이름을 읽고 "봉인 항목이 미결이면"이라고 이해하면
+조건문이 자연스러워 보인다. 수정 시 <b>필드 이름도 함께 고쳐야</b> 같은 오독이 반복되지 않는다.</p>
+</div>
+
+<p class="src">실측: 리드 · 보안 감사 F8(CVSS 5.6). 최초 리드 분석은 <code>lock_items_pending</code>을
+LOCK_ITEMS의 PENDING 2건으로 <b>잘못 읽어</b> "오늘은 작동한다"고 적었고, 보안 감사가 실측으로 정정했다.
+<code>items[].status</code>(OUT_OF_SCOPE 5 · PENDING 2 · PARTIAL 2)는 <b>다른 필드</b>다.</p>
+
+<h2>9. 관통 진단 — "주장은 있는데 대조하는 장치가 없다"</h2>
+<p>major 10건 중 4건은 서로 다른 파일·다른 계층에 있지만 <b>같은 모양</b>이다.</p>
+<table>
+<tr><th style="width:50px">#</th><th>무엇을 선언·주장하는가</th><th>무엇이 빠졌는가</th></tr>
+<tr><td>M1</td><td><code>manifest.json</code> — Sink가 "이만큼 수집했다"고 기록</td><td>그 기록을 검증하는 계약이 <b>없다</b>. 산출물 8종은 전부 계약이 있는데 <b>유일한 입력만 없다</b></td></tr>
+<tr><td>M7</td><td><code>METRIC_SPECS</code>의 <code>"computable"</code> — "이 지표는 계산 가능하다"</td><td>그 선언이 실제로 구현·게시됐는지 대조하는 <b>테스트가 없다</b></td></tr>
+<tr><td>M9</td><td>skip count 주석 — "이 숫자가 회귀의 증거다"</td><td>그 숫자에 <b>임계값 비교가 없다</b>. 사람이 로그를 읽어야만 의미가 생긴다</td></tr>
+<tr><td>M10</td><td>doctest 18개 — "이 예제가 이 값을 낸다"</td><td>어떤 러너도 <b>실행하지 않는다</b>. 실제로 1개가 이미 실패 중이었다</td></tr>
+</table>
+<div class="note info">
+<p><b>이 코드베이스가 잘하는 것은 "값을 계약으로 강제하는 것"이고, 빠뜨린 것은
+"그 계약·선언 자체가 실제와 일치하는지 대조하는 상위 장치"다.</b></p>
+<p>이 프로젝트가 스스로 만든 <b>"세 번째 값"</b> 규율(<code>vacuous</code> · <code>met: null</code> ·
+<code>verification: not_run</code> · 계산 불가)은 <b>값 계층에서는 철저한데 선언 계층에는 아직 적용되지 않았다.</b></p>
+<p><b>공통 처방:</b> 넷 다 "값을 다시 계산"하는 수정이 아니라 <b>"선언 vs 실제"를 자동 대조하는 검사 하나씩</b>을
+추가하면 닫힌다 — <code>manifest.schema.json</code> 신설 · <code>METRIC_SPECS</code>↔게시물 대조 테스트 ·
+skip-count 임계값 · doctest를 <code>unittest discover</code>에 편입.</p>
+</div>
+
+<h2>10. 확인했으나 깨끗했던 것</h2>
+<p>gap 19건과 finding 20건만 나열하면 이 저장소가 전부 망가진 것처럼 읽힌다.
+<b>무엇을 대조했고 깨끗했는지</b>도 결과이며, 다음 사이클이 같은 대조를 처음부터 다시 하지 않게 한다.</p>
+<table>
+<tr><th>대상</th><th>결과</th></tr>
+<tr><td><code>dashboard/AGENTS.md</code> DG-1~DG-19</td><td><b>19/19 전수 실재, 누락 0건.</b> <code>CLAUDE.md</code>도 <code>@AGENTS.md</code> 위임(<code>ISO-004</code>) 준수</td></tr>
+<tr><td><code>types.ts</code>(488줄) ↔ 계약 7종 필드 단위</td><td><b>구조적 불일치 0건.</b> <code>ReasonCode</code> 9종 · <code>HeadlineCode</code> 8종 일치</td></tr>
+<tr><td><code>metric.ts</code>(226줄) 금지 패턴</td><td><b>실행 코드 0건.</b> <code>countText()</code>가 <code>observed_count: 0</code>("0" 출력)과 <code>denominator: null</code>(절 삭제)을 정확히 구분</td></tr>
+<tr><td><code>paths.ts</code> <code>ponytail:</code> 마커</td><td><b>실재</b> — 업그레이드 트리거 포함(W5 DoD 충족)</td></tr>
+<tr><td>USP-1 핵심 메커니즘 (계산 불가 ≠ 0)</td><td><b>실제 <code>results/</code>에서 라이브 확인.</b> 계산 불가 셀 숫자 누출 0건, 측정된 0(18개)이 <code>—</code>로 뭉개진 사례 0건</td></tr>
+<tr><td>파트 격리 · 창구 중립성</td><td><code>measurement</code>가 <code>simulator</code>/<code>decision</code>/<code>diagnostics</code>를 참조하지 않고, <code>kpi.py</code>/<code>economics.py</code>가 출처 문자열을 모른다 — <b>위반 0건</b></td></tr>
+<tr><td>GATE 1 <code>canonical_files</code> SHA-256</td><td><b>4건 직접 재계산, 전건 일치</b> — 봉인 기록이 실제 파일 상태를 정확히 반영</td></tr>
+<tr><td>육안 확인 2건 → 자동화 대체</td><td>대비 8조합(브라우저 <code>getComputedStyle</code> + WCAG 상대휘도 재계산, <b>8/8이 4.5:1 이상</b>) · Pretendard(FontFace 로드 · computed font-family · <code>.woff2</code> 응답 <b>3중</b>)</td></tr>
+</table>
+
+<h2>11. 미수집 · 미실행 (정직 공개)</h2>
+<p>이 저장소 규율은 <i>"미실행 검증을 통과로 표시하지 않는다"</i>이며, <b>실패에도 대칭 적용</b>된다.
+아래는 <b>확인하지 못한 것</b>이며 통과로 읽어서는 안 된다.</p>
+<table>
+<tr><th>항목</th><th>사유</th></tr>
+<tr><td><b>Python 3.10에서의 실제 <code>ValueError</code> 재현</b> (M3)</td><td>이 머신에 3.10 인터프리터가 없다(3.12.4 · 3.14.6만 존재). 3.10 실패는 <b>CPython 문서 근거</b>(bpo-35829)이지 실행 결과가 아니다</td></tr>
+<tr><td>F3의 실시간 레이스 타이밍</td><td>미재현 — 사전 선점만으로 결함 성립이 충분하다고 판단</td></tr>
+<tr><td>다른 OS 계정 간 권한 경계</td><td>미테스트</td></tr>
+<tr><td>GitHub 브랜치 보호 규칙</td><td>확인 불가 — private + Free 플랜이라 API <code>403</code></td></tr>
+<tr><td>push 권한자 목록</td><td>확인 불가 — 토큰 스코프 부족</td></tr>
+<tr><td>대표 장면(AC-12) 시각 증거</td><td><b>커밋된 재현 경로가 전부 막혀 있다</b> — §12 A-3 참조</td></tr>
+<tr><td>W4(IP · 연구)</td><td>사용자 결정으로 <code>skipped</code></td></tr>
+<tr><td>리팩토링(Hananiah)</td><td>사용자 결정으로 생략 — §6</td></tr>
+</table>
+
+<h2>12. 후속 액션</h2>
+
+<h3>A. 사용자 판단이 필요한 것</h3>
+<table>
+<tr><th style="width:44px">#</th><th>항목</th><th>비고</th></tr>
+<tr><td>A-1</td><td><b>이슈 <code>#43</code>·<code>#44</code> close 여부</b></td><td>PR <code>#50</code>(09-10 13:34) · <code>#51</code>(14:03) 머지 완료. <code>GIT_WORKFLOW.md</code> §6이 <b>개별 승인</b> 대상으로 둠. charter §3.1 ②의 마지막 미결</td></tr>
+<tr><td>A-2</td><td><b>PR #57 머지 여부</b></td><td>검증 3종 전부 blocking 0. <code>Refs</code>로만 걸어 두었으므로 머지해도 이슈는 자동으로 닫히지 않는다</td></tr>
+<tr><td>A-3</td><td><b>major 10 · Medium 4의 이슈화</b></td><td>수정은 전부 <code>src/measurement/</code>(Phillip 소유)라 이번 웨이브에서 하지 않았다</td></tr>
+<tr><td>A-4</td><td>W6 산출물 커밋 여부</td><td><code>09-docs/</code> · <code>10-review/</code> · <code>10-security/</code> · <code>11-qa/</code> · <code>12-report/</code> · <code>e2e/</code>(소스 13파일)가 미추적 상태</td></tr>
+</table>
+
+<h3>B. GATE 2 이전에 닫아야 하는 것</h3>
+<ol>
+<li><b>M1 — <code>manifest.schema.json</code> 신설 + <code>_read_manifest()</code>에서 검증.</b>
+<code>sink.py</code> 원자적 쓰기로 대체하지 말 것(§8.1).</li>
+<li><b>M4 / F8 — 키 채우기 · <code>and</code> 조건 · <u>필드 이름</u>을 함께.</b> 키만 채우면 <b>오늘도 경보가 뜨지 않는다</b>(<code>lock_items_pending</code>이 이미 0). 이름-의미 불일치가 오독의 원인이므로 이름도 고친다(§8.2).</li>
+<li><b>M5 — <code>ConfigError</code> import 한 줄.</b> 수정 비용이 사실상 0인데 방어가 필요한 순간 더 나쁜 크래시로 바뀐다.</li>
+<li><b>M7 — <code>METRIC_SPECS</code> ↔ 게시물 대조 테스트.</b> 카탈로그 양방향 불일치(gap 6)와 같은 뿌리.</li>
+<li><b>M2·M6 —</b> 분모 0 가드 추가 · JSON Schema에 이름·고유성 검증 추가.</li>
+<li><b>F1 —</b> <code>resolveArtifactPath()</code>에 realpath 재검증 추가(심층방어).</li>
+</ol>
+
+<h3>C. 저비용·즉시</h3>
+<ul>
+<li><b>F2</b> — <code>dashboard/package.json</code>의 <code>dev</code>/<code>start</code>에 <code>-H 127.0.0.1</code> <b>한 줄</b></li>
+<li><b>F4</b> — Dependabot alerts · Secret scanning <b>설정 토글</b>(private 무료)</li>
+<li><b>M10</b> — doctest를 <code>unittest discover</code>에 편입.
+<span class="p-warn">주의:</span> <code>isolation.yml</code>은 의존성을 설치하지 않으므로(<code>ISO-005</code>)
+<b>의존성 없는 환경에서 import 가능한 모듈만</b> 대상에 넣어야 한다. 확인 없이 추가하면 CI가 <code>ImportError</code>로 죽는다</li>
+<li><b>M8</b> — <code>discount_cost_krw</code> 제거. <code>ECONOMIC_RULE_v1</code>이 아직 <code>PENDING</code>(미Lock)이라
+<b>지금 정리하면 <code>FREEZE-003</code> 비용을 피한다</b></li>
+<li><b>gap 2·12</b> — "2,020,000 → 2,170,000", "47종 → 46종"(계약 스키마 <code>description</code> 포함)</li>
+<li><b>gap 9</b> — <code>AGENTS.md</code> "프로젝트 현황" 갱신. <b>PR #57 머지 시 특히 시급</b> —
+<code>main</code>을 처음 여는 사람이 이 문단을 믿으면 이미 구현된 측정 계층·대시보드를 없는 것으로 오인한다</li>
+<li><b>A-3 재현 경로 복구</b> — <code>04-architecture/examples/</code> 픽스처 재생성.
+스크린샷(<code>dashboard/screenshots/</code>)과 <code>results/</code>가 둘 다 gitignore(D-17)이고
+유일하게 커밋된 픽스처가 M-06 계약보다 낡아(<code>value_formatted</code> 누락 3곳·9곳),
+<b>새로 클론한 사람이 대표 장면에 도달할 커밋된 경로가 지금 없다</b>.
+<code>e2e/tests/fixture-contract-freshness.spec.ts</code>가 red로 고정해 두었고 <b>재생성하면 자동 green</b>이 된다</li>
+</ul>
+
+<h2>13. Release 게이트 판정</h2>
+<div class="note warn">
+<p style="font-size:17px;margin-bottom:10px"><b>판정: <span class="pill p-warn" style="font-size:15px">CONCERNS</span></b></p>
+<p><b>PASS가 아닌 이유</b> — 비차단이지만 <b>기록해야 할 리스크가 남아 있다</b>:
+major 10 · Medium 4가 GATE 2 이전에 닫혀야 하고, 그중 <b>2건은 명백해 보이는 수정이 구멍을 닫지 못한다</b>(§8).
+charter §3.1 ②의 이슈 정리가 미완이고(A-1), 대표 장면 재현 경로가 막혀 있다(A-3).</p>
+<p><b>FAIL이 아닌 이유</b> — <b>독립된 검증 3종이 각자 blocking 0을 판정</b>했다.
+스토리 11/11 <code>done</code>, 테스트 407 OK(기준선 46 회귀 0), 계약 위반 0건,
+파트 격리·창구 중립성 위반 0건, Critical·High 취약점 0건.
+발견된 결함은 전부 (a) 현재 데이터를 틀리게 만들지 않거나 (b) 아직 도달하지 않는 경로에 있다.</p>
+<p><b>따라서 리스크를 <code>risks[]</code>에 기록한 뒤 진행한다.</b></p>
+</div>
+
+<div class="foot">
+<p><b>출처</b> —
+<code>_state/manifest.json</code> ·
+<code>_state/wave-log.md</code>(리드 판정 D-1~D-25) ·
+<code>00-plan/charter.md</code> §3.1 ·
+<code>03-story-engineering/story-*.md</code> ·
+<code>09-docs/design-vs-impl-gaps.md</code>(705줄 · gap 19) ·
+<code>10-review/code-review.md</code>(419줄 · 20건) · <code>blocking-issues.md</code> ·
+<code>10-security/security-audit-kr.md</code> · <code>security-findings.json</code>(SARIF) ·
+<code>11-qa/qa-summary.md</code> · <code>latency-report.md</code> · <code>e2e/report.json</code></p>
+<p>W6 검증 3종은 <b>제품 코드를 한 글자도 수정하지 않았다</b> —
+<code>git status --porcelain -- src/ dashboard/ config/ tests/ docs/ .github/</code> 빈 출력로 확인.</p>
+<p>BATHOS 사이클 C1 · 리드 Paul · 2026-09-14</p>
+</div>
+
+</div>
+</body>
+</html>

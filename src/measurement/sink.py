@@ -27,7 +27,7 @@ import hashlib
 import json
 from collections import Counter
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Iterable, Iterator
@@ -37,6 +37,18 @@ from src.measurement import schema as sc
 MANIFEST_NAME = "manifest.json"
 REJECT_LOG_NAME = "rejected.jsonl"
 DEFAULT_CHUNK_ROWS = 200_000
+
+KST = timezone(timedelta(hours=9), "KST")
+"""`schema.TIMEZONE` ("Asia/Seoul") 을 고정 오프셋으로 표현한 것.
+
+`zoneinfo.ZoneInfo("Asia/Seoul")` 대신 고정 오프셋을 쓴다. 한국은 1988 년 이후
+서머타임이 없으므로 우리가 다루는 모든 시각에서 둘은 같은 값을 내고, 고정 오프셋은
+`tzdata` 패키지가 없는 환경(일부 Windows·슬림 컨테이너)에서도 동작한다 — CI 에
+설치 단계가 없으므로(ISO-005) 그게 중요하다."""
+
+# ponytail: fixed +09:00 offset ignores pre-1988 Korean DST and any future rule change;
+# swap to zoneinfo.ZoneInfo("Asia/Seoul") and add tzdata to requirements.txt if an event
+# timestamp before 1988-10-09 ever needs ingesting, or if Korea reintroduces DST.
 
 
 # ── 저장 형식 ───────────────────────────────────────────────────────────────
@@ -116,8 +128,13 @@ class EventSink:
             sink.write_events(records)
         # __exit__ 에서 flush + manifest 기록
 
-    이벤트는 `timestamp` 의 날짜로 파티션한다.
+    이벤트는 **KST 기준** `timestamp` 의 날짜로 파티션한다.
     `data/raw/events/date=2025-10-01/part-0000.jsonl.gz`
+
+    **append 는 인스턴스를 넘어서도 성립한다.** 같은 root 에 새 `EventSink` 를 만들어
+    다시 기록하면 파트 번호가 디렉터리의 현재 상태에서 이어진다 — 시뮬레이터가
+    `advance()` 를 반복하며 매번 새 Sink 로 기록하기 때문이다 (SIM-012 분할 불변성).
+    `_next_part_index()` 참조.
     """
 
     def __init__(
@@ -132,7 +149,18 @@ class EventSink:
         self.format = resolve_format(fmt)
         self.chunk_rows = chunk_rows
         self.strict = strict
-        """strict 면 스키마 위반 레코드를 거부한다. False 면 기록하되 표시한다."""
+        """strict 면 스키마 위반 레코드를 거부한다. False 면 기록하되 표시한다.
+
+        `strict=False` 의 정확한 뜻은 **"수집이 죽지 않는다"** 이지 "무효 데이터를 전부
+        저장한다" 가 아니다. 두 층으로 갈린다:
+
+          - `event_type` 이 유효하면 → 위반을 보고하면서 저장한다 (관용)
+          - `event_type` 이 무효·부재면 → 저장하지 않는다. 커버리지 행도 요구사항
+            매트릭스도 만들 수 없으므로 저장할 의미가 없다. `_is_observable()` 참조
+
+        관용 모드에서 통과시킨 레코드는 `WriteResult` 의 `accepted` 와 `rejected` **양쪽**
+        에 계상된다. 의도된 것이다 — "받아들였다"와 "문제가 있었다"는 서로 배타적이지
+        않고, `accepted` 를 줄이면 저장된 행 수와 어긋난다."""
 
         self._buffer: list[dict[str, object]] = []
         self._rejected: list[dict[str, object]] = []
@@ -143,7 +171,12 @@ class EventSink:
         }
         self._rows_written = 0
         self._files: list[Path] = []
-        self._part_index: Counter[str] = Counter()
+        self._part_index: dict[str, int] = {}
+        """date_key → 다음에 쓸 파트 번호.
+
+        `Counter` 가 아니라 `dict` 다. `Counter` 는 없는 키에 0 을 돌려주므로
+        "아직 디렉터리를 안 봤다"와 "0 번부터 쓰면 된다"를 구분할 수 없고, 그 구분이
+        사라지는 것이 바로 D1-1(파티션 덮어쓰기)이었다. `in` 검사가 필요하다."""
         self.root.mkdir(parents=True, exist_ok=True)
 
     # ── 수집 ────────────────────────────────────────────────────────────
@@ -153,9 +186,12 @@ class EventSink:
             problems = sc.validate_event(record)
             if problems:
                 result.rejected += 1
+                # 레코드당 첫 문제만 요약에 담는다. 전체 목록은 rejected.jsonl 에 있다.
                 result.problems.extend(problems[:1])
                 self._rejected.append({"record": record, "problems": problems})
-                if self.strict:
+                # strict 면 무엇이든 거부한다. 관용 모드에서도 event_type 이 없거나
+                # 무효면 거부한다 — 그것 없이는 _observe 도 파티션도 불가능하다.
+                if self.strict or not _is_observable(record):
                     continue
             self._observe(record)
             self._buffer.append(record)
@@ -165,6 +201,12 @@ class EventSink:
         return result
 
     def _observe(self, record: dict[str, object]) -> None:
+        """`_is_observable(record)` 가 참인 레코드만 받는다 — 호출부가 보장한다.
+
+        `record.get("event_type", "unknown")` 같은 방어를 여기 넣지 않는다. 그러면
+        커버리지 집계에 스키마에 없는 가짜 이벤트 종류가 생기고, 거부됐어야 할
+        레코드가 통계에 섞인 채 조용히 도는 쪽이 크래시보다 나쁘다.
+        """
         self._source_counts[event_source(record).value] += 1
         event_type = sc.EventType(record["event_type"])
         self._event_type_counts[event_type.value] += 1
@@ -177,11 +219,23 @@ class EventSink:
 
     # ── 저장 ────────────────────────────────────────────────────────────
     def flush(self) -> None:
+        """버퍼를 KST 날짜별 파티션으로 내린다.
+
+        저장되는 `timestamp` 와 파티션 날짜를 **한 번의 파싱에서** 함께 만든다
+        (`_normalize_timestamp`). 따로 계산하면 한쪽만 KST 로 바뀌어 파티션은
+        `date=2025-10-02` 인데 저장된 값은 `…23:30:00Z` 가 되고, 되읽어 날짜를 다시
+        뽑으면 10-01 이 나온다. 그 어긋남이 `DQ-06` 을 자기 저장물에서 실패시킨다.
+        """
         if not self._buffer:
             return
         by_date: dict[str, list[dict[str, object]]] = {}
         for record in self._buffer:
-            by_date.setdefault(_partition_key(record["timestamp"]), []).append(record)
+            kst_text, date_key = _normalize_timestamp(record["timestamp"])
+            if kst_text != record["timestamp"]:
+                # 호출자의 dict 를 제자리에서 고치지 않는다. 값이 실제로 바뀔 때만
+                # 복사하므로 이미 KST 인 입력(대다수)에는 복사 비용이 없다.
+                record = {**record, "timestamp": kst_text}
+            by_date.setdefault(date_key, []).append(record)
         for date_key, rows in sorted(by_date.items()):
             self._write_partition(date_key, rows)
         self._rows_written += len(self._buffer)
@@ -190,6 +244,10 @@ class EventSink:
     def _write_partition(self, date_key: str, rows: list[dict[str, object]]) -> None:
         directory = self.root / "events" / f"date={date_key}"
         directory.mkdir(parents=True, exist_ok=True)
+        if date_key not in self._part_index:
+            # 이 인스턴스가 이 날짜를 처음 쓸 때만 디렉터리를 본다. 이후로는 캐시를
+            # 증가시키므로 스캔은 (인스턴스 × 날짜) 당 1 회다.
+            self._part_index[date_key] = _next_part_index(directory)
         index = self._part_index[date_key]
         self._part_index[date_key] += 1
         path = directory / f"part-{index:04d}.{self.format.value}"
@@ -226,7 +284,9 @@ class EventSink:
         }
         return {
             "schema_version": sc.SCHEMA_VERSION,
-            "created_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+            # KST. 이전에는 UTC 였고, 그것은 manifest 가 같은 파일에서 선언하는
+            # "timezone": "Asia/Seoul" 과 어긋나는 자기 규약 위반이었다.
+            "created_at": datetime.now(KST).isoformat(timespec="seconds"),
             "format": self.format.value,
             "partition": "date",
             "timezone": sc.TIMEZONE,
@@ -268,15 +328,90 @@ class EventSink:
 _COLUMNS = [f.name for f in sc.EVENT_FIELDS]
 
 
-def _partition_key(timestamp: object) -> str:
-    """ISO 8601 문자열 또는 datetime 에서 `YYYY-MM-DD` 를 뽑는다."""
-    if isinstance(timestamp, datetime):
-        return timestamp.date().isoformat()
-    text = str(timestamp)
+def _is_observable(record: dict[str, object]) -> bool:
+    """`_observe()` 와 파티션 계산이 가능한 레코드인가.
+
+    `event_type` 이 `EventType` 16종 중 하나여야 한다. 이것이 없으면 요구사항
+    매트릭스(`sc.requirement`)를 조회할 수 없어 커버리지 행을 만들 수 없고, 저장해도
+    아무 지표에 기여하지 못한다. 그래서 관용 모드에서도 저장하지 않는다.
+
+        >>> _is_observable({"event_type": "purchase"})
+        True
+        >>> _is_observable({"event_type": "teleport"}), _is_observable({})
+        (False, False)
+    """
     try:
-        return datetime.fromisoformat(text).date().isoformat()
-    except ValueError as error:
-        raise ValueError(f"timestamp 를 해석할 수 없다: {timestamp!r}") from error
+        sc.EventType(record.get("event_type"))
+    except ValueError:
+        return False
+    return True
+
+
+def _next_part_index(directory: Path) -> int:
+    """디렉터리에 있는 가장 큰 파트 번호 + 1. 비어 있으면 0.
+
+    **개수가 아니라 최댓값**을 본다. 중간 파일이 지워졌으면 개수는 번호와 달라지고,
+    개수를 쓰면 살아 있는 파일을 덮어쓴다.
+
+    확장자는 무시하고 번호만 읽는다 — 한 디렉터리에 `part-0000.jsonl.gz` 와
+    `part-0000.parquet` 가 섞이면(pyarrow 유무가 다른 실행) 번호가 충돌하기 때문이다.
+
+        part-0000.jsonl.gz · part-0002.parquet  →  3
+        (빈 디렉터리)                            →  0
+    """
+    # ponytail: linear glob over one partition's parts, run once per (instance, date);
+    # at the 20k x 30d bench this is 30 scans of <=1 file each and invisible in the
+    # 78.7s total. If a partition ever holds thousands of parts (streaming ingest, or
+    # chunk_rows lowered a lot) and bench_sink.py time regresses past 2x baseline,
+    # persist the next index in manifest.json instead of re-deriving it from the dir.
+    highest = -1
+    for path in directory.glob("part-*"):
+        number = path.name.split(".", 1)[0].removeprefix("part-")
+        if number.isdigit():
+            highest = max(highest, int(number))
+    return highest + 1
+
+
+def _normalize_timestamp(timestamp: object) -> tuple[str, str]:
+    """`(KST 표기 문자열, 파티션 날짜)` 를 **한 번의 파싱**에서 만든다.
+
+    이 함수가 하나인 이유가 D1-3 수정의 요점이다. 저장 값과 파티션 날짜를 따로
+    계산하면 둘이 어긋날 수 있고, 어긋나는 순간 되읽기 정합성과 `DQ-06` 이 깨진다.
+    한 튜플로 돌려주면 어긋날 자리가 없다.
+
+        "2025-10-01T23:30:00.000Z"       → ("2025-10-02T08:30:00.000+09:00", "2025-10-02")
+        "2025-10-01T09:00:00.000+09:00"  → ("2025-10-01T09:00:00.000+09:00", "2025-10-01")
+
+    `ValueError` 를 던지는 경우가 둘 있고 **둘 다 조용히 넘기지 않는다**:
+      - 파싱 불가 (`"어제"`) — `validate_event()` 가 일부러 통과시킨 것이 여기서 걸린다
+      - 오프셋 없음 — 보통 `validate_event()` 가 먼저 거부하지만, `strict=False` 로
+        통과한 경우와 naive `datetime` 객체가 직접 들어온 경우가 남는다
+    """
+    if isinstance(timestamp, datetime):
+        moment = timestamp
+    else:
+        try:
+            moment = datetime.fromisoformat(str(timestamp))
+        except ValueError as error:
+            raise ValueError(f"timestamp 를 해석할 수 없다: {timestamp!r}") from error
+    if moment.tzinfo is None:
+        raise ValueError(
+            f"timestamp 에 UTC 오프셋이 없어 순간을 특정할 수 없다: {timestamp!r}"
+        )
+    moment = moment.astimezone(KST)
+    return moment.isoformat(timespec=_ISOFORMAT_TIMESPEC), moment.date().isoformat()
+
+
+_ISOFORMAT_TIMESPEC = "milliseconds"
+"""`sc.TIMESTAMP_PRECISION` 이 선언한 정밀도를 `isoformat()` 인자로 옮긴 것.
+
+`datetime.isoformat()` 은 이 문자열을 그대로 받는다. 정밀도를 고정하지 않으면 마이크로초가
+0 인 시각만 `.000` 이 빠져 같은 데이터가 다른 바이트를 내고 `NFR-001` 대조가 흔들린다."""
+
+assert _ISOFORMAT_TIMESPEC == sc.TIMESTAMP_PRECISION, (
+    "저장 정밀도가 schema.TIMESTAMP_PRECISION 선언과 어긋난다 — "
+    f"{_ISOFORMAT_TIMESPEC!r} vs {sc.TIMESTAMP_PRECISION!r}"
+)
 
 
 def _write_rows(path: Path, rows: list[dict[str, object]], fmt: SinkFormat) -> None:

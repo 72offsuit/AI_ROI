@@ -13,7 +13,8 @@
 | 항목 | 값 |
 |---|---|
 | 스키마 버전 | `event-schema-v1.0-draft` — GATE 1에서 `event-schema-v1.0`으로 Lock |
-| 타임존 | `Asia/Seoul` 단일. UTC 혼재 불허 |
+| 타임존 | `Asia/Seoul` 단일 — **저장 기준**. 입력은 오프셋이 붙은 어떤 표기든 받아 KST 로 정규화한다 |
+| 오프셋 없는 timestamp | **거부**. 순간을 특정할 수 없으므로 추측하지 않는다 |
 | timestamp 정밀도 | milliseconds. ISO 8601 + offset (`2025-10-01T09:00:00.000+09:00`) |
 | 세션 만료 | 무활동 30분 |
 
@@ -48,6 +49,34 @@
 메타 4종(`service_version`·`customer_version`·`simulator_version`·`random_seed`)은
 재현성(SRS NFR-001 · SIM-011)을 위해 기록하며, 서비스 UI가 기록할 때는
 `simulator_version`·`random_seed`가 null이다.
+
+## 허용값
+
+`validate_event()` 가 **값이 있는 필드에만** 적용한다 — `None` 은 결손이지
+허용값 위반이 아니다. 둘을 섞으면 "아직 안 준 것"과 "잘못 준 것"이 한 줄로 보인다.
+
+| 필드 | 허용값 |
+|---|---|
+| `category` | `fresh_food` · `meal_solution` · `dairy` · `beverage` · `household` |
+| `page_type` | `home` · `list` · `search` · `detail` · `cart` · `checkout` · `complete` · `history` |
+
+**카테고리 어휘는 영문 코드가 정본이다** (SRS `COM-001`). `docs/data_spec.html` §6.1 의
+한글(신선식품·간편식·유제품·음료·생활용품)은 표 가독성을 위한 표기이며,
+**표시명 매핑은 UI 책임**이다 — 측정 계층은 코드만 안다.
+
+## 지표 상태 어휘
+
+게시물(`results/`)이 쓰는 어휘다. 정본은
+`.agent-team/04-architecture/schemas/common.schema.json` 이고,
+`tests/test_schema.py TestContractVocabulary` 가 그 파일을 읽어 대조한다.
+
+| Enum | 값 |
+|---|---|
+| `MetricStatus` | `ok` · `unconfirmed` · `unavailable` · `blocked` · `not_run` |
+| `ReasonCode` | `NO_SOURCE_EVENT` · `MISSING_FIELD` · `NO_COST_BASIS` · `NEEDS_TWO_STRATEGIES` · `NEEDS_MODEL_OUTPUT` · `PARAM_UNCONFIRMED` · `BLOCKED` · `NOT_RUN` · `PRECONDITION_MISSING` |
+
+`unavailable`(근거가 없어 계산 못 했다)과 `not_run`(계산을 시도하지 않았다)은
+**다른 상태다.** 합치면 관측하지 않은 것을 관측했다고 말하게 된다.
 
 ## 이벤트별 필수 / 선택 필드
 

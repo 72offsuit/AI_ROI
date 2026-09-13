@@ -7,59 +7,250 @@
     "andrew": "W5-C · 대시보드 전체",
     "sealed": "C1 W5 에서 아무도 쓰지 않는다 (W6 Matthias + 사용자 승인 또는 전면 금지)",
     "timothy": "W6 전용 (README · GIT_WORKFLOW · 기존 AGENTS.md)",
-    "team": "W5 산출물이 아닌 팀 작업 산출물 (.agent-team/)"
+    "team": "W5 산출물이 아닌 팀 작업 산출물 (.agent-team/)",
+    "matthias": "W6 QA · 독립 E2E 하네스 (e2e/). 제품 코드는 읽기만 한다"
   },
   "rules": [
-    { "pattern": "tests/test_isolation.py",            "owner": "sealed",   "why": "격리 규칙 헌법. W6 Matthias + 사용자 승인" },
-    { "pattern": ".github/workflows/isolation.yml",    "owner": "sealed",   "why": "위 검사의 CI 강제. 편집하지 않는다" },
-    { "pattern": "src/simulator/**",                   "owner": "sealed",   "why": "C1 범위 밖. 아무도 안 된다" },
-    { "pattern": "src/decision/**",                    "owner": "sealed",   "why": "동일" },
-    { "pattern": "src/diagnostics/**",                 "owner": "sealed",   "why": "동일" },
-    { "pattern": "src/orchestration/**",               "owner": "sealed",   "why": "동일" },
-    { "pattern": "Plan/**",                            "owner": "sealed",   "why": "서브모듈 · 기획 정본" },
-    { "pattern": "src/AGENTS.md",                      "owner": "timothy",  "why": "기존 지침 정본" },
-    { "pattern": "src/CLAUDE.md",                      "owner": "timothy",  "why": "동일" },
-    { "pattern": "src/measurement/AGENTS.md",          "owner": "timothy",  "why": "동일" },
-    { "pattern": "src/measurement/CLAUDE.md",          "owner": "timothy",  "why": "동일" },
-    { "pattern": "AGENTS.md",                          "owner": "timothy",  "why": "동일" },
-    { "pattern": "CLAUDE.md",                          "owner": "timothy",  "why": "동일" },
-    { "pattern": "README.md",                          "owner": "timothy",  "why": "W5 중 누구도 쓰지 않는다" },
-    { "pattern": "docs/GIT_WORKFLOW.md",               "owner": "timothy",  "why": "BOOTSTRAP 절차로 W6 이 생성" },
-    { "pattern": "tests/test_dashboard_isolation.py",  "owner": "sealed",   "why": "격리 검사 체계 확장. W6 Matthias + 사용자 승인 (D-22)" },
-    { "pattern": ".github/workflows/tests-with-deps.yml", "owner": "sealed", "why": "CI 신설. 사용자 확인 후 (D-19)" },
-
-    { "pattern": "src/measurement/*.py",               "owner": "phillip",  "why": "측정 계층 구현" },
-    { "pattern": "config/*.yaml",                      "owner": "phillip",  "why": "economic_config · gate1_lock" },
-    { "pattern": "requirements.txt",                   "owner": "phillip",  "why": "Python 런타임 의존성" },
-    { "pattern": "requirements-dev.txt",               "owner": "phillip",  "why": "Python 개발 의존성" },
-    { "pattern": ".gitignore",                         "owner": "phillip",  "why": "단독 소유. Andrew 가 필요로 하는 항목은 dependency-plan.md §5 에 미리 규정" },
-    { "pattern": "docs/measurement_contract.md",       "owner": "phillip",  "why": "이슈 #45 가 지정한 파일명" },
-    { "pattern": "docs/gate1_checklist.md",            "owner": "phillip",  "why": "이슈 #49 가 지정한 파일명" },
-    { "pattern": "docs/contracts/**",                  "owner": "phillip",  "why": "게시 계약 JSON Schema 정본" },
-    { "pattern": "docs/event_schema.md",               "owner": "phillip",  "why": "schema.py 에서 생성. #54 로 재생성" },
-    { "pattern": "scripts/gen_event_schema_doc.py",    "owner": "phillip",  "why": "위 문서 생성기" },
-    { "pattern": "scripts/bench_sink.py",              "owner": "phillip",  "why": "Sink 벤치" },
-    { "pattern": "tests/test_schema.py",               "owner": "phillip",  "why": "#54" },
-    { "pattern": "tests/test_sink.py",                 "owner": "phillip",  "why": "#53" },
-    { "pattern": "tests/test_neutrality.py",           "owner": "phillip",  "why": "창구 중립성 N-1·N-2·N-4" },
-    { "pattern": "tests/test_economics.py",            "owner": "phillip",  "why": "#47" },
-    { "pattern": "tests/test_kpi_*.py",                "owner": "phillip",  "why": "#46" },
-    { "pattern": "tests/test_quality_*.py",            "owner": "phillip",  "why": "#48" },
-    { "pattern": "tests/test_publish_*.py",            "owner": "phillip",  "why": "T2.7" },
-    { "pattern": "tests/test_freeze.py",               "owner": "phillip",  "why": "#49" },
-    { "pattern": "tests/test_config_loader.py",        "owner": "phillip",  "why": "config_loader" },
-    { "pattern": "tests/__init__.py",                  "owner": "phillip",  "why": "기존 파일" },
-    { "pattern": "src/measurement/__pycache__/**",     "owner": "phillip",  "why": "생성물 (.gitignore 대상)" },
-    { "pattern": "tests/__pycache__/**",               "owner": "phillip",  "why": "생성물 (.gitignore 대상)" },
-
-    { "pattern": "dashboard/**",                       "owner": "andrew",   "why": "대시보드 전체. AGENTS.md·CLAUDE.md 최초 작성 포함 (리드 판정 D-6)" },
-
-    { "pattern": ".agent-team/**",                     "owner": "team",     "why": "웨이브 산출물. W5 제품 코드가 아니다" },
-    { "pattern": "docs/data_spec.html",                "owner": "sealed",   "why": "정본 사양. C1 에서 수정하지 않는다" },
-    { "pattern": "docs/data_spec.pdf",                 "owner": "sealed",   "why": "생성물 · .gitignore 대상" },
-    { "pattern": ".gitmodules",                        "owner": "sealed",   "why": "서브모듈 설정. 수정하지 않는다" },
-    { "pattern": ".DS_Store",                          "owner": "sealed",   "why": "OS 생성물 · .gitignore 대상" },
-    { "pattern": "docker-compose.yml",                 "owner": "phillip",  "why": "도입 결정 D-20 시에만. Andrew 는 리뷰만 하고 쓰지 않는다" }
+    {
+      "pattern": "tests/test_isolation.py",
+      "owner": "sealed",
+      "why": "격리 규칙 헌법. W6 Matthias + 사용자 승인"
+    },
+    {
+      "pattern": ".github/workflows/isolation.yml",
+      "owner": "sealed",
+      "why": "위 검사의 CI 강제. 편집하지 않는다"
+    },
+    {
+      "pattern": "src/simulator/**",
+      "owner": "sealed",
+      "why": "C1 범위 밖. 아무도 안 된다"
+    },
+    {
+      "pattern": "src/decision/**",
+      "owner": "sealed",
+      "why": "동일"
+    },
+    {
+      "pattern": "src/diagnostics/**",
+      "owner": "sealed",
+      "why": "동일"
+    },
+    {
+      "pattern": "src/orchestration/**",
+      "owner": "sealed",
+      "why": "동일"
+    },
+    {
+      "pattern": "Plan/**",
+      "owner": "sealed",
+      "why": "서브모듈 · 기획 정본"
+    },
+    {
+      "pattern": "src/AGENTS.md",
+      "owner": "timothy",
+      "why": "기존 지침 정본"
+    },
+    {
+      "pattern": "src/CLAUDE.md",
+      "owner": "timothy",
+      "why": "동일"
+    },
+    {
+      "pattern": "src/measurement/AGENTS.md",
+      "owner": "timothy",
+      "why": "동일"
+    },
+    {
+      "pattern": "src/measurement/CLAUDE.md",
+      "owner": "timothy",
+      "why": "동일"
+    },
+    {
+      "pattern": "AGENTS.md",
+      "owner": "timothy",
+      "why": "동일"
+    },
+    {
+      "pattern": "CLAUDE.md",
+      "owner": "timothy",
+      "why": "동일"
+    },
+    {
+      "pattern": "README.md",
+      "owner": "timothy",
+      "why": "W5 중 누구도 쓰지 않는다"
+    },
+    {
+      "pattern": "docs/GIT_WORKFLOW.md",
+      "owner": "timothy",
+      "why": "BOOTSTRAP 절차로 W6 이 생성"
+    },
+    {
+      "pattern": "tests/test_dashboard_isolation.py",
+      "owner": "sealed",
+      "why": "격리 검사 체계 확장. W6 Matthias + 사용자 승인 (D-22)"
+    },
+    {
+      "pattern": ".github/workflows/tests-with-deps.yml",
+      "owner": "sealed",
+      "why": "CI 신설. 사용자 확인 후 (D-19)"
+    },
+    {
+      "pattern": "src/measurement/*.py",
+      "owner": "phillip",
+      "why": "측정 계층 구현"
+    },
+    {
+      "pattern": "config/*.yaml",
+      "owner": "phillip",
+      "why": "economic_config · gate1_lock"
+    },
+    {
+      "pattern": "requirements.txt",
+      "owner": "phillip",
+      "why": "Python 런타임 의존성"
+    },
+    {
+      "pattern": "requirements-dev.txt",
+      "owner": "phillip",
+      "why": "Python 개발 의존성"
+    },
+    {
+      "pattern": ".gitignore",
+      "owner": "phillip",
+      "why": "단독 소유. Andrew 가 필요로 하는 항목은 dependency-plan.md §5 에 미리 규정"
+    },
+    {
+      "pattern": "docs/measurement_contract.md",
+      "owner": "phillip",
+      "why": "이슈 #45 가 지정한 파일명"
+    },
+    {
+      "pattern": "docs/gate1_checklist.md",
+      "owner": "phillip",
+      "why": "이슈 #49 가 지정한 파일명"
+    },
+    {
+      "pattern": "docs/contracts/**",
+      "owner": "phillip",
+      "why": "게시 계약 JSON Schema 정본"
+    },
+    {
+      "pattern": "docs/event_schema.md",
+      "owner": "phillip",
+      "why": "schema.py 에서 생성. #54 로 재생성"
+    },
+    {
+      "pattern": "scripts/gen_event_schema_doc.py",
+      "owner": "phillip",
+      "why": "위 문서 생성기"
+    },
+    {
+      "pattern": "scripts/bench_sink.py",
+      "owner": "phillip",
+      "why": "Sink 벤치"
+    },
+    {
+      "pattern": "tests/test_schema.py",
+      "owner": "phillip",
+      "why": "#54"
+    },
+    {
+      "pattern": "tests/test_sink.py",
+      "owner": "phillip",
+      "why": "#53"
+    },
+    {
+      "pattern": "tests/test_neutrality.py",
+      "owner": "phillip",
+      "why": "창구 중립성 N-1·N-2·N-4"
+    },
+    {
+      "pattern": "tests/test_economics.py",
+      "owner": "phillip",
+      "why": "#47"
+    },
+    {
+      "pattern": "tests/test_kpi_*.py",
+      "owner": "phillip",
+      "why": "#46"
+    },
+    {
+      "pattern": "tests/test_quality_*.py",
+      "owner": "phillip",
+      "why": "#48"
+    },
+    {
+      "pattern": "tests/test_publish_*.py",
+      "owner": "phillip",
+      "why": "T2.7"
+    },
+    {
+      "pattern": "tests/test_freeze.py",
+      "owner": "phillip",
+      "why": "#49"
+    },
+    {
+      "pattern": "tests/test_config_loader.py",
+      "owner": "phillip",
+      "why": "config_loader"
+    },
+    {
+      "pattern": "tests/__init__.py",
+      "owner": "phillip",
+      "why": "기존 파일"
+    },
+    {
+      "pattern": "src/measurement/__pycache__/**",
+      "owner": "phillip",
+      "why": "생성물 (.gitignore 대상)"
+    },
+    {
+      "pattern": "tests/__pycache__/**",
+      "owner": "phillip",
+      "why": "생성물 (.gitignore 대상)"
+    },
+    {
+      "pattern": "dashboard/**",
+      "owner": "andrew",
+      "why": "대시보드 전체. AGENTS.md·CLAUDE.md 최초 작성 포함 (리드 판정 D-6)"
+    },
+    {
+      "pattern": ".agent-team/**",
+      "owner": "team",
+      "why": "웨이브 산출물. W5 제품 코드가 아니다"
+    },
+    {
+      "pattern": "docs/data_spec.html",
+      "owner": "sealed",
+      "why": "정본 사양. C1 에서 수정하지 않는다"
+    },
+    {
+      "pattern": "docs/data_spec.pdf",
+      "owner": "sealed",
+      "why": "생성물 · .gitignore 대상"
+    },
+    {
+      "pattern": ".gitmodules",
+      "owner": "sealed",
+      "why": "서브모듈 설정. 수정하지 않는다"
+    },
+    {
+      "pattern": ".DS_Store",
+      "owner": "sealed",
+      "why": "OS 생성물 · .gitignore 대상"
+    },
+    {
+      "pattern": "docker-compose.yml",
+      "owner": "phillip",
+      "why": "도입 결정 D-20 시에만. Andrew 는 리뷰만 하고 쓰지 않는다"
+    },
+    {
+      "pattern": "e2e/**",
+      "owner": "matthias",
+      "why": "W6 QA 독립 E2E 하네스. dashboard/e2e/(Andrew 소유, 스크린샷 증거용)와 별개 — 실행 중인 앱을 밖에서 재검증한다. 재생성물은 e2e/.gitignore 가 제외"
+    }
   ],
   "planned": [
     "src/measurement/kpi.py",

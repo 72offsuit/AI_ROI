@@ -1,0 +1,165 @@
+/* ===========================================================================
+ * state-rules.css — visual state tokens for the observability views
+ *
+ * Source of truth for the *rules*: .agent-team/07-design/missing-state-spec.md §4.2
+ * Source of truth for the *values*: Plan/DESIGN.md -> tokens.generated.css (--ds-*)
+ * Ported from .agent-team/07-design/design-system/state-tokens.css (Jonnathan, W2).
+ *
+ * ★ Invariant: zero new colour values. Every token below is an alias of a --ds-*
+ *   variable generated from Plan/DESIGN.md. PRD §69 rejected Streamlit precisely
+ *   because it would force tokens to be defined twice; defining state colours here
+ *   as literals would reproduce that mistake.
+ *   Check: grep -rn '#[0-9A-Fa-f]\{3,6\}' src  -> 0 hits.
+ *
+ * Requires tokens.generated.css to be imported first (globals.css enforces order).
+ * =========================================================================== */
+
+:root {
+  /* -------------------------------------------------------------------------
+   * 1) available — 측정된 값. 측정된 0을 포함한다
+   *    칩이 없다. 기준(basis) 문구만 동반한다 (V-2)
+   * ---------------------------------------------------------------------- */
+  --obs-value-ink:            var(--ds-colors-text);
+  --obs-basis-ink:            var(--ds-colors-text-secondary);
+
+  /* -------------------------------------------------------------------------
+   * 2) 계산 불가 값 슬롯 — em dash(—)
+   *    ★ V-1: 대체한 값과 같은 타이포그래피 토큰·같은 크기.
+   *    text-muted 를 쓰지 않는다 (흰 배경 5.33:1 < 7.82:1, 그리고
+   *    DESIGN.md 가 text-muted 를 "부가 정보"로 한정했다 — 결손은 부가가 아니다)
+   * ---------------------------------------------------------------------- */
+  --obs-absent-ink:           var(--ds-colors-text-secondary);  /* 7.82:1 on white */
+
+  /* -------------------------------------------------------------------------
+   * 3) planned — 계획된 부재 · 이후 사이클
+   *    NEEDS_TWO_STRATEGIES · NEEDS_MODEL_OUTPUT  (C1에서 19개 지표)
+   *    가장 조용하다. 화면 대부분이 이 상태이므로 경고색을 쓰면 경고가 무의미해진다
+   *    ⚠ 대비 4.89:1 — 여유 0.39. 두 토큰 중 하나라도 바뀌면 재검산 (L-3)
+   * ---------------------------------------------------------------------- */
+  --obs-planned-ink:          var(--ds-colors-text-muted);      /* 4.89:1 on surface-muted */
+  --obs-planned-surface:      var(--ds-colors-surface-muted);
+  --obs-planned-border:       transparent;
+
+  /* -------------------------------------------------------------------------
+   * 4) unconnected — 미수신 · 아직 연결되지 않음
+   *    NO_SOURCE_EVENT  (C1 기본 상태 — 커머스 0건, 시뮬레이터 미구현)
+   *    ★ S-4: error·warning 을 쓰지 않는다. 2026-09-11 현재 이것이 정상이다
+   * ---------------------------------------------------------------------- */
+  --obs-unconnected-ink:      var(--ds-colors-info);            /* 6.50:1 on info-surface */
+  --obs-unconnected-surface:  var(--ds-colors-info-surface);
+  --obs-unconnected-border:   transparent;
+
+  /* -------------------------------------------------------------------------
+   * 5) gap — 근거의 공백 · 조치 대상   ← 구 `blocked`. 개명했다
+   *    계약 status=unavailable + reason NO_COST_BASIS · MISSING_FIELD
+   *    채움(filled).
+   *    ★ 개명 이유: 계약(api-contracts.md §4)의 status "blocked" 는
+   *      환경 제약(pyarrow)만을 뜻한다. 같은 단어를 다른 범위로 쓰면
+   *      Andrew 가 두 문서를 읽을 때 혼동한다. → contract-reconciliation.md §3-③
+   * ---------------------------------------------------------------------- */
+  --obs-gap-ink:              var(--ds-colors-warning);         /* 6.62:1 on warning-surface */
+  --obs-gap-surface:          var(--ds-colors-warning-surface);
+  --obs-gap-border:           transparent;
+
+  /* -------------------------------------------------------------------------
+   * 5b) env_blocked — 환경 제약으로 실행 못 했다   ← 신설
+   *     계약 status=blocked + reason BLOCKED (예: pyarrow 미설치)
+   *     계약이 "unavailable 과 또 다른 시각 상태여야 함" 을 요구한다.
+   *     gap·provisional 과 같은 warning 색이지만 3중으로 갈린다:
+   *       값 슬롯 (— vs 숫자) + 선 종류 (채움 / 실선 / 점선) + 글리프 (⚠ / ◐ / ⊘)
+   * ---------------------------------------------------------------------- */
+  --obs-envblocked-ink:       var(--ds-colors-warning);         /* 6.85:1 on background */
+  --obs-envblocked-surface:   var(--ds-colors-background);
+  --obs-envblocked-border:    var(--ds-colors-warning);
+  --obs-envblocked-border-style: dashed;                        /* ← provisional 은 solid */
+
+  /* -------------------------------------------------------------------------
+   * 6) provisional — 잠정값 · 파라미터 미확정
+   *    PARAM_UNCONFIRMED  (이탈 임계값 28/42/60 가설값)
+   *    윤곽(outline). 값이 있는 칸이므로 배경을 채우지 않는다 — tnum 정렬과
+   *    숫자 가독성을 지킨다. blocked 와 색이 같으므로 글리프(◐ vs ⚠)가 필수다
+   * ---------------------------------------------------------------------- */
+  --obs-provisional-ink:      var(--ds-colors-warning);         /* 6.85:1 on background */
+  --obs-provisional-surface:  var(--ds-colors-background);
+  --obs-provisional-border:   var(--ds-colors-warning);
+  --obs-provisional-border-style: solid;                        /* ← env_blocked 은 dashed */
+
+  /* -------------------------------------------------------------------------
+   * 7) not_run — 미실행 · 실행 기록 없음
+   *    사유 코드가 없는 상태 (7종 밖) — ../missing-state-spec.md §1.4
+   *    BLOCKED 는 AGENTS.md 가 승인한 보고 형식이고, 미실행은 아무도 선언하지
+   *    않은 공백이다. 알지 못함이 결손보다 나쁘다 → error 계열.
+   *    윤곽. violation 의 채움과 구분한다
+   * ---------------------------------------------------------------------- */
+  --obs-notrun-ink:           var(--ds-colors-error);           /* 6.47:1 on background */
+  --obs-notrun-surface:       var(--ds-colors-background);
+  --obs-notrun-border:        var(--ds-colors-error);
+
+  /* -------------------------------------------------------------------------
+   * 8) violation — 계약 위반 · 파이프라인 결함
+   *    게시물이 기준을 누락했거나 스키마 버전이 맞지 않거나
+   *    PARTIAL Lock 에 범위 한정 문구가 없을 때 (V-3)
+   *    채움 — 가장 강하다
+   * ---------------------------------------------------------------------- */
+  --obs-violation-ink:        var(--ds-colors-error);           /* 5.91:1 on error-surface */
+  --obs-violation-surface:    var(--ds-colors-error-surface);
+  --obs-violation-border:     transparent;
+
+  /* -------------------------------------------------------------------------
+   * 9) ok — 정상 판정 (판정 배너 순위 7에서만)
+   *    F-2: 순위 1~6 이 전부 비어 있을 때만 쓸 수 있다
+   * ---------------------------------------------------------------------- */
+  --obs-ok-ink:               var(--ds-colors-success);         /* 6.81:1 on success-surface */
+  --obs-ok-surface:           var(--ds-colors-success-surface);
+  --obs-ok-border:            transparent;
+
+  /* -------------------------------------------------------------------------
+   * 10) 보조 — 영향 배지 · 한계 칩 · 유도값 칩 · 표본 데이터 배지
+   * ---------------------------------------------------------------------- */
+  --obs-impact-ink:           var(--ds-colors-warning);   /* [P1]·[G1] 윤곽 배지 */
+  --obs-impact-border:        var(--ds-colors-warning);
+  --obs-limit-ink:            var(--ds-colors-warning);   /* `한계` 칩 — V-7 */
+  --obs-vacuous-ink:          var(--ds-colors-info);      /* `공허한 통과` — V-12 */
+  --obs-vacuous-surface:      var(--ds-colors-info-surface);
+  --obs-notice-assumption-ink:     var(--ds-colors-info);       /* notices[] level=assumption */
+  --obs-notice-assumption-surface: var(--ds-colors-info-surface);
+  --obs-notice-limitation-ink:     var(--ds-colors-warning);    /* notices[] level=limitation */
+  --obs-notice-limitation-surface: var(--ds-colors-warning-surface);
+  --obs-derived-ink:          var(--ds-colors-text-secondary); /* `유도값` 칩 — derived:true */
+  --obs-combined-ink:         var(--ds-colors-text-secondary); /* `합산` 칩 — R-7 / S-3 */
+  --obs-fixture-ink:          var(--ds-colors-error);     /* `표본 데이터` 배지 — ui-spec §5.2 ⑴ */
+  --obs-fixture-surface:      var(--ds-colors-error-surface);
+
+  /* -------------------------------------------------------------------------
+   * 11) 출처 — 색이 아니라 위치로 구분한다 (S-1).
+   *     배지는 글리프+문구만. 배경 없음 — 출처는 상태가 아니다 (S-2)
+   * ---------------------------------------------------------------------- */
+  --obs-source-ink:           var(--ds-colors-text-secondary);
+
+  /* -------------------------------------------------------------------------
+   * 12) 차트 — 결손을 보간하지 않는다 (V-5)
+   * ---------------------------------------------------------------------- */
+  --obs-chart-series:         var(--ds-colors-primary);   /* 단일 계열 — DESIGN.md */
+  --obs-chart-gap-ink:        var(--ds-colors-border);    /* 0건 날짜 점선 윤곽 */
+  --obs-chart-baseline-ink:   var(--ds-colors-border);
+
+  /* -------------------------------------------------------------------------
+   * 13) 칩 형태 — DESIGN.md 토큰만 쓴다
+   * ---------------------------------------------------------------------- */
+  --obs-chip-radius:          var(--ds-rounded-full);     /* "작은 상태 배지" = full */
+  --obs-chip-padding-inline:  var(--ds-spacing-sm);
+  --obs-chip-gap:             var(--ds-spacing-xs);
+  --obs-chip-border-width:    1px;
+  --obs-cell-gap:             var(--ds-spacing-xs);       /* 값 ↔ 기준 ↔ 사유 ↔ 조치 */
+}
+
+/* ===========================================================================
+ * 예약 슬롯 — 구현하지 않는다 (../missing-state-spec.md §4.4)
+ *
+ *   inconclusive  미결정 (표본 부족)  → 결과 화면군. C1에 나타날 자리가 없다
+ *   stale         정지 (수신 중단)    → C1 에 수신 중인 출처가 없다
+ *   drift         드리프트 경보        → PRD §70. 모델이 없다
+ *
+ * ★ 토큰을 만들지 않는다. 검증되지 않은 시각 규칙이 "이미 있다"는 이유로
+ *   다음 사이클에 무검토 채택되는 것을 막는다.
+ * =========================================================================== */

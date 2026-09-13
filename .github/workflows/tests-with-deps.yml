@@ -1,0 +1,64 @@
+name: Tests (with deps)
+
+# Runs the same suite as isolation.yml, but WITH the pinned dependencies installed.
+#
+# Why a separate file instead of an install step in isolation.yml:
+#   isolation.yml deliberately has no install step. That absence is the proof of
+#   ISO-005 -- "every test passes with none of the dependencies present". Adding
+#   `pip install` there would delete the guarantee rather than extend it, because a
+#   green run would no longer tell us whether the suite still works bare.
+#   Keeping both means the DIFFERENCE between the two skip counts is itself the
+#   answer to "which checks actually need a dependency". See ADR-0004.
+#
+# Decision D-19 -- approved by the user 2026-09-11. Created outside the W5 roles
+# because .github/workflows/** is `sealed` in
+# .agent-team/04-architecture/tools/ownership.json.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  tests-with-deps:
+    name: 의존성 설치 후 전체 테스트
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Plan/ is a private submodule and the suite does not read it.
+          # Same reasoning as isolation.yml.
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          # Must match isolation.yml. requirements.txt pins were resolved on 3.12.4;
+          # a release shipping only cp314 wheels would break this job silently.
+          python-version: '3.12'
+
+      - name: Install pinned dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      # Report the installed versions so a failing run can be told apart from a
+      # resolution drift without re-running locally.
+      - name: Show resolved versions
+        run: python -m pip freeze
+
+      - name: Run all tests
+        run: python -m unittest discover -s tests -t . -v
+
+      # The skip count is the payload of this job. isolation.yml skips the checks that
+      # need a dependency; this one should skip far fewer. A rising number here means a
+      # check quietly stopped running -- that is a regression even though the job is green.
+      - name: Report skip count
+        if: always()
+        run: |
+          python -m unittest discover -s tests -t . 2>&1 | tail -3

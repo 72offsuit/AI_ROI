@@ -1,15 +1,31 @@
 {
   "schema": "bathos/model-plan@1",
-  "updated": "2026-09-10T15:48:30.131947Z",
+  "updated": "2026-09-13T16:29:50.022328Z",
   "updated_by": "Paul",
   "session_backend": "claude",
   "defaults": {
     "runtime": "claude"
   },
   "roles": {
+    "matthew-story-engineer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "matthias-qa-validator": {
+      "runtime": "claude",
+      "model": "opus"
+    },
     "caleb-market-analyst": {
       "runtime": "claude",
       "model": "sonnet"
+    },
+    "phillip-backend-engineer": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "thomas-code-reviewer": {
+      "runtime": "claude",
+      "model": "opus"
     },
     "james-architect": {
       "runtime": "claude",
@@ -19,11 +35,15 @@
       "runtime": "claude",
       "model": "opus"
     },
-    "joshua-service-planner": {
+    "andrew-frontend-engineer": {
       "runtime": "claude",
       "model": "opus"
     },
     "john-reverse-specialist": {
+      "runtime": "claude",
+      "model": "opus"
+    },
+    "joshua-service-planner": {
       "runtime": "claude",
       "model": "opus"
     }
