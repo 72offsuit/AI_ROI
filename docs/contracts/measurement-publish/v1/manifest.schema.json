@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/measurement-publish/v1/manifest.schema.json",
+  "$comment": "W2 동결 스냅샷(.agent-team/04-architecture/schemas/)에 없는 계약이다. W2 는 게시가 내보내는 산출물 8종만 설계했고 읽어들이는 입력에는 계약을 두지 않았다 — 그 비대칭 자체가 리뷰 M1 의 결함이며 이슈 #59 로 닫는다. 스냅샷에 소급 추가하지 않는다: 동결본은 W2 가 무엇을 설계했는지의 기록이고, 고치면 '그때도 있었다' 는 거짓이 된다.",
+  "title": "data/raw/manifest.json — Event Sink 기록 (게시의 입력)",
+  "description": "★ 이 계약만 방향이 반대다. 나머지 8종은 게시가 **내보내는** 것이고 이것은 게시가 **읽어들이는** 것이다. 대시보드는 이 파일을 읽지 않는다 — `index.schema.json` 의 `artifacts[].path` 가 `results/|data/processed/` 만 허용하므로 게시물이 될 수도 없다. 그래도 같은 디렉터리에 두는 이유는, 이 파일이 없어서 생긴 결함(리뷰 M1 · 이슈 #59)이 정확히 '계약이 산출물에만 있고 입력에는 없다' 였기 때문이다. 계약을 한곳에 모아 두면 다음에 그 비대칭이 다시 생기지 않는다.\n\n무엇을 막는가: `rows` 가 없거나 `null` 이면 `manifest.get(\"rows\", 0) or 0` 이 **0 으로 읽는다**. 그 0 이 `events_ingested` 를 `status: ok · value: 0` 으로 만들고, `SINK_EMPTY` 판정의 입력이 되어, **깨진 manifest 가 '수집이 0건인 정상 상태' 로 화면에 뜬다.** manifest 가 아예 없을 때는 `unavailable_metrics` 를 Observable 전 종으로 채워 정직하게 처리하는데, **있는데 깨진 경우가 더 자신 있는 출력을 냈다.**",
+  "type": "object",
+  "required": [
+    "rows",
+    "rejected"
+  ],
+  "properties": {
+    "schema_version": {
+      "type": "string",
+      "description": "기록 시점의 이벤트 스키마 버전."
+    },
+    "created_at": {
+      "type": "string",
+      "description": "KST(`+09:00`). manifest 가 같은 파일에서 선언하는 `timezone` 과 어긋나면 자기 규약 위반이다."
+    },
+    "format": {
+      "type": "string",
+      "description": "저장 형식(`jsonl` · `parquet`)."
+    },
+    "partition": {
+      "type": "string",
+      "description": "파티션 축. C1 은 `date`."
+    },
+    "timezone": {
+      "type": "string",
+      "description": "`Asia/Seoul`."
+    },
+    "rows": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "★ 저장된 이벤트 수. **`null` 을 허용하지 않는다** — `null` 은 '모른다' 인데 읽는 쪽이 0('세어봤고 없었다')으로 바꾸면 관측하지 않은 것을 관측했다고 말하게 된다. 모르는 상태를 표현해야 하면 manifest 를 쓰지 않는다(부재가 곧 '싱크를 돌린 적 없다' 이고, 읽는 쪽이 그 경우를 정직하게 처리한다)."
+    },
+    "rejected": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "스키마 검증에서 거부된 이벤트 수. `rows` 와 같은 이유로 `null` 을 허용하지 않는다."
+    },
+    "sha256": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "저장 파일들의 합산 해시. 파일이 없으면 `null` 이 정상이다 — 이 필드는 '모른다' 가 의미를 갖는 자리다."
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Sink 루트 기준 상대 경로."
+    },
+    "sources": {
+      "type": "object",
+      "description": "출처별 건수. `event_source()` 가 `simulator_version`·`random_seed` 의 null 여부로 파생한다(MEA-002)."
+    },
+    "event_type_counts": {
+      "type": "object",
+      "description": "이벤트 종류별 건수. 한 건도 없는 종류는 키가 없을 수 있다 — 그때 0 으로 읽는 것은 정당하다(세어봤고 없었다)."
+    },
+    "field_coverage": {
+      "type": "object",
+      "description": "필드별 충족률."
+    },
+    "missing_fields": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "해당 이벤트 종류에 적용되는데 한 건도 들어오지 않은 필드."
+    },
+    "unavailable_metrics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "★ 이 manifest 로는 계산할 수 없는 지표. **빈 배열과 키 부재가 다르다** — 빈 배열은 '전부 계산 가능' 이고, 키가 없는 것은 '아무도 판단하지 않았다' 다. 읽는 쪽의 `or []` 가 둘을 같게 만들면, 깨진 manifest 가 '계산 불가 0종' 으로 보인다."
+    }
+  }
+}

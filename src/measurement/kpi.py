@@ -1211,13 +1211,19 @@ assert len({spec.name for spec in METRIC_SPECS}) == len(METRIC_SPECS), (
 
 
 def metric_classification() -> dict[str, object]:
-    """47종의 계층별·가용성별 분포. **개수를 리터럴로 적지 않고 집계한다.**
+    """`METRIC_SPECS` 전체의 계층별·가용성별 분포. **개수를 리터럴로 적지 않고 집계한다.**
 
     `kpi-definition-v1.md` §8 의 표와 대조되는 값이며, 어긋나는 3건의 이유가
     `METRIC_SPECS` 의 `note` 에 있다.
 
-        >>> metric_classification()["total"]
-        47
+    ★ 아래 예제가 리터럴이 아닌 이유 — 이전 판은 `47` 을 기대값으로 적었고
+    실제 집계는 46 이었다. **개수를 적지 않겠다고 선언한 독스트링이 그 선언을
+    스스로 깼다.** 게다가 저장소에 doctest 실행기가 없어 아무도 잡지 못했다.
+    지금은 `len(METRIC_SPECS)` 와 대조한다 — 지표가 늘거나 줄어도 낡지 않고,
+    **분류가 한 종이라도 빠뜨리면 실패한다**(그것이 이 예제가 지키는 불변식이다).
+
+        >>> metric_classification()["total"] == len(METRIC_SPECS)
+        True
     """
     by_layer: dict[int, Counter[str]] = defaultdict(Counter)
     for spec in METRIC_SPECS:

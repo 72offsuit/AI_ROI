@@ -315,6 +315,19 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
         "rejection_report.schema.json": {"$comment"},
     }
 
+    #: ★ W2 동결 스냅샷에 **없는** 계약. 조용히 늘어나는 길을 막으려고 여기에
+    #: 이름과 사유를 적게 한다 — 적지 않으면 아래 테스트가 실패한다.
+    #:
+    #: 동결본에 소급 추가하지 않는 이유: 그것은 W2 가 무엇을 설계했는지의 기록이고,
+    #: 고치면 "그때도 있었다" 가 거짓이 된다. 차이를 지우는 대신 **선언**한다.
+    ADDED_AFTER_W2 = {
+        "manifest.schema.json": (
+            "게시의 입력(Sink manifest) 계약. W2 는 게시가 내보내는 산출물 8종만 "
+            "설계했고 읽어들이는 입력에는 계약을 두지 않았다 — 그 비대칭이 리뷰 M1 의 "
+            "결함이며 이슈 #59 로 닫는다."
+        ),
+    }
+
     @staticmethod
     def _flatten(node: object, prefix: str = "") -> dict[str, object]:
         """모든 잎을 `a.b.0.c` 형태의 경로로 펼친다."""
@@ -338,10 +351,31 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
         return out
 
     def test_every_schema_file_was_copied(self) -> None:
+        """스냅샷의 것은 하나도 빠지지 않았고, 늘어난 것은 전부 선언돼 있다."""
+        snapshot = {p.name for p in SNAPSHOT.glob("*.schema.json")}
+        contracts = {p.name for p in CONTRACTS.glob("*.schema.json")}
         self.assertEqual(
-            {p.name for p in SNAPSHOT.glob("*.schema.json")},
-            {p.name for p in CONTRACTS.glob("*.schema.json")},
+            set(), snapshot - contracts,
+            "W2 가 설계한 계약이 사라졌다 — 스냅샷에 있는데 계약 디렉터리에 없다",
         )
+        self.assertEqual(
+            set(self.ADDED_AFTER_W2), contracts - snapshot,
+            "W2 이후 추가된 계약은 ADDED_AFTER_W2 에 사유와 함께 선언해야 한다 — "
+            "조용히 늘어나는 것을 막는다",
+        )
+
+    def test_added_schemas_declare_a_reason(self) -> None:
+        """선언만 하고 사유를 비워 두면 선언이 아니다."""
+        for name, reason in self.ADDED_AFTER_W2.items():
+            with self.subTest(schema=name):
+                self.assertTrue(
+                    reason.strip(),
+                    f"{name}: 왜 W2 가 이 계약을 설계하지 않았는지가 비어 있다",
+                )
+                self.assertTrue(
+                    (CONTRACTS / name).is_file(),
+                    f"{name}: 선언은 있는데 파일이 없다",
+                )
 
     def test_copies_carry_provenance_comment(self) -> None:
         """JSON 에 주석을 쓸 수 없으므로 `$comment` 로 출처를 남긴다 (N-7)."""
@@ -349,10 +383,17 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
             with self.subTest(schema=path.name):
                 comment = _load(path).get("$comment", "")
                 self.assertIn(".agent-team/04-architecture/schemas", comment)
+                if path.name in self.ADDED_AFTER_W2:
+                    # 스냅샷에서 온 것이 아니므로 "복사본" 이라고 적을 수 없다.
+                    # 대신 **스냅샷에 없다는 사실**을 같은 자리에 적게 한다.
+                    self.assertIn("없는", comment)
+                    continue
                 self.assertIn(path.name, comment)
 
     def test_no_undocumented_difference(self) -> None:
         for path in sorted(CONTRACTS.glob("*.schema.json")):
+            if path.name in self.ADDED_AFTER_W2:
+                continue  # 대조할 스냅샷 원본이 없다 (위 테스트가 선언을 강제한다)
             allowed = self.DOCUMENTED[path.name]
             before = self._flatten(_load(SNAPSHOT / path.name))
             after = self._flatten(_load(path))
