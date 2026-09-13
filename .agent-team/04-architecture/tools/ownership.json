@@ -192,6 +192,11 @@
       "why": "#49"
     },
     {
+      "pattern": "tests/test_freeze_mismatch_alarm.py",
+      "owner": "phillip",
+      "why": "봉인 변조 경보 배선 (#60 M4·M5·F8). 세 시나리오 중 '완전 LOCKED 에서의 불일치' 가 부분 수정으로는 안 잡히는 자리다"
+    },
+    {
       "pattern": "tests/test_doctests.py",
       "owner": "phillip",
       "why": "docstring 예제 18개를 unittest discover 에 편입 (#59 M10). 모듈 목록은 하드코딩하지 않고 발견한다"
