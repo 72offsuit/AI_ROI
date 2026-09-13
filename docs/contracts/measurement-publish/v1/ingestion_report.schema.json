@@ -88,10 +88,31 @@
     },
     "by_event_type": {
       "type": "object",
-      "description": "event_type 16종 전부가 키로 존재해야 한다. 한 건도 없는 타입을 목록에서 빼면 '없다'가 화면에서 사라진다.",
+      "description": "event_type 16종 전부가 키로 존재해야 한다. 한 건도 없는 타입을 목록에서 빼면 '없다'가 화면에서 사라진다. ★ 이름까지 고정한다 (이슈 #61 · 리뷰 M6). 이전에는 `minProperties: 16` 만 있어 **아무 이름이나 16개면 통과**했다 — 개수는 세면서 무엇인지는 보지 않았다. `propertyNames` 로 이름을 가두고 `min == max == enum 크기` 로 두면 비둘기집 원리상 **16종이 정확히 한 번씩** 나타나야 한다. 누락도 중복도 오타도 스키마 단계에서 걸린다.",
       "minProperties": 16,
       "additionalProperties": {
         "$ref": "common.schema.json#/$defs/source_split"
+      },
+      "maxProperties": 16,
+      "propertyNames": {
+        "enum": [
+          "session_start",
+          "page_view",
+          "search",
+          "product_view",
+          "return_visit",
+          "add_to_cart",
+          "remove_from_cart",
+          "checkout_start",
+          "purchase",
+          "campaign_exposed",
+          "push_sent",
+          "coupon_exposed",
+          "coupon_clicked",
+          "coupon_use",
+          "review",
+          "cs_contact"
+        ]
       }
     },
     "partitions": {

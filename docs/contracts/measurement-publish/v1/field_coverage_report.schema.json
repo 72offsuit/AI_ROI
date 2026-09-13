@@ -44,7 +44,7 @@
     },
     "fields": {
       "type": "object",
-      "description": "DATA-003 22개 필드 전부. 한 건도 안 들어온 필드를 목록에서 빼지 않는다.",
+      "description": "DATA-003 22개 필드 전부. 한 건도 안 들어온 필드를 목록에서 빼지 않는다. ★ 이름까지 고정한다 (이슈 #61 · 리뷰 M6). 이전에는 `min/maxProperties: 22` 만 있어 **아무 이름이나 22개면 통과**했다. DATA-003 22컬럼의 이름이 곧 계약이며, 하나가 오타로 바뀌면 그 컬럼의 충족률이 화면에서 사라지는데도 검증은 통과했다.",
       "minProperties": 22,
       "maxProperties": 22,
       "additionalProperties": {
@@ -83,6 +83,32 @@
             }
           }
         }
+      },
+      "propertyNames": {
+        "enum": [
+          "event_id",
+          "customer_id",
+          "timestamp",
+          "event_type",
+          "session_id",
+          "session_duration",
+          "page_type",
+          "product_id",
+          "category",
+          "quantity",
+          "unit_price",
+          "order_id",
+          "order_amount",
+          "coupon_id",
+          "campaign_id",
+          "treatment_id",
+          "treatment_group",
+          "experiment_id",
+          "service_version",
+          "customer_version",
+          "simulator_version",
+          "random_seed"
+        ]
       }
     },
     "missing_fields": {

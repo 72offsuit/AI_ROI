@@ -175,3 +175,26 @@ python3 -m unittest discover -s tests
 ```
 
 `jsonschema` 는 **dev 전용**이다 (결정 D-21). 미설치 환경에서는 전체 스키마 검증 14건이 **`BLOCKED` 사유와 함께 skip** 되고, **`not` 논리 검사(AC-4e)는 skip 되지 않는다** — 회귀 지점이 거기이므로 의존성 없는 CI 에서도 검사된다.
+
+## FIX-5 — 개수만 세던 세 곳에 이름·고유성을 넣는다 (이슈 #61 · 리뷰 M6)
+
+세 산출물이 항목 **개수**는 강제하면서 **무엇이 들어 있는지**는 보지 않았다.
+`jsonschema` 로 반례를 실제로 태워 셋 다 통과하는 것을 확인했다.
+
+| 산출물 | 이전 | 통과하던 반례 |
+|---|---|---|
+| `ingestion_report.by_event_type` | `minProperties: 16` | 아무 이름이나 16개 |
+| `field_coverage_report.fields` | `min/maxProperties: 22` | 22컬럼 중 하나를 오타로 |
+| `freeze_status.items` | `minItems/maxItems: 9` | 같은 Lock 항목 9개 |
+
+**표현 방법 — 비둘기집 원리.** JSON Schema 2020-12 에는 "배열 원소를 특정 필드
+기준으로 유일하게" 를 쓰는 키워드가 없다(`uniqueItems` 는 객체 전체가 같을 때만
+잡으므로 `status` 만 다른 중복은 놓친다). 대신 **자리 수와 값의 수를 같게 묶는다**:
+
+- 객체: `propertyNames.enum` + `minProperties == maxProperties == len(enum)`
+- 배열: 값마다 `contains` + `minItems == maxItems == 값의 수`
+
+자리가 N 개이고 N 개 값이 각각 최소 한 번 나타나야 하면, 결과적으로 **정확히 한
+번씩**이다. 누락도 중복도 오타도 스키마 단계에서 걸린다.
+
+반례 3건이 전부 거부됨을 확인했고 기존 픽스처·게시물은 전부 통과한다(거짓 양성 0).
