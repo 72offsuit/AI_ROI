@@ -219,6 +219,8 @@ export interface Verdict {
     metrics_not_run: number;
     schema_gaps: number;
     lock_items_pending: number;
+    /** Sealed canonical files changed since the lock. See freeze_status.mismatches. */
+    freeze_mismatch: number;
     rejected_events: number;
   };
 }

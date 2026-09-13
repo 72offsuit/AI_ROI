@@ -15,7 +15,8 @@
     "gate",
     "overall",
     "items",
-    "unlocked_items"
+    "unlocked_items",
+    "verification"
   ],
   "additionalProperties": false,
   "properties": {
@@ -271,6 +272,23 @@
           }
         }
       }
+    },
+    "verification": {
+      "type": "string",
+      "enum": [
+        "match",
+        "mismatch",
+        "missing",
+        "not_run"
+      ],
+      "description": "봉인 정본 파일 해시 대조 결과. ★ 네 값 중 둘이 '세 번째 값' 이다 — `missing` 은 Lock 기록이 없다는 뜻이고 `not_run` 은 기록은 있으나 대조하지 못했다는 뜻이다(의존성 없는 환경이 정상적으로 여기 해당한다). **대조하지 않은 것을 `match` 로 적지 않는다.**"
+    },
+    "mismatches": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "봉인 이후 바뀐 정본 파일. `verification == \"mismatch\"` 일 때만 비어 있지 않다. index 의 `verdict.counts.freeze_mismatch` 가 이 배열의 길이다 — 화면이 다시 세지 않는다(DB-012)."
     }
   },
   "$comment": "W2 산출물의 W5 정본 사본. 원본 스냅샷: .agent-team/04-architecture/schemas/freeze_status.schema.json (2026-09-11 동결). 원본은 고치지 않는다 — W5 이후 정본은 이 파일이고, 스냅샷과의 의도된 차이는 docs/contracts/measurement-publish/v1/CHANGELOG.md 에 전수 등재한다. JSON 에 주석을 쓸 수 없어 $comment 로 남긴다."

@@ -260,7 +260,8 @@
             "metrics_not_run",
             "schema_gaps",
             "lock_items_pending",
-            "rejected_events"
+            "rejected_events",
+            "freeze_mismatch"
           ],
           "additionalProperties": false,
           "properties": {
@@ -290,11 +291,17 @@
             },
             "lock_items_pending": {
               "type": "integer",
-              "minimum": 0
+              "minimum": 0,
+              "description": "★ **이름이 세는 것과 다르다.** PRD §22 의 LOCK 항목 9종 중 PENDING/PARTIAL 수가 아니라, GATE 1 **선행 조건 G-1~G-16 중 미충족** 수다(`freeze_status.unlocked_items` 의 길이). 이 이름을 그대로 읽어 `FREEZE_MISMATCH` 조건에 AND 로 엮은 것이 이슈 #60 의 둘째 겹이었다 — 16종이 전부 충족이라 실측 0 이므로 경보가 영원히 침묵했다. 이름 자체의 정정은 게시 계약의 호환 파괴 변경이라 별도로 다룬다."
             },
             "rejected_events": {
               "type": "integer",
               "minimum": 0
+            },
+            "freeze_mismatch": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "봉인 이후 바뀐 정본 파일 수 (`freeze_status.mismatches` 의 길이). ★ 이 키가 계약에 없어서 `FREEZE_MISMATCH` 판정이 유효하게 발동한 적이 없었다 — 읽는 쪽이 `additionalProperties: false` 로 금지된 키를 보고 있었다 (이슈 #60). 0 이 '일치' 를 뜻하지는 않는다: 대조하지 않았거나 기록이 없어도 0 이며, 그 구분은 `freeze_status.verification` 이 든다."
             }
           }
         }

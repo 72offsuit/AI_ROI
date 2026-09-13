@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import json
+import re
 import unittest
 from pathlib import Path
 
@@ -290,6 +291,16 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
             "properties.verdict.properties.headline_code.enum",
             "properties.verdict.properties.headline_code.description",
             "allOf",
+            # 이슈 #60 — counts 에 freeze_mismatch 가 없어 FREEZE_MISMATCH 판정이
+            # 계약상 도달 불가였다. 읽는 쪽이 additionalProperties:false 로 금지된
+            # 키를 보고 있었다.
+            "properties.verdict.properties.counts.properties.freeze_mismatch.type",
+            "properties.verdict.properties.counts.properties.freeze_mismatch.minimum",
+            "properties.verdict.properties.counts.properties.freeze_mismatch.description",
+            "properties.verdict.properties.counts.required.8",
+            # 이름이 세는 것과 다르다는 사실을 description 에 적었다. 이름 자체의
+            # 정정은 호환 파괴라 별도로 다룬다.
+            "properties.verdict.properties.counts.properties.lock_items_pending.description",
         },
         "common.schema.json": {
             "$comment",
@@ -309,7 +320,21 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
             "properties.checks.items.allOf.6",
         },
         "field_coverage_report.schema.json": {"$comment"},
-        "freeze_status.schema.json": {"$comment"},
+        "freeze_status.schema.json": {
+            "$comment",
+            # 이슈 #60 — 대조 결과가 게시물로 나가지 않아 봉인 변조 경보가
+            # 작동한 적이 없었다. verify() 는 처음부터 이 값을 들고 있었다.
+            "properties.verification.type",
+            "properties.verification.description",
+            "properties.verification.enum.0",
+            "properties.verification.enum.1",
+            "properties.verification.enum.2",
+            "properties.verification.enum.3",
+            "properties.mismatches.type",
+            "properties.mismatches.description",
+            "properties.mismatches.items.type",
+            "required.11",
+        },
         "ingestion_report.schema.json": {"$comment"},
         "kpi_report.schema.json": {"$comment"},
         "rejection_report.schema.json": {"$comment"},
@@ -569,11 +594,42 @@ class TestFixturesAgainstContract(unittest.TestCase):
                         f"등재했는데 통과했다면 제약이 걸리지 않은 것이다.\n사유: {why}",
                     )
 
-    def test_snapshot_accepted_every_fixture(self) -> None:
-        """★ 수정 **전** 스냅샷에서는 14파일 전부 통과했음을 고정한다.
+    #: W2 동결 스냅샷으로 픽스처를 검증했을 때 **허용되는 유일한 실패 사유**.
+    #:
+    #: 계약이 W2 이후에 자라면 픽스처도 따라가야 하고(따라가지 않으면 화면이
+    #: `undefined` 를 그린다), 그 순간 "스냅샷에서도 전부 통과한다" 는 단언은
+    #: 성립할 수 없다. 단언을 지우는 대신 **무엇 때문에 성립하지 않는지**를
+    #: 적는다 — 그것이 이 테스트가 지키려던 것(기존 결함과 섞이지 않게 하는 것)을
+    #: 유지하는 방법이다.
+    #: 필드 **이름**으로 대조한다. jsonschema 의 메시지는 여러 필드를 한 문장에
+    #: 묶고 단수/복수가 갈리므로("was unexpected" / "were unexpected"), 문장을
+    #: 통째로 매칭하면 필드가 하나 늘어나는 순간 조용히 안 맞는다.
+    POST_W2_FIELDS = {
+        # 이슈 #60 — 봉인 대조 결과가 게시물로 나가지 않아 변조 경보가
+        # 작동한 적이 없었다. 그 배선을 이으면서 늘어난 필드들이다.
+        "freeze_mismatch",
+        "verification",
+        "mismatches",
+    }
 
-        그래서 위 실패 전부가 **이번 계약 수정이 만든 것**이고, 픽스처의 기존 결함과
-        섞이지 않는다. 이 단언이 없으면 "원래 깨져 있었다"로 넘길 수 있다.
+    @classmethod
+    def _only_post_w2_fields(cls, message: str) -> bool:
+        """`additionalProperties` 위반이 **선언된 필드만** 지목하는가."""
+        if "Additional properties are not allowed" not in message:
+            return False
+        quoted = set(re.findall(r"'([^']+)'", message))
+        return bool(quoted) and quoted <= cls.POST_W2_FIELDS
+
+    def test_snapshot_accepted_every_fixture(self) -> None:
+        """★ 스냅샷 대비 실패가 **선언된 사유만**인지 고정한다.
+
+        원래 의도: 수정 전 스냅샷에서 14파일이 전부 통과했음을 박아 두어,
+        현재 계약 대비 실패가 **이번 수정이 만든 것**임을 픽스처의 기존 결함과
+        분리하는 것이다. 이 단언이 없으면 "원래 깨져 있었다" 로 넘길 수 있다.
+
+        계약이 자란 뒤에도 그 의도는 유효하다 — 다만 "전부 통과" 가 아니라
+        "**선언된 신규 필드 때문에만** 실패" 로 형태가 바뀐다. 선언되지 않은
+        실패가 하나라도 있으면 그것은 픽스처의 기존 결함이고, 여전히 잡힌다.
         """
         from jsonschema import Draft202012Validator
         from referencing import Registry, Resource
@@ -589,8 +645,15 @@ class TestFixturesAgainstContract(unittest.TestCase):
                 {"$ref": f"{BASE_URI}{artifact}.schema.json"}, registry=registry
             )
             with self.subTest(fixture=key):
+                undeclared = [
+                    e.message
+                    for e in validator.iter_errors(_load(fixture))
+                    if not self._only_post_w2_fields(e.message)
+                ]
                 self.assertEqual(
-                    [], [e.message for e in validator.iter_errors(_load(fixture))]
+                    [], undeclared,
+                    "W2 스냅샷 대비 실패 중 선언되지 않은 것이 있다 — 이것은 계약이 "
+                    "자란 결과가 아니라 픽스처의 결함이다",
                 )
 
 

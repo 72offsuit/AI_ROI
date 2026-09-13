@@ -43,6 +43,8 @@
   ],
   "gate": "GATE_1",
   "overall": "violated",
+  "verification": "match",
+  "mismatches": [],
   "lock_record": {
     "path": "config/gate1_lock.yaml",
     "sha256": "b7e1d0c4a9f2635e8017c3b5d9a4e2f60817b3c5d9e1a4f60827b3c5d9e1a4f6",
