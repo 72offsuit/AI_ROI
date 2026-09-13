@@ -1510,3 +1510,41 @@ freeze.py:565     "unlocked_items": [... for item in verification.unmet]   ← G
 `12-report/report.html` §8.2 전면 교체(39,743 B · 472줄), §5 보안 표에 **F8 신규 등재**·F5 Low 상향, 요약·후속 액션의 `Medium 3` → `Medium 4`. `risks[]` 2건 정정. `state validate` VALID.
 
 > **이번 웨이브에서 리드 오류 2건** — M1 트리거(Michael F6 가 정정) · M4 `lock_items_pending` 오독(Michael F8 이 정정). **둘 다 보안 감사가 잡았다.** 팀원이 리드 판단을 실측으로 뒤집는 경로가 실제로 작동했다는 증거다.
+
+---
+
+## 최종 컨펌 (`/team-confirm`) — 2026-09-14
+
+`_state/signoff.md` 작성(9,612 B · 135줄). **판정: 조건부 합격.**
+
+| 항목 | 판정 |
+|---|---|
+| ① USP → 기획 → 설계 → 구현 일관 | ✅ Caleb 후보 2 → **USP-1 채택**, 설계층에 라벨이 아닌 실체로 전달 |
+| ② W3 verdict ∈ {PASS, CONCERNS} | ✅ `CONCERNS`(재게이트 1회) |
+| ③ 아키텍처 ↔ 구현 정합 | ⚠️ gap 19건, 차단 0 |
+| ④ blocking 처리 | ✅ **0건**. M4·M5 는 후보로 검토 후 근거와 함께 내림 |
+| ⑤ E2E·엣지·latency | ✅ PASS · Playwright 43(41+2 의도적 red) |
+| ⑥ 개발 정의 ↔ 코드 | ✅ "불일치 없음" 절로 균형 |
+| ⑦ 디자인 핸드오프 ↔ 프론트 | ✅ QA: *"정확히 설계대로 동작"*. 미반영 1건(토큰 예외 각주) |
+| ⑧ 리포트 미결·후속 | ✅ 472줄 · 단일 자기완결 |
+| ⑨⑩ IP·연구 | — W4 skipped |
+
+**manifest**: `status: done` · 웨이브 `W0:skipped W1~W3:done W4:skipped W5:done W6:done` · `state validate` VALID.
+
+> **스킬 본문의 `signoff=true` 는 스키마에 없는 키다**(`waves_status` 와 같은 사례). 최상위 허용 키 16종에 `signoff` 가 없고 `additionalProperties: false` 이므로 정본인 `status: "done"` 으로 기록했다. BATHOS 쪽에서 고칠 자리다.
+
+**팀원 정리**: Thomas·Timothy·Matthias·Michael 4명에게 `shutdown_request` 발송. 4명 모두 이전에 자발적 종료를 보고했으나 pane 이 계속 점유돼 있었고(Martin 스폰이 `fork failed: Device not configured` 로 실패한 원인), 프로토콜대로 정식 요청을 보냈다.
+
+### 사이클 C1 종료 상태
+
+```
+main  cbf764d  docs: AGENTS.md 프로젝트 현황을 실측으로 갱신 (#58)
+      4cf5aae  feat: 측정 계층과 GA형 관측 대시보드 구현 (범위 M) (#57)
+
+머지     PR #57 · #58          이슈 닫음  #43 · #44
+이슈 생성 #59~#66 (8건)         브랜치     전부 정리, main 만 남음
+게이트   Usp/Plan/Impl/Release 전부 CONCERNS · critical 0
+테스트   46 → 407 (회귀 0)
+```
+
+다음: `/retro` (선택) 또는 다음 사이클(범위 C 시뮬레이터).
