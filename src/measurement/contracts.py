@@ -50,6 +50,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from src.measurement import schema as sc
+from src.measurement import timeparse as tp
 from src.measurement.errors import ContractViolation
 from src.measurement.sink import KST
 
@@ -141,7 +142,7 @@ def format_value(status: sc.MetricStatus, unit: sc.Unit | None, value: object) -
         return str(value)
     if unit is sc.Unit.DATETIME:
         # KST `YYYY-MM-DD HH:MM`. 화면이 다시 파싱하지 않게 완성해 보낸다.
-        moment = value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
+        moment = value if isinstance(value, datetime) else tp.parse_datetime(str(value))
         return moment.astimezone(KST).strftime("%Y-%m-%d %H:%M")
 
     number = float(value)

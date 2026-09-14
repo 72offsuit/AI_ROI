@@ -32,6 +32,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from src.measurement import timeparse as tp
 from src.measurement import schema as sc
 
 MANIFEST_NAME = "manifest.json"
@@ -391,7 +392,7 @@ def _normalize_timestamp(timestamp: object) -> tuple[str, str]:
         moment = timestamp
     else:
         try:
-            moment = datetime.fromisoformat(str(timestamp))
+            moment = tp.parse_datetime(str(timestamp))
         except ValueError as error:
             raise ValueError(f"timestamp 를 해석할 수 없다: {timestamp!r}") from error
     if moment.tzinfo is None:
