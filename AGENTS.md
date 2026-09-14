@@ -83,7 +83,8 @@ python3 -m unittest tests.test_isolation -v
 - `dashboard/`(Next.js, `:3001`)에 **라우트 8종**이 구현됨(d-01·d-02) — 게시물 연동 6(`V1`~`V6`) + 정적 1(`/triggers`, C1 작동 0종) + 개요 1(`/`). `results/`의 게시물을 **읽기만** 한다(`DB-012`·`DB-013`·`DB-014`).
 - GATE 1은 **부분 봉인(`PARTIAL_FREEZE`)** 상태다. 완전 봉인(`LOCKED`)은 **0종**.
 - CI는 **4종**이다 — `isolation.yml`(의존성 없이, 3.12) · `tests-with-deps.yml`(의존성 설치 후, 3.12) · `python-compat.yml`(**3.10**, 의존성 없이 — SRS 가 선언한 최소 버전을 실제로 도는 유일한 잡) · `dashboard.yml`(경로 격리 · 상태 매핑).
-  - ★ **`tokens:test`는 CI에 없다.** `scripts/tokens/verify.mjs`가 `Plan/DESIGN.md`를 읽는데 `Plan`은 private 서브모듈이라 CI가 체크아웃하지 않는다. **사람이 돌려야 하는 검사다** — 대시보드 검증 3종 중 2종만 자동이다. 저장소 전체 검증은 `python3 -m unittest discover -s tests` 이며 lint·build·타입 검사는 여전히 미정의.
+  - ★ **`tokens:test`는 CI에 없다.** `scripts/tokens/verify.mjs`가 `Plan/DESIGN.md`를 읽는데 `Plan`은 private 서브모듈이라 CI가 체크아웃하지 않는다. **사람이 돌려야 하는 검사다** — 대시보드 검증 3종 중 2종만 자동이다.
+- 저장소 전체 검증은 `python3 -m unittest discover -s tests` 이며 lint·build·타입 검사는 여전히 미정의.
   - 여기에 **건수를 적지 않는다.** 이전 판은 `407건` 이라고 적었고 테스트를 추가한 바로 다음 커밋에 낡았다 — 아무도 대조하지 않는 숫자를 문서에 두는 것이 이슈 `#59` 가 닫은 결함의 모양이다. 건수는 명령을 실행하면 나온다.
 - 저장소 보안 설정 (이슈 `#66` · 보안 F4, 2026-09-14):
   - **Dependabot alerts — 활성화됨.** `gh api -X PUT repos/…/vulnerability-alerts`. 되돌리려면 같은 경로에 `DELETE`.
