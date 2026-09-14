@@ -97,6 +97,16 @@
       "why": "CI 신설. 사용자 확인 후 (D-19)"
     },
     {
+      "pattern": ".github/workflows/python-compat.yml",
+      "owner": "sealed",
+      "why": "CI 신설. 사용자 확인 후 (#62). SRS 가 선언한 최소 버전에서 도는 유일한 잡 — 3.10 을 지원한다는 선언을 대조한다"
+    },
+    {
+      "pattern": ".github/workflows/dashboard.yml",
+      "owner": "sealed",
+      "why": "CI 신설. 사용자 확인 후 (#64). DB-014 런타임 강제를 자동으로 돌리는 유일한 잡 — 파이썬 격리 검사는 dashboard/ 를 보지 않는다(D-22 미도입)"
+    },
+    {
       "pattern": "src/measurement/*.py",
       "owner": "phillip",
       "why": "측정 계층 구현"
