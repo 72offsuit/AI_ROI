@@ -202,6 +202,11 @@
       "why": "계약 강제 공백 (#61 M2·M6). 반례를 실제 validator 로 태운다 — 스키마에 키워드가 있는지만 보면 원 결함이 그대로 통과한다"
     },
     {
+      "pattern": "tests/test_staging_preemption.py",
+      "owner": "phillip",
+      "why": "게시 staging 선점 방어 (#65 보안 F3). 거부가 파괴적이지 않은지(링크 너머를 지우지 않는지)까지 본다"
+    },
+    {
       "pattern": "tests/test_doctests.py",
       "owner": "phillip",
       "why": "docstring 예제 18개를 unittest discover 에 편입 (#59 M10). 모듈 목록은 하드코딩하지 않고 발견한다"
