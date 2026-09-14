@@ -1412,7 +1412,22 @@ def publish(
         output_root.mkdir(parents=True, exist_ok=True)
         (output_root / MEASUREMENT_SUBDIR).mkdir(parents=True, exist_ok=True)
         for path in sorted(staging.rglob("*.json")):
+            # ★ 승격 대상도 링크면 거부한다 (이슈 #65). rglob 은 링크를 따라가므로
+            #   staging 안에 심어진 링크가 이 루프에 들어올 수 있고, 그대로 옮기면
+            #   링크가 results/ 안에 놓인다 — 다음 읽기가 그 링크를 따라간다.
+            if path.is_symlink():
+                raise PublishError(
+                    f"staging 안의 산출물이 심볼릭 링크다: {path} → "
+                    f"{os.readlink(path)}. 게시를 중단한다 — 옮기면 링크가 "
+                    "results/ 안에 놓이고 읽는 쪽이 그것을 따라간다."
+                )
             target = output_root / path.relative_to(staging)
+            if target.is_symlink():
+                raise PublishError(
+                    f"게시 대상이 심볼릭 링크다: {target} → {os.readlink(target)}. "
+                    "게시를 중단한다 — os.replace 는 링크를 대체하지만, 링크가 "
+                    "거기 있다는 것 자체가 results/ 가 손대졌다는 뜻이다."
+                )
             target.parent.mkdir(parents=True, exist_ok=True)
             os.replace(path, target)
         # ★ index.json 을 마지막에. 대시보드의 진입점이므로 먼저 쓰면 아직 없는
@@ -1472,8 +1487,39 @@ def _contract_path(output_root: Path, name: str) -> str:
 
 
 def _reset(path: Path) -> None:
+    """Staging 을 비운다. ★ **심볼릭 링크면 지우지 않고 거부한다** (이슈 #65 · 보안 F3).
+
+    이 경로는 `results.staging` 으로 **완전히 예측 가능**하다. 그래서 게시 전에
+    미리 만들어 둘 수 있고, 이전 판은 그것을 통과시켰다:
+
+      - `shutil.rmtree(..., ignore_errors=True)` 는 심볼릭 링크에서 **조용히
+        아무것도 하지 않는다** (rmtree 는 링크를 거부하는데 오류가 삼켜진다)
+      - `mkdir(exist_ok=True)` 는 링크가 가리키는 곳이 있으면 성공한다
+
+    결과: 게시물이 공격자 디렉터리에 쓰이고, 승격 루프가 `staging.rglob("*.json")`
+    으로 훑으므로 **공격자가 심어 둔 .json 이 `results/` 로 올라간다.** 재현했다.
+
+    ★ 예측 가능한 이름을 그대로 둔 이유. 링크를 거부하면 남는 것은 "공격자가
+      링크를 심어 게시를 막는" DoS 인데, 그 공격자는 `results/` 의 부모에 쓸 수
+      있다는 뜻이고 **이미 `results/` 를 지우거나 덮어쓸 수 있다.** 새 능력이
+      아니다. 반면 조용한 내용 바꿔치기는 새 능력이었다. 시끄럽게 거부하는 쪽이
+      낫고, 이름을 무작위로 바꾸면 실패 시 남기는 staging 이 누적된다
+      (오류 메시지가 "staging 은 … 에 남아 있으니" 로 그것을 전제한다).
+    """
+    if path.is_symlink():
+        raise PublishError(
+            f"staging 경로가 심볼릭 링크다: {path} → {os.readlink(path)}. "
+            "게시를 중단한다 — 이 경로는 예측 가능하므로 미리 선점될 수 있고, "
+            "그대로 진행하면 게시물이 링크가 가리키는 곳에 쓰이고 그곳의 .json 이 "
+            f"{path.parent} 로 승격된다. 링크를 확인하고 지운 뒤 다시 실행한다."
+        )
     shutil.rmtree(path, ignore_errors=True)
     path.mkdir(parents=True, exist_ok=True)
+    if path.is_symlink():
+        # mkdir 과 이 검사 사이에 심어진 경우. 창이 좁지만 0 은 아니다.
+        raise PublishError(
+            f"staging 경로가 생성 직후 심볼릭 링크가 됐다: {path}. 게시를 중단한다."
+        )
 
 
 def _read_manifest(source_root: Path) -> dict[str, object]:
