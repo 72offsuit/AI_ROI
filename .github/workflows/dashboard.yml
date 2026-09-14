@@ -1,0 +1,53 @@
+name: 대시보드 검증
+
+# Why this workflow exists (issues #59 and #64):
+#
+# `dashboard/scripts/check-path-isolation.mjs` guards the ONLY runtime enforcement of
+# DB-014 -- the Python isolation suite does not look at `dashboard/` (decision D-22,
+# still open). It was written to close a reproduced symlink bypass, and until now
+# nothing ran it automatically. A check nobody runs dies quietly, which is the exact
+# shape this cycle kept finding.
+#
+# ★ `npm ci` is not run. Both scripts import the TypeScript sources directly (Node
+#   strips the types) and use only `node:` built-ins, so installing would add minutes
+#   and a lockfile dependency for nothing. If that ever stops being true, these steps
+#   fail loudly rather than silently skipping.
+#
+# ★ `tokens:test` is NOT here, and that is not an oversight. `scripts/tokens/verify.mjs`
+#   reads `Plan/DESIGN.md`, and `Plan` is a private submodule this repository's CI does
+#   not check out. It stays a manual check -- recorded rather than quietly dropped.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: 경로 격리 · 상태 매핑
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: dashboard
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          submodules: false
+
+      - name: Set up Node
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4
+        with:
+          node-version: '22'
+
+      # DB-014 런타임 강제. 벡터 10종을 디스크에 만들어 실행한다 (#64).
+      - name: 경로 격리
+        run: node scripts/check-path-isolation.mjs
+
+      # 계약 → 시각 상태 파생. `?? 0` 으로 결손을 0 으로 만드는 순간 실패한다 (USP-1).
+      - name: 상태 매핑
+        run: node scripts/check-state-map.mjs

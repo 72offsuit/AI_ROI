@@ -42,6 +42,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Iterable, Mapping, Sequence
 
+from src.measurement import timeparse as tp
 from src.measurement import schema as sc
 from src.measurement.errors import QualityGateFailure
 from src.measurement.sink import parquet_available
@@ -354,7 +355,7 @@ def _parse(value: object) -> datetime | None:
     if isinstance(value, datetime):
         return value
     try:
-        return datetime.fromisoformat(str(value))
+        return tp.parse_datetime(str(value))
     except (TypeError, ValueError):
         return None
 

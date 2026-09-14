@@ -1,0 +1,52 @@
+name: 파이썬 3.10 호환
+
+# Why this workflow exists (issue #62, review finding M3):
+#
+# The SRS declares `Target Runtime: Python 3.10+` and the code did not run on it --
+# `datetime.fromisoformat()` rejected the `Z` suffix until 3.11 (bpo-35829), and the
+# contract emits `Z`. Nothing noticed, because both existing jobs pin 3.12. The
+# declaration and the reality had never been compared.
+#
+# ★ The fix without this job would regress the first time someone writes
+#   `datetime.fromisoformat` again. `tests/test_timeparse.py` guards the source with
+#   an AST scan, and this job guards the behaviour. Neither replaces the other: the
+#   scan cannot see a dependency that breaks on 3.10, and the job cannot see a direct
+#   call on a path that happens not to receive a `Z`.
+#
+# ★ No dependencies are installed, deliberately. The pins in `requirements.txt` were
+#   resolved on 3.12 and some have no 3.10 wheels -- installing here would fail for a
+#   reason that has nothing to do with the compatibility being checked. The suite
+#   reports those as BLOCKED skips, which is the honest outcome. Separate from
+#   isolation.yml so that job's "no install step" stays the untouched proof of
+#   ISO-005.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  compat:
+    name: 선언된 최소 버전에서 전체 테스트
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+        with:
+          submodules: false
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5
+        with:
+          # SRS NFR-004 declares this as the floor. That claim is what this job checks.
+          python-version: '3.10'
+
+      - name: Show version
+        run: python -VV
+
+      - name: Run all tests
+        run: python -m unittest discover -s tests -t . -v

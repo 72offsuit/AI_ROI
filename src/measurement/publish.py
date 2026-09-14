@@ -46,6 +46,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Mapping, Sequence
 
+from src.measurement import timeparse as tp
 from src.measurement import contracts as ct
 from src.measurement import economics as ec
 from src.measurement import freeze as fz
@@ -461,7 +462,7 @@ def _event_day(event: Mapping[str, object]) -> date | None:
     if isinstance(raw, datetime):
         return raw.date()
     try:
-        return datetime.fromisoformat(str(raw)).date()
+        return tp.parse_datetime(str(raw)).date()
     except (TypeError, ValueError):
         return None
 

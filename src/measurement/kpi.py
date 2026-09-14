@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Iterable, Mapping, Sequence
 
+from src.measurement import timeparse as tp
 from src.measurement.schema import (
     Basis,
     BlockerKind,
@@ -118,7 +119,7 @@ def _event_date(event: Mapping[str, object]) -> date | None:
     if isinstance(raw, datetime):
         return raw.date()
     try:
-        return datetime.fromisoformat(str(raw)).date()
+        return tp.parse_datetime(str(raw)).date()
     except (TypeError, ValueError):
         return None
 
