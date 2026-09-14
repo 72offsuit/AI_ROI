@@ -207,6 +207,11 @@
       "why": "게시 staging 선점 방어 (#65 보안 F3). 거부가 파괴적이지 않은지(링크 너머를 지우지 않는지)까지 본다"
     },
     {
+      "pattern": "tests/test_timeparse.py",
+      "owner": "phillip",
+      "why": "RFC3339 Z 접미사 (#62 M3). AST 로 직접 호출 재발을 막는다 — 3.10 잡이 없으면 조용히 되돌아간다"
+    },
+    {
       "pattern": "tests/test_doctests.py",
       "owner": "phillip",
       "why": "docstring 예제 18개를 unittest discover 에 편입 (#59 M10). 모듈 목록은 하드코딩하지 않고 발견한다"
