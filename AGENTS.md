@@ -84,4 +84,8 @@ python3 -m unittest tests.test_isolation -v
 - GATE 1은 **부분 봉인(`PARTIAL_FREEZE`)** 상태다. 완전 봉인(`LOCKED`)은 **0종**.
 - CI는 `.github/workflows/isolation.yml`(의존성 없이) · `tests-with-deps.yml`(의존성 설치 후) **2종**이다. 저장소 전체 검증은 `python3 -m unittest discover -s tests` 이며 lint·build·타입 검사는 여전히 미정의.
   - 여기에 **건수를 적지 않는다.** 이전 판은 `407건` 이라고 적었고 테스트를 추가한 바로 다음 커밋에 낡았다 — 아무도 대조하지 않는 숫자를 문서에 두는 것이 이슈 `#59` 가 닫은 결함의 모양이다. 건수는 명령을 실행하면 나온다.
+- 저장소 보안 설정 (이슈 `#66` · 보안 F4, 2026-09-14):
+  - **Dependabot alerts — 활성화됨.** `gh api -X PUT repos/…/vulnerability-alerts`. 되돌리려면 같은 경로에 `DELETE`.
+  - **Secret scanning — `BLOCKED`.** `HTTP 422 Secret scanning is not available for this repository` — private 저장소의 플랜 제한(GitHub Advanced Security 필요)이라 설정으로 열 수 없다. **켜지 않은 것을 켠 것으로 적지 않는다.** 커밋된 비밀값 감시는 여전히 **사람이 본다**.
+  - CI 서드파티 액션은 커밋 SHA 로 고정돼 있다. 갱신 시 `uses:` 옆 주석의 태그를 함께 고친다.
 - **존재하지 않는 명령을 문서·게이트·PR 본문에 쓰지 않는다.** 검증을 실행할 수 없으면 `BLOCKED`로 보고한다.
