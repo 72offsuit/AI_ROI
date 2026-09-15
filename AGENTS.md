@@ -15,6 +15,10 @@
 
 ## 먼저 읽을 것
 
+0. **C2 착수 지침** — `docs/TEAM_SETUP.md`
+   **두 팀(시뮬레이터 · 시스템)으로 나뉜 뒤의 진입점이다.** 팀·소유 경로·태스크 번호·착수 절차가 한 곳에 있다.
+   사람이든 에이전트(Claude · Codex · 그 외)든 **처음 붙을 때 여기부터 읽는다.**
+   기계가독 판본은 `docs/team_boundaries.json`, 강제는 `tests/test_team_boundaries.py`.
 1. **조직 공통 git 규약 정본** — `Plan/docs/GIT_WORKFLOW_CORE.md`
    git 작업(브랜치·커밋·PR·이슈) 전에 반드시 읽는다. 아래 요약은 정본을 대체하지 않는다.
 2. **이 저장소의 워크플로우** — `docs/GIT_WORKFLOW.md`

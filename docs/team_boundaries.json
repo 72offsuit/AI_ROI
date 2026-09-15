@@ -1,0 +1,104 @@
+{
+  "cycle": "C2",
+  "note": "팀 ↔ 경로 소유. 사람이 읽는 판본은 docs/TEAM_SETUP.md, 강제는 tests/test_team_boundaries.py.",
+  "why": "두 팀은 서로의 파일을 읽지 않는다. 시뮬레이터는 정답을 알고(출제자), 의사결정은 행동 기록만 보고 맞혀야 한다(수험생). 경계를 문서로만 적으면 아무도 대조하지 않는다 — 그래서 기계가독 판본을 두고 테스트가 읽는다.",
+  "teams": {
+    "sim": {
+      "name": "고객 시뮬레이터",
+      "members": [
+        "limtjdghks",
+        "1anminJ"
+      ],
+      "task_prefix": "S",
+      "role": "출제자 — 가상 고객을 만들고 시간을 진행시키며 행동과 처치 반응을 생성한다. 정답(Hidden Trait · Potential Outcome · 참 CATE)을 안다.",
+      "must_not_read": [
+        "results/**",
+        "src/decision/**",
+        "docs/model_report.md",
+        "docs/uplift_analysis.md",
+        "docs/ab_test_report.md"
+      ],
+      "must_not_read_why": "AI 성능을 보고 시뮬레이터를 조정하는 것이 이 프로젝트에서 가장 위험한 누수다 (PRD §80 Risk 1). 코드가 파일을 훔쳐보는 것보다 사람이 결과를 본 뒤 파라미터를 고치는 쪽이 위험하다."
+    },
+    "sys": {
+      "name": "시스템 (의사결정)",
+      "members": [
+        "Danto7632",
+        "kwung0206"
+      ],
+      "task_prefix": "D",
+      "role": "수험생 — Feature 부터 Churn · Uplift · CLV · 세그먼테이션 · 전략 · 예산 최적화 · 실행 루프까지. 행동 기록만 보고 맞혀야 한다.",
+      "must_not_read": [
+        "data/hidden/**",
+        "data/ground_truth/**",
+        "src/simulator/**",
+        "src/diagnostics/**"
+      ],
+      "must_not_read_why": "시뮬레이터가 행동을 어떻게 만드는지 알면 그 구조에 맞춘 Feature 를 만들게 되고, 그것은 실제 데이터에서 통하지 않는다. api.py 도 예외가 아니다."
+    }
+  },
+  "owned": {
+    "sim": [
+      "src/simulator/**",
+      "src/diagnostics/**",
+      "data/hidden/**",
+      "data/ground_truth/**",
+      "config/simulator*.yaml",
+      "config/persona*.yaml",
+      "tests/test_simulator*.py",
+      "tests/test_behavior*.py",
+      "tests/test_treatment*.py",
+      "tests/test_diagnostics*.py",
+      "docs/simulator*.md",
+      "docs/persona*.md"
+    ],
+    "sys": [
+      "src/decision/**",
+      "src/orchestration/**",
+      "config/decision*.yaml",
+      "config/strategy*.yaml",
+      "config/budget*.yaml",
+      "tests/test_decision*.py",
+      "tests/test_feature*.py",
+      "tests/test_churn*.py",
+      "tests/test_uplift*.py",
+      "tests/test_clv*.py",
+      "tests/test_segment*.py",
+      "tests/test_strategy*.py",
+      "tests/test_budget*.py",
+      "tests/test_experiment*.py",
+      "tests/test_orchestration*.py",
+      "docs/model_report.md",
+      "docs/uplift_analysis.md",
+      "docs/ab_test_report.md",
+      "docs/retention_strategy.md",
+      "docs/feature_dictionary.md"
+    ]
+  },
+  "shared_read_only": {
+    "paths": [
+      "src/measurement/**",
+      "docs/contracts/**",
+      "docs/event_schema.md",
+      "docs/measurement_contract.md",
+      "docs/data_spec.html",
+      "Plan/**"
+    ],
+    "why": "C1 이 완성한 계약이다. 두 팀이 만나는 유일한 지점이며, 여기가 한쪽 편을 들면 계약이 아니게 된다. 변경은 양 팀 합의 + GATE 1 재봉인 절차(FREEZE-003)를 거친다 — 한 팀이 단독으로 고치지 않는다."
+  },
+  "lead_only": {
+    "paths": [
+      "AGENTS.md",
+      "CLAUDE.md",
+      "src/AGENTS.md",
+      "docs/GIT_WORKFLOW.md",
+      "docs/TEAM_SETUP.md",
+      "docs/team_boundaries.json",
+      ".github/**",
+      "config/gate1_lock.yaml",
+      "dashboard/**",
+      ".agent-team/**"
+    ],
+    "why": "경계를 정의하는 파일과 봉인 기록. 경계 안에 있는 사람이 경계를 옮기면 경계가 아니다."
+  }
+}
