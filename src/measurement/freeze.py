@@ -352,6 +352,102 @@ def gate1_lock_items() -> tuple[LockItem, ...]:
     return items
 
 
+#: The assumptions a GATE 1 seal stands on. **A record without these reads as
+#: "everything was verified"**, which the seal does not claim.
+#:
+#: ★ Why these live in code. They used to exist only inside the written record,
+#:   handed to `record()` by whoever ran it. `docs/gate1_checklist.md` §5.2 showed
+#:   the call *without* an `assumptions=` argument, so re-recording the seal --
+#:   which issue #63 required -- would have silently produced `assumptions: []`.
+#:   Nothing compared the two, so nothing would have said so. A record whose
+#:   content must be retyped from the previous record is not reproducible; this
+#:   makes it derivable instead, and `tests/test_freeze.py` compares what is
+#:   written against what is here.
+_GATE1_ASSUMPTIONS: tuple[Mapping[str, object], ...] = (
+    {
+        "id": "A-REFUND",
+        "decision": "D-2 (사용자, 2026-09-11)",
+        "assumed": (
+            "환불·취소 이벤트를 추가하지 않는다. revenue = Σ order_amount 이며 "
+            "총매출을 순매출로 간주한다"
+        ),
+        "confirmed_not_implemented": True,
+        "error_direction": (
+            "contribution_profit 이 위로 치우친다 (과대평가). 환불된 매출을 "
+            "순매출에서 뺄 수 없기 때문이다. 아래로가 아니다"
+        ),
+        "why_no_verdict_impact": (
+            "MEA-002 가 실험 결과 산출에 시뮬레이터 생성분만 쓰도록 규정하고, "
+            "시뮬레이터는 환불을 생성하지 않는다"
+        ),
+        "why_not_added": (
+            "DATA-003 22컬럼과 event_type 16종이 tests/test_schema.py 의 "
+            "assertEqual 로 고정돼 있고, 변경은 Plan/ SRS 개정을 요구해 이 팀의 "
+            "권한 밖이다"
+        ),
+        "carried_in": [
+            "config/economic_config.yaml assumptions.refund_adjusted",
+            "results/measurement/kpi_report.json notices REFUND_NOT_ADJUSTED",
+        ],
+    },
+    {
+        "id": "A-DISCOUNT",
+        "decision": "D-16 (리드 판정)",
+        "assumed": "discount 필드가 스키마에 없어 treatment_cost 에서 유도한다",
+        "error_direction": (
+            "coupon_use 이벤트가 있는 주문만 계상하므로 과소계상 방향이다"
+        ),
+        "why_no_verdict_impact": (
+            "유도값에 derived:true + derivation 이 붙어 저장된 사실과 구분된다"
+        ),
+        "carried_in": ["config assumptions.discount_derived_from_treatment"],
+    },
+    {
+        "id": "A-SHIPPING",
+        "decision": "D-3 (사용자 추천 ⑴)",
+        "assumed": (
+            "배송비 필드가 없어 무료배송 기준과 T1 처치에서 유도한다"
+        ),
+        "error_direction": (
+            "커머스 실측분은 MISSING_FIELD 이므로 계상되지 않는다 (과소)"
+        ),
+        "carried_in": ["config assumptions.shipping_subsidy_derived_from_rule"],
+    },
+    {
+        "id": "A-AI-INVESTMENT",
+        "decision": "미결 — 값에 외부 출처가 없다",
+        "assumed": (
+            "인건비 400만원/월 · 상각 12개월 · 컴퓨트 단가가 가정 기반 추정치다"
+        ),
+        "error_direction": (
+            "방향 불명 — 실제 집행 내역이 없어 어느 쪽인지 알 수 없다"
+        ),
+        "carried_in": [
+            "config ai_investment.is_estimate=true",
+            "게시물 notices AI_INVESTMENT_IS_ESTIMATE",
+        ],
+    },
+)
+
+
+def gate1_assumptions() -> tuple[Mapping[str, object], ...]:
+    """The assumptions to hand `record()`. Pass this, never a retyped literal.
+
+    Each entry carries `error_direction` on purpose: an assumption without a
+    direction tells the next reader that something is uncertain but not which way
+    it is wrong, and that is the half that changes a decision.
+    """
+    return _GATE1_ASSUMPTIONS
+
+
+assert len({a["id"] for a in _GATE1_ASSUMPTIONS}) == len(_GATE1_ASSUMPTIONS), (
+    "가정 id 가 중복이다"
+)
+assert all(str(a.get("error_direction", "")).strip() for a in _GATE1_ASSUMPTIONS), (
+    "오차 방향이 빈 가정이 있다 — 방향 없는 가정은 읽는 사람이 쓸 수 없다"
+)
+
+
 # ── 판정 — 세 층이 공유하는 유일한 자리 ─────────────────────────────────────
 
 def verify(

@@ -222,6 +222,11 @@
       "why": "RFC3339 Z 접미사 (#62 M3). AST 로 직접 호출 재발을 막는다 — 3.10 잡이 없으면 조용히 되돌아간다"
     },
     {
+      "pattern": "tests/test_config_no_dead_values.py",
+      "owner": "phillip",
+      "why": "읽는 곳 없는 설정 필드 (#63 M8). 로더가 읽는지가 아니라 계산이 읽는지를 본다 — discount_cost_krw 는 로딩됐기 때문에 살아 보였다"
+    },
+    {
       "pattern": "tests/test_team_boundaries.py",
       "owner": "timothy",
       "why": "C2 팀 경계 강제. 경계 안에 있는 사람이 경계를 옮기면 경계가 아니므로 리드 소유다"

@@ -223,8 +223,18 @@ fz.record(
     ],
     repo_commit=commit,
     now=datetime.now(KST),
+    assumptions=fz.gate1_assumptions(),      # ★ 빠뜨리면 가정이 전부 사라진다
 )
 ```
+
+> ★ **`assumptions=` 를 빠뜨리지 않는다.** 이 인자의 기본값은 `()` 이므로, 넘기지
+> 않으면 기록의 `assumptions` 가 **조용히 빈 목록이 된다.** 가정을 잃은 봉인 기록은
+> *"전부 확인했다"* 로 읽히고, 봉인은 그렇게 주장하지 않는다.
+>
+> 이 줄은 원래 이 문서에 없었다. 이슈 `#63` 이 요구한 **재기록을 절차대로
+> 실행했다면 가정 4건이 그대로 사라졌을 것이고**, 대조하는 것이 없어 아무도 몰랐을
+> 것이다. 지금은 정본이 `freeze.gate1_assumptions()` 에 있고
+> `tests/test_freeze.py` 가 기록과 대조한다.
 
 `config/gate1_lock.yaml` 이 생기고 **커밋한다.** 그 뒤 게시를 다시 돌리면 `freeze_status.json` 의 `overall` 이 `not_started` → `partial` 로 바뀐다.
 

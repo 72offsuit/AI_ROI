@@ -37,7 +37,6 @@ def fixture_config(**overrides: object) -> CostAccountingConfig:
         "coupon_treatments": ("T2", "T3"),
         "message_cost_krw": 30,
         "campaign_fixed_cost_krw": 100000,
-        "discount_cost_krw": 7000,
         "shipping_fee_krw": 3000,
         "free_shipping_threshold_krw": 40000,
         "ai_investment": AiInvestmentConfig(
