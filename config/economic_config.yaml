@@ -120,8 +120,11 @@ cost_accounting:
   message_cost_krw: 30
   # 캠페인 1회당 운영 고정비.
   campaign_fixed_cost_krw: 100000
-  # 쿠폰이 **실제 사용된** 주문에만 계상한다 (coupon_use 이벤트 기준).
-  discount_cost_krw: 7000
+  # ★ discount_cost_krw 를 두지 않는다 (이슈 #63 · 리뷰 M8).
+  #   할인 비용은 D-16 유도 규칙이 treatment_cost 에서 구한다 — 아래 assumptions
+  #   의 discount_derived_from_treatment 가 그 규칙이다. 별도 상수를 두면 T3 의
+  #   7,000원과 **같은 값이 두 곳에 있게 되고**, 한쪽만 고치면 config 가 스스로
+  #   모순된다. 실제로 이 값은 어디서도 읽히지 않는 죽은 설정값이었다.
   # ★ EC-4 — 실제로 메시지가 발송된 고객 수(push_sent 발생 고객 수)다.
   #   배정된 처치군 전체가 아니고, 반응한 고객 수도 아니다. 발송 실패·제외 고객이
   #   고정비를 나눠 갖지 않게 하는 정의다.

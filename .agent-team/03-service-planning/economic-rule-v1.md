@@ -288,7 +288,9 @@ Caleb의 지적: *"반복구매 그로서리는 배송 문제로 인한 부분/�
 |---|---|---|
 | `product_margin` | 카테고리 5종 원가율·기여마진율·가격 중앙값·구매빈도 가중·pool 수 | **아니오 — 생성 파라미터** (§3.2) |
 | `treatment_cost` | T0~T4 단위 비용·조건·발생 시점 | 예 |
-| `cost_accounting` | `message_cost` · `campaign_fixed_cost` · `discount_cost` · `N_targeted` 정의 | 예 |
+| `cost_accounting` | `message_cost` · `campaign_fixed_cost` · ~~`discount_cost`~~ · `N_targeted` 정의 | 예 |
+
+> ★ **`discount_cost` 는 별도 상수로 구현되지 않았다** (이슈 `#63`, 2026-09-16). 결정 `D-16` 이 할인 비용을 `treatment_cost` 에서 **유도**하도록 정했고, 상수를 함께 두면 `T3` 의 7,000원과 같은 값이 두 곳에 있게 된다 — 한쪽만 고치면 config 가 스스로 모순된다. 위 §4.1 의 **규칙 자체는 그대로 유효하다**(쿠폰 사용 시 7,000원). 바뀐 것은 값이 어디에 사는가뿐이다. 현재 기제는 `config/economic_config.yaml` 의 `assumptions.discount_derived_from_treatment` 다.
 | `shipping` | 배송비 3,000원 · 무료배송 기준 40,000원 | 예 |
 | `ai_investment` | 개발·컴퓨트·운영·모니터링·상각 12개월 | 예 |
 | `assumptions` | `refund_adjusted: false` 등 명시 가정 | 산출물에 전달 |

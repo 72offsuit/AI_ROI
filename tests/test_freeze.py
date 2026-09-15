@@ -52,6 +52,47 @@ def lock_items(**overrides: str) -> tuple[fz.LockItem, ...]:
     )
 
 
+class TestRecordedAssumptionsMatchTheCode(unittest.TestCase):
+    """★ 기록된 가정과 `freeze.gate1_assumptions()` 가 어긋나지 않는다.
+
+    이 가정들은 예전에 **기록 안에만** 있었고, 봉인을 실행하는 사람이 손으로
+    넘겼다. `docs/gate1_checklist.md` §5.2 의 호출 예시에 `assumptions=` 가
+    아예 없었으므로, 이슈 #63 이 요구한 **재기록을 절차대로 실행하면
+    `assumptions: []` 가 조용히 만들어졌을 것이다** — 그리고 대조하는 것이
+    없으니 아무도 몰랐을 것이다.
+
+    가정을 잃은 봉인 기록은 *"전부 확인했다"* 로 읽힌다. 봉인은 그렇게 주장하지
+    않는다. 그래서 정본을 코드로 옮기고 여기서 대조한다.
+    """
+
+    def test_record_carries_exactly_the_declared_assumptions(self) -> None:
+        record = fz.load_record()
+        if record is None:
+            self.skipTest("BLOCKED: Lock 기록이 없다 — 대조하지 않았다 (통과가 아니다)")
+        if record is fz.RECORD_UNREADABLE:
+            self.skipTest(
+                "BLOCKED: PyYAML 이 없어 기록을 읽지 못했다 — 대조하지 않았다. "
+                "with-deps 잡이 이 대조를 수행한다"
+            )
+        self.assertEqual(
+            [dict(a) for a in fz.gate1_assumptions()],
+            [dict(a) for a in record.get("assumptions") or []],
+            "봉인 기록의 가정과 코드의 가정이 다르다. 기록을 손으로 고쳤거나, "
+            "재기록에 assumptions= 를 넘기지 않았다",
+        )
+
+    def test_every_assumption_states_its_error_direction(self) -> None:
+        """방향 없는 가정은 *"불확실하다"* 까지만 말하고 **어느 쪽으로 틀렸는지**를
+        말하지 않는다. 결정을 바꾸는 것은 후자다."""
+        for assumption in fz.gate1_assumptions():
+            with self.subTest(assumption=assumption["id"]):
+                self.assertTrue(str(assumption.get("error_direction", "")).strip())
+
+    def test_assumptions_are_not_empty(self) -> None:
+        """★ 빈 목록이 통과하면 이 파일 전체가 무의미하다."""
+        self.assertTrue(fz.gate1_assumptions())
+
+
 class TestNotStartedIsAsserted(unittest.TestCase):
     """★★ AC-5 — Lock 기록이 없을 때 **조용히 통과하지 않는다**."""
 

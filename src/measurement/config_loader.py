@@ -127,7 +127,6 @@ class CostAccountingConfig:
     coupon_treatments: tuple[str, ...]
     message_cost_krw: int
     campaign_fixed_cost_krw: int
-    discount_cost_krw: int
     shipping_fee_krw: int
     free_shipping_threshold_krw: int
     ai_investment: AiInvestmentConfig
@@ -227,7 +226,6 @@ def _build_cost_accounting(
         coupon_treatments=tuple(_require(raw, "coupon_treatments", path)),
         message_cost_krw=_require(accounting, "message_cost_krw", path),
         campaign_fixed_cost_krw=_require(accounting, "campaign_fixed_cost_krw", path),
-        discount_cost_krw=_require(accounting, "discount_cost_krw", path),
         shipping_fee_krw=_require(shipping, "shipping_fee_krw", path),
         free_shipping_threshold_krw=_require(
             shipping, "free_shipping_threshold_krw", path
