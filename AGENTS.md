@@ -15,7 +15,15 @@
 
 ## 먼저 읽을 것
 
-0. **C2 착수 지침** — `docs/TEAM_SETUP.md`
+0. **최초 진입점** — `README.md`
+   저장소가 무엇이고, 어떻게 돌리고, 지금 무엇이 있고 없는지. **처음 붙으면 여기부터.**
+
+0-1. **결정 기록 제도** — `docs/DECISION_RECORDS.md`
+   이슈는 태스크 목록이 아니라 **무엇을 정하고 무엇을 조사하고 무엇을 증거로 남길지의 안내서**다.
+   체크박스를 다 채워도 결정 기록이 없으면 그 태스크는 끝난 것이 아니다.
+   템플릿 `docs/decisions/_TEMPLATE_{design,model}.md`, 강제 `tests/test_decision_records.py`.
+
+0-2. **C2 착수 지침** — `docs/TEAM_SETUP.md`
    **두 팀(시뮬레이터 · 시스템)으로 나뉜 뒤의 진입점이다.** 팀·소유 경로·태스크 번호·착수 절차가 한 곳에 있다.
    사람이든 에이전트(Claude · Codex · 그 외)든 **처음 붙을 때 여기부터 읽는다.**
    기계가독 판본은 `docs/team_boundaries.json`, 강제는 `tests/test_team_boundaries.py`.
