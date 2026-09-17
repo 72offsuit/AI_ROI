@@ -1,6 +1,9 @@
 # C2 착수 지침 — 두 팀, 하나의 저장소
 
-> **이 문서 하나로 시작한다.** 사람이든 에이전트(Claude · Codex · 그 외)든 처음 붙을 때 여기부터 읽는다.
+> 읽는 순서: `README.md` → **이 문서** → `docs/DECISION_RECORDS.md` → 자기 이슈
+>
+> 사람이든 에이전트(Claude · Codex · 그 외)든 같다. 이 문서는 **팀·경로·태스크**를 말하고,
+> `DECISION_RECORDS.md` 는 **왜 그렇게 만들었는지 남기는 법**을 말한다. 둘 다 필요하다.
 > 기계가독 판본은 `docs/team_boundaries.json`, 강제는 `tests/test_team_boundaries.py`.
 
 ---
@@ -30,6 +33,19 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 |---|---|---|---|
 | **시뮬레이터** (출제자) | `limtjdghks`(성환) · `1anminJ`(민정) | `S1`~`S8` | `src/simulator/` `src/diagnostics/` `data/hidden/` `data/ground_truth/` |
 | **시스템** (수험생) | `Danto7632`(인성) · `kwung0206`(광진) | `D1`~`D12` | `src/decision/` `src/orchestration/` `results/` |
+
+### ★ 이슈는 태스크 목록이 아니다
+
+각 이슈는 세 가지를 함께 담는다:
+
+| | |
+|---|---|
+| **정해야 하는 것** | 임의로 고르면 안 되는 값·구조·방식. 왜 임의로 정하면 안 되는지와 함께 |
+| **조사해야 하는 것** | 결정 전에 찾아봐야 할 것. **근거를 못 찾은 것도 결과다** |
+| **증거로 남길 것** | 체크박스 + **결정 기록**(`DR-*.md`) · 모델이면 **모델 카드**(`MC-*.md`) |
+
+체크박스를 다 채워도 결정 기록이 없으면 **그 태스크는 끝난 것이 아니다.** 제도 전문은
+`docs/DECISION_RECORDS.md`, 검사는 `python3 -m unittest tests.test_decision_records`.
 
 **태스크 번호는 팀 안에서 자유롭게 옮긴다.** `S3` 을 성환이 맡았다가 민정이 이어받아도 되고 둘이 나눠도 된다 — **소유는 팀 단위이지 사람 단위가 아니기 때문이다.** 팀을 넘는 이동만 안 된다.
 

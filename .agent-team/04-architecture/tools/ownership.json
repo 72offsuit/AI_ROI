@@ -232,6 +232,26 @@
       "why": "C2 팀 경계 강제. 경계 안에 있는 사람이 경계를 옮기면 경계가 아니므로 리드 소유다"
     },
     {
+      "pattern": "tests/test_decision_records.py",
+      "owner": "timothy",
+      "why": "결정 기록 제도의 대조 장치. 빈 칸을 남긴 채 끝났다고 하지 않는 것까지만 본다 — 근거의 질은 리뷰가 본다"
+    },
+    {
+      "pattern": "docs/DECISION_RECORDS.md",
+      "owner": "timothy",
+      "why": "이슈가 태스크 목록이 아니라 결정·리서치 안내서가 되게 하는 제도 정본"
+    },
+    {
+      "pattern": "docs/decisions/**",
+      "owner": "team",
+      "why": "각 태스크 담당자가 자기 결정을 쓴다. 템플릿(_TEMPLATE_*)만 리드 소유"
+    },
+    {
+      "pattern": "README.md",
+      "owner": "timothy",
+      "why": "최초 진입점 — 무엇이고 어떻게 돌리고 무엇이 없는지"
+    },
+    {
       "pattern": "docs/TEAM_SETUP.md",
       "owner": "timothy",
       "why": "C2 착수 지침 — 팀·경로·태스크의 사람이 읽는 정본"
