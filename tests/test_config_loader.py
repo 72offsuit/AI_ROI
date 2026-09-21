@@ -103,12 +103,27 @@ class TestLoadRealConfig(unittest.TestCase):
             {"T0", "T1", "T2", "T3", "T4"}, set(self.config.cost_accounting.treatment_cost)
         )
         # occurs_at 이 EC-3 발생주의의 핵심이다 — 같은 금액이라도 시점이 다르다.
-        self.assertEqual(
-            "coupon_used", self.config.cost_accounting.treatment_occurs_at["T3"]
-        )
-        self.assertEqual(
-            "message_sent", self.config.cost_accounting.treatment_occurs_at["T4"]
-        )
+        #
+        # ★ 값이 바뀌었다 (이슈 #97). 이전에는 coupon_used · message_sent 였고,
+        #   **그 둘은 event_type 16종에 없는 이름**이었다. 이 테스트는 그 틀린
+        #   값을 그대로 고정하고 있었다 — 어휘가 어긋난 것을 아무도 대조하지
+        #   않았다는 사실이 여기에도 있었다.
+        occurs_at = self.config.cost_accounting.treatment_occurs_at
+        self.assertEqual("coupon_use", occurs_at["T3"])
+        self.assertEqual("push_sent", occurs_at["T4"])
+
+        # ★ 값 두 개를 박아 두는 것으로는 같은 결함이 다시 온다. 전부가
+        #   **실재하는 event_type** 인지 본다.
+        from src.measurement import schema as sc
+        from src.measurement.config_loader import NO_ACCRUAL
+
+        names = {event.value for event in sc.EventType}
+        for treatment, moment in occurs_at.items():
+            with self.subTest(treatment=treatment):
+                self.assertIn(
+                    moment, names | {NO_ACCRUAL},
+                    f"{treatment}: {moment!r} 는 event_type 이 아니다",
+                )
 
     def test_refund_assumption_is_recorded_as_false(self) -> None:
         """A-REFUND — 가정이 config 에 있어야 게시물 notices 로 나를 수 있다."""

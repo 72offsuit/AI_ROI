@@ -39,6 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from src.measurement import schema as sc
 from src.measurement.errors import ConfigError
 
 DEFAULT_ECONOMIC_CONFIG = Path("config/economic_config.yaml")
@@ -191,6 +192,35 @@ def load_economic_config(path: Path | str = DEFAULT_ECONOMIC_CONFIG) -> Economic
     )
 
 
+
+#: `occurs_at` 이 "비용이 발생하지 않는다" 를 뜻하는 값. T0(무처치)만 쓴다.
+NO_ACCRUAL = "none"
+
+
+def _checked_occurs_at(treatment: str, value: Any, path: Path) -> str:
+    """`occurs_at` 이 **실재하는 `event_type`** 인지 확인한다 (이슈 #97).
+
+    ★ 이전에는 아무 문자열이나 통과했고, 실제로 `order_placed`·`coupon_used`·
+      `message_sent` 가 들어 있었다 — 셋 다 `EventType` 16종에 **없는 이름**이다.
+      의도는 읽혔지만(`coupon_used` ≈ `coupon_use`) 이 이름으로 무언가를
+      배선하려는 사람은 존재하지 않는 이벤트를 찾게 된다. 어휘가 어긋난 채
+      아무도 대조하지 않는 것이 이 결함의 모양이었다.
+
+    여기서 거부하는 것이 EC-3 의 다른 규율과 같은 자리다 — 추측해서 읽지 않는다.
+    """
+    if value == NO_ACCRUAL:
+        return NO_ACCRUAL
+    try:
+        return sc.EventType(value).value
+    except ValueError:
+        raise ConfigError(
+            f"{path} 의 treatment_cost.{treatment}.occurs_at = {value!r} 가 "
+            f"event_type 이 아니다. 발생 시점은 **실재하는 이벤트**로 적는다 — "
+            f"이름만 그럴듯하면 그 이벤트를 찾는 코드가 아무것도 찾지 못한다. "
+            f"허용: {NO_ACCRUAL!r} 또는 {sorted(e.value for e in sc.EventType)}"
+        ) from None
+
+
 def _require(source: Mapping[str, Any], key: str, path: Path) -> Any:
     """필수 키를 꺼낸다. 없으면 `ConfigError`.
 
@@ -220,7 +250,7 @@ def _build_cost_accounting(
             for key, spec in treatments.items()
         },
         treatment_occurs_at={
-            key: _require(spec, "occurs_at", path)
+            key: _checked_occurs_at(key, _require(spec, "occurs_at", path), path)
             for key, spec in treatments.items()
         },
         coupon_treatments=tuple(_require(raw, "coupon_treatments", path)),

@@ -545,13 +545,30 @@ def contribution_profit(
     *,
     config: CostAccountingConfig,
 ) -> MetricValue:
-    """기여이익 = 매출 − COGS − 쿠폰 − 배송보조 − 메시지 − 캠페인 고정비.
+    """기여이익 = 매출 − COGS − 배송보조 − 메시지 − 캠페인 고정비.
 
-    `data_spec` §6.3 의 여섯 항목 중 **셋이 오늘 계산 불가**다:
+    ★ **쿠폰 할인을 빼지 않는다.** 순매출 기준이기 때문이다 (이슈 #101 ·
+      `docs/decisions/DR-101-revenue-basis.md`). 계약이 `order_amount` 를
+      `Σ(unit_price × quantity) − discount` 로 규정하므로 **할인은 이미 매출에서
+      빠져 있다.** 여기서 또 빼면 같은 할인이 두 번 차감된다 — 커머스 쪽 제보로
+      드러난 결함이며, 소계 15,700 · 할인 1,570 · COGS 11,000 인 주문에서
+      기여이익이 3,130 대신 1,560 이 됐다.
 
-        revenue          ← order_amount   ✅
+      총매출 기준(매출에 할인을 되돌리고 한 번 빼기)도 **같은 값을 낸다.** 단
+      같은 할인액을 쓸 때만 그렇고, 이 저장소가 가진 것은 실제 할인이 아니라
+      `treatment_cost` 유도값(D-16 · T2=3,000 · T3=7,000)이라 커머스 실제
+      할인(예 1,570)과 어긋난다. 순매출은 `order_amount` 안의 **실제 할인**을
+      쓰므로 자동으로 일치한다.
+
+      쿠폰 비용은 사라지지 않는다 — `marketing_cost()` 가 ROI 분모로 쓴다.
+      분자(이익)와 분모(지출)는 다른 것이고, 할인의 이익 영향은 이미 매출
+      감소로 들어가 있다.
+
+    `data_spec` §6.3 항목별 현황:
+
+        revenue          ← order_amount   ✅ (할인 후 · 순매출)
         cogs             ← unit_cost      ❌ 스키마에 없다
-        coupon_cost      ← discount       △ 규칙 유도 (D-16)
+        coupon_cost      ← discount       ⊘ 매출에 이미 반영 (빼지 않는다)
         shipping_subsidy ← 배송비          △ 규칙 유도 (D-3)
         message_cost     ← push_sent      ✅
         campaign_fixed   ← 캠페인 수       ✅
@@ -577,10 +594,13 @@ def contribution_profit(
         ),
     )
 
+    # ★ `coupon_cost` 가 여기 없는 것은 **빠뜨린 것이 아니다.** 순매출 기준이라
+    #   할인이 이미 `revenue` 에 반영돼 있다 (#101). 아래 `not_deducted` 가 그
+    #   사실을 산출물로 나른다 — 조용히 사라지면 왜 빼지 않았는지가 화면에서
+    #   사라지고, 그것은 0 으로 채우는 것과 같은 종류의 잘못이다.
     components = {
         "revenue": revenue(orders),
         "cogs": cogs_total,
-        "coupon_cost": coupon_cost(campaign, config=config),
         "shipping_subsidy": shipping_subsidy(orders, config=config),
         "message_cost": message_cost(campaign, config=config),
         "campaign_fixed_cost": campaign_fixed_cost(campaign, config=config),
@@ -608,7 +628,6 @@ def contribution_profit(
     total = (
         float(components["revenue"].value)  # type: ignore[arg-type]
         - float(components["cogs"].value)  # type: ignore[arg-type]
-        - float(components["coupon_cost"].value)  # type: ignore[arg-type]
         - float(components["shipping_subsidy"].value)  # type: ignore[arg-type]
         - float(components["message_cost"].value)  # type: ignore[arg-type]
         - float(components["campaign_fixed_cost"].value)  # type: ignore[arg-type]
@@ -621,7 +640,9 @@ def contribution_profit(
             denominator_definition=_SUM_DENOMINATOR,
             window=_NO_WINDOW,
             observed_count=len(orders),
-            source_event_types=("purchase", "push_sent", "coupon_use"),
+            # coupon_use 가 빠졌다 — 할인을 여기서 계상하지 않으므로 더는
+            # 이 지표의 근거 이벤트가 아니다 (#101).
+            source_event_types=("purchase", "push_sent"),
         ),
         limit_note="환불을 차감하지 않는다 (A-REFUND) — 과대평가 방향의 편향이다",
     )
