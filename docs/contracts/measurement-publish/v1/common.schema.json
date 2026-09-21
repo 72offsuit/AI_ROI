@@ -561,6 +561,43 @@
         "publisher_version": {
           "type": "string",
           "description": "게시 모듈의 버전 또는 커밋. generated_by 와 함께 재현 단서가 된다"
+        },
+        "lineage": {
+          "type": "object",
+          "description": "생성 계보 (이슈 #99). data/raw/runs/ 의 실행 기록과 디스크의 파티션을 대조한 결과다. ★ 선택 필드다 — runs/ 가 없는 옛 데이터에서도 게시가 성립해야 하고, 그 경우 verification 이 not_run 이다.",
+          "required": [
+            "verification",
+            "detail",
+            "runs"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "verification": {
+              "enum": [
+                "ok",
+                "broken",
+                "not_run"
+              ],
+              "description": "★ status 가 아니라 verification 이다. status 키를 쓰면 verify_core_invariants() 가 이 객체를 지표로 보고 value_formatted·reason_code 를 요구한다. freeze_status 가 같은 이유로 같은 이름을 쓴다. not_run 은 통과가 아니라 '대조하지 않았다' 다."
+            },
+            "detail": {
+              "type": "string",
+              "minLength": 1,
+              "description": "왜 그 판정인지. 비면 화면이 그 자리를 비운다."
+            },
+            "runs": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "읽을 수 있었던 실행 기록 수."
+            },
+            "head_run_id": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "사슬의 머리 — 아무도 parent 로 지목하지 않은 실행. 사슬이 갈라졌거나 기록이 없으면 null 이며, 추측해서 채우지 않는다."
+            }
+          }
         }
       }
     },

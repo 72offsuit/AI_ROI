@@ -198,3 +198,24 @@ python3 -m unittest discover -s tests
 번씩**이다. 누락도 중복도 오타도 스키마 단계에서 걸린다.
 
 반례 3건이 전부 거부됨을 확인했고 기존 픽스처·게시물은 전부 통과한다(거짓 양성 0).
+
+## provenance.lineage 추가 (이슈 #99, 2026-09-21)
+
+**무엇** `$defs.provenance.properties.lineage` — 선택 필드.
+`{verification, detail, runs, head_run_id}`.
+
+**왜** 같은 이벤트를 한 번에 생성한 것과 여러 창으로 나눠 이어붙인 것의 게시물이
+달랐다. `manifest.json` 이 실행마다 덮어써지는데 `publish` 가 거기서 필드 커버리지를
+읽어, 이전 창의 `category`·`product_id` 가 *"한 번도 없었다"* 로 나왔다.
+
+커버리지는 이제 이벤트에서 직접 센다. 계보는 그 위에 얹는 **추적 가능성**이다 —
+`data/raw/runs/` 의 실행 기록이 `parent_run_id` 로 사슬을 이루고, 이 필드가 그
+사슬을 디스크의 파티션과 **대조한 결과**를 싣는다. 계보만 두고 대조하지 않으면
+대조되지 않는 선언이 된다.
+
+**호환** 선택 필드이므로 읽는 쪽이 없어도 동작한다. `runs/` 가 없는 옛 데이터는
+`verification: not_run` 이며 **통과가 아니다.**
+
+★ `status` 가 아니라 `verification` 인 이유: `status` 키를 쓰면
+`verify_core_invariants()` 가 이 객체를 지표로 보고 `value_formatted`·`reason_code`
+를 요구한다. `freeze_status` 가 같은 이유로 같은 이름을 쓴다.

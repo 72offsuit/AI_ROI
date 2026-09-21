@@ -304,6 +304,12 @@ class TestContractCopyDiffersOnlyAsDocumented(unittest.TestCase):
         },
         "common.schema.json": {
             "$comment",
+            # 이슈 #99 — provenance 에 생성 계보를 싣는다. runs/ 의 실행 기록과
+            # 디스크의 파티션을 대조한 결과이며, **선택 필드**다: runs/ 가 없는
+            # 옛 데이터에서도 게시가 성립해야 하고 그때는 verification 이
+            # not_run 이다. provenance 가 additionalProperties:false 라 계약에
+            # 등재하지 않으면 게시물이 계약을 위반한다 — 실제로 CI 가 잡았다.
+            "$defs.provenance.properties.lineage",
             "$defs.metric_value.properties.value_formatted",
             "$defs.metric_value.properties.limit_note",
             "$defs.metric_value.allOf.0.then.required",
