@@ -222,6 +222,16 @@
       "why": "RFC3339 Z 접미사 (#62 M3). AST 로 직접 호출 재발을 막는다 — 3.10 잡이 없으면 조용히 되돌아간다"
     },
     {
+      "pattern": "tests/test_treatment_accrual.py",
+      "owner": "phillip",
+      "why": "발생 시점 선언 ↔ 실제 계상 근거 대조 (#97). 이름이 실재하는지와 그 이름이 맞는 이름인지는 다른 질문이라 둘 다 본다"
+    },
+    {
+      "pattern": "tests/test_revenue_basis.py",
+      "owner": "phillip",
+      "why": "쿠폰 할인 1회 차감 (#101). 제보 예시의 숫자를 그대로 고정하고, 분모에서도 빼 버리는 반대 방향 실수까지 본다"
+    },
+    {
       "pattern": "src/measurement/coverage.py",
       "owner": "phillip",
       "why": "필드 충족 집계의 유일한 규칙 (#99). sink 는 쓰면서 세고 publish 는 읽으며 센다 — 규칙이 두 벌이면 둘 다 따로 맞아 보이면서 어긋난다"

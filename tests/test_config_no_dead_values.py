@@ -54,11 +54,15 @@ MEASUREMENT = Path(__file__).resolve().parent.parent / "src" / "measurement"
 #: permanent hole.
 EXEMPT: dict[str, str] = {
     "treatment_occurs_at": (
-        "EC-3 발생 시점 선언 (T1=order_placed · T2/T3=coupon_used · T4=message_sent). "
-        "economics.py 는 같은 규칙을 구조로 구현하고 이 값을 읽지 않는다 — 즉 선언과 "
-        "구현을 대조하는 장치가 없다. 지우면 EC-3 이 config 에서 사라지고, 두면 "
-        "대조되지 않는 선언이 남는다. 해소: 계산이 이 값을 읽게 하거나, 구현과 "
-        "맞는지 대조하는 검사를 붙인다 (리드 판단 대기)"
+        "EC-3 발생 시점 선언 (T1=purchase · T2/T3=coupon_use · T4=push_sent). "
+        "economics.py 는 같은 규칙을 구조로 구현하고 이 값을 읽지 않는다. "
+        "★ 이슈 #97 이 **대조 장치를 붙였다** — config_loader 가 로딩 시 "
+        "EventType 실재 여부를 거부하고, tests/test_treatment_accrual.py 가 "
+        "economics.py 의 source_event_types 와 맞댄다. 이제 이 값은 죽은 값이 "
+        "아니라 **검증되는 선언**이다. 남은 것은 생산 코드 소비자가 없다는 "
+        "사실뿐이고, 그것은 오해를 낳지 않는다. "
+        "해소: 계산이 이 값을 읽게 될 때 (지금 그렇게 만들면 요청받지 않은 "
+        "추상화다 — 처치는 5종이고 계상 규칙이 바뀔 요구가 없다)"
     ),
     "categories": (
         "ProductGenerationConfig — 소비자가 아직 없다. 상품 pool 생성 파라미터이며 "

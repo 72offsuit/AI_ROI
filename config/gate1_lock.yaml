@@ -6,9 +6,9 @@ declaration: PARTIAL_FREEZE
 experiment_environment_v1_declared: false
 declaration_note: C1 은 GATE 1 을 통과시키지 않는다. 측정 계층이 소유한 항목만 부분 봉인하고 나머지는 봉인 대기로 남긴다.
   EXPERIMENT_ENVIRONMENT_v1 을 선언하지 않는다.
-locked_at: '2026-09-16T02:38:58.821+09:00'
+locked_at: '2026-09-21T20:54:06.279+09:00'
 locked_by: Danto7632
-repo_commit: 56125ec603b79fc73581bbef8d9fafda079d56d5
+repo_commit: 6212fdfca8b77b59e7e72fe602c5b736e240491b
 simulator_commit: null
 items:
 - item: SERVICE_v1
@@ -55,9 +55,9 @@ items:
     GATE 2 다 (결정 D-4). 그래서 metrics[].role 이 전부 none 이다 — 배정하지 않은 것이지 빠뜨린 것이 아니다
 canonical_files:
   src/measurement/schema.py: 4b9dafcb4517e3e5590decae78ede8a834debb1fd65b8bc9fa38bcf24394b4b3
-  config/economic_config.yaml: 68cf5594c1a4bc5618e755b17c6b6361ef1b0ea6dbbcbdc4a7e85e041352efb6
+  config/economic_config.yaml: 9641f9fe9323f1a79d937a91d30878aa9e26fef1cf3472647f5c5d2d9031da65
   docs/event_schema.md: ed4a13e3b4cecc81f09588d3f71138bff175804701cfeacd3d1c7980dad2ca57
-  docs/measurement_contract.md: f1da905024ba457f2dfaf3c4b5004500384889f7b98a7c91442dfdf20a6ac268
+  docs/measurement_contract.md: 0fac34afa8fda799d09a1f76cdbadcb7ac3b844e5fcecd9498f6a90aa2666212
 assumptions:
 - id: A-REFUND
   decision: D-2 (사용자, 2026-09-11)
