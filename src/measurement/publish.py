@@ -48,6 +48,7 @@ from typing import Iterable, Mapping, Sequence
 
 from src.measurement import timeparse as tp
 from src.measurement import contracts as ct
+from src.measurement import coverage as cov
 from src.measurement import economics as ec
 from src.measurement import freeze as fz
 from src.measurement import kpi
@@ -70,7 +71,9 @@ from src.measurement.sink import (
     REJECT_LOG_NAME,
     EventSource,
     event_source,
+    latest_run_id,
     read_events,
+    verify_lineage,
 )
 
 DEFAULT_SOURCE_ROOT = Path("data/raw")
@@ -371,12 +374,16 @@ def build_ingestion_report(
     def manifest_for(events: Sequence[Mapping[str, object]]) -> dict[str, object]:
         """출처별 부분 manifest. 전체 manifest 를 나누지 않고 다시 센다."""
         counts = Counter(str(e.get("event_type")) for e in events)
+        # ★ 커버리지 계열도 **그 출처의 이벤트에서 다시 센다** (이슈 #99).
+        #   예전에는 여기서 전체 manifest 의 값을 그대로 복사했다 — 출처를
+        #   나눠 놓고 커버리지만 전체 값을 붙이는 것 자체가 어긋났고, manifest
+        #   가 마지막 실행분만 담고 있어 이어붙인 데이터에서는 더 틀렸다.
+        tally = cov.tally(events)
         return {
             "rows": len(events), "rejected": 0,
             "event_type_counts": dict(counts),
-            "field_coverage": manifest.get("field_coverage") or {},
-            "missing_fields": manifest.get("missing_fields") or [],
-            "unavailable_metrics": manifest.get("unavailable_metrics") or [],
+            "missing_fields": cov.missing_fields(tally),
+            "unavailable_metrics": cov.unavailable_metrics(counts),
             "sources": {},
         }
 
@@ -409,7 +416,11 @@ def build_ingestion_report(
             "partition_day_count": _metric(kpi.partition_day_count(partition_dates)),
             "ingestion_days_gap": _metric(kpi.ingestion_days_gap(partition_dates)),
             "unavailable_metric_count": _metric(
-                kpi.unavailable_metric_count(manifest)
+                kpi.unavailable_metric_count(
+                    cov.unavailable_metrics(
+                        Counter(str(e.get("event_type")) for e in events)
+                    )
+                )
             ),
             # ★ X-5 — 공백이 몇 개인지는 알고, 그것이 무엇인지는 모른다고 말한다.
             "ingestion_gap_attribution": _metric(kpi.ingestion_gap_attribution()),
@@ -656,14 +667,15 @@ _SCHEMA_GAPS: tuple[dict[str, object], ...] = (
 
 
 def build_field_coverage_report(
-    manifest: Mapping[str, object], split: SourceSplit
+    events: Sequence[Mapping[str, object]], split: SourceSplit
 ) -> dict[str, object]:
     """V3 — 필드 충족률 22컬럼 + 스키마 공백.
 
     ★ **22컬럼 전부 낸다** (계약이 `minProperties: 22` · `maxProperties: 22`).
     한 건도 안 들어온 필드를 목록에서 빼면 *"안 들어왔다"* 가 화면에서 사라진다.
     """
-    rates = kpi.field_fill_rate(manifest)
+    tally = cov.tally(events)
+    rates = kpi.field_fill_rate(tally)
     applicable = {
         spec.name: tuple(
             item.value for item in sc.EventType
@@ -681,7 +693,7 @@ def build_field_coverage_report(
             }
             for spec in sc.EVENT_FIELDS
         },
-        "missing_fields": sorted(manifest.get("missing_fields") or []),
+        "missing_fields": cov.missing_fields(tally),
         "schema_gaps": [dict(gap) for gap in _SCHEMA_GAPS],
     }
 
@@ -1339,19 +1351,49 @@ def publish(
     partition_dates = _partition_dates(source_root)
     effective_index_date = index_date or _latest_date(partition_dates, now=now)
 
+    # ★ 계보를 provenance 앞에서 구한다 — 아래 provenance 가 이 값을 쓴다.
+    lineage = verify_lineage(source_root)
+
     provenance = ct.build_provenance(
         source_root=source_root,
         config_paths=[config_path],
         sink_manifest_sha256=manifest.get("sha256") if manifest else None,
     )
+    provenance["lineage"] = {
+        # ★ `status` 가 아니라 `verification` 이다 — `status` 로 두면 계약이
+        #   이 객체를 지표로 보고 value_formatted·reason_code 를 요구한다.
+        #   freeze_status.json 이 같은 이유로 같은 이름을 쓴다.
+        "verification": lineage.verification,
+        "detail": lineage.detail,
+        "runs": lineage.runs,
+        "head_run_id": latest_run_id(source_root),
+    }
     notices = _notices(config)
+    # ★ 계보를 게시물에 싣는다 (이슈 #99 ③). `runs/` 를 만들어 두고 산출물이
+    #   말하지 않으면 아무도 보지 않고, 그러면 계보는 대조되지 않는 선언이 된다.
+    if lineage.verification == "broken":
+        notices.append(ct.Notice(
+            "LINEAGE_BROKEN", "warning",
+            f"실행 기록과 디스크가 어긋난다 — {lineage.detail}. 파티션이 밖에서 "
+            "추가·삭제됐거나 실행 기록이 손상됐다. 이 데이터의 출처를 "
+            "직전 실행까지 되짚을 수 없다",
+            reference="issue #99",
+        ))
+    elif lineage.verification == "not_run":
+        notices.append(ct.Notice(
+            # ★ 통과가 아니다. 대조하지 않았다는 사실을 값으로 만든다.
+            "LINEAGE_NOT_RUN", "assumption",
+            f"{lineage.detail} — 이 데이터가 몇 번에 나눠 생성됐는지, 직전 "
+            "실행이 무엇인지 알 수 없다",
+            reference="issue #99",
+        ))
 
     quality = dq.build_report(events)
     ingestion = build_ingestion_report(manifest, split, partition_dates)
     bodies: dict[str, dict[str, object]] = {
         "ingestion_report": ingestion,
         "rejection_report": build_rejection_report(manifest, rejected),
-        "field_coverage_report": build_field_coverage_report(manifest, split),
+        "field_coverage_report": build_field_coverage_report(events, split),
         "kpi_report": build_kpi_report(
             events, split, index_date=effective_index_date, config=config
         ),

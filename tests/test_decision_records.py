@@ -168,18 +168,27 @@ class TestEachRecordIsFilledIn(unittest.TestCase):
             f"채우지 않은 자리가 남아 있다: {leftovers}",
         )
 
-    def test_task_id_is_in_the_body(self) -> None:
-        """어느 태스크의 결정인지 본문에서 알 수 있어야 한다."""
+    def test_owner_id_is_in_the_body(self) -> None:
+        """어느 태스크 또는 이슈의 결정인지 파일 이름과 본문에서 알 수 있어야 한다.
+
+        ★ 처음에는 `[SD]\d+`(태스크 번호)만 받았다. 실제로 첫 기록을 쓰려 하니
+          거부됐다 — 순매출 회계 기준(이슈 #101)은 **리드 결정이고 S/D 태스크에
+          속하지 않는다.** 검사가 제도보다 좁아 제도를 못 쓰게 만들고 있었다.
+          이슈 번호도 받는다. 검사의 목적은 "무엇에 대한 결정인지 추적 가능한가"
+          이고, 이슈 번호는 그 목적을 똑같이 만족한다.
+        """
         for path in records():
-            task = path.name.split("-")[1] if "-" in path.name else ""
+            owner = path.name.split("-")[1] if "-" in path.name else ""
             with self.subTest(record=path.name):
                 self.assertRegex(
-                    task, r"^[SD]\d+$",
-                    f"{path.name}: 파일 이름에 태스크 번호(S3 · D7 등)가 없다",
+                    owner, r"^([SD]\d+|\d+)$",
+                    f"{path.name}: 파일 이름에 태스크 번호(S3 · D7) 또는 "
+                    "이슈 번호(101)가 없다",
                 )
                 self.assertIn(
-                    task, path.read_text(encoding="utf-8"),
-                    f"{path.name}: 본문에 태스크 번호 {task} 가 없다",
+                    owner, path.read_text(encoding="utf-8"),
+                    f"{path.name}: 본문에 {owner} 가 없다 — 파일 이름만으로는 "
+                    "무엇에 대한 결정인지 본문에서 확인할 수 없다",
                 )
 
 

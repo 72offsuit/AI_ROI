@@ -25,6 +25,7 @@ import json
 import unittest
 from pathlib import Path
 
+from src.measurement import coverage as cov
 from src.measurement import kpi
 from src.measurement.schema import MetricStatus
 
@@ -52,11 +53,17 @@ NEEDS_JSONSCHEMA = (
 class TestFieldFillRateHandlesAnEmptyDenominator(unittest.TestCase):
     """M2 — 분모가 0 이면 계산된 것이 아니다."""
 
-    def test_zero_rows_with_coverage_is_unavailable(self) -> None:
-        """이전에는 `MetricValue.ok()` 가 ValueError 를 던지며 죽었다."""
-        result = kpi.field_fill_rate(
-            {"rows": 0, "rejected": 0, "field_coverage": {"event_id": 1.0}}
-        )
+    def test_zero_applicable_is_unavailable(self) -> None:
+        """이전에는 `MetricValue.ok()` 가 ValueError 를 던지며 죽었다.
+
+        ★ 이슈 #99 이후 입력이 manifest 의 비율에서 **이벤트에서 센 분자·분모**
+          로 바뀌었다. 원래 이 테스트가 재현하던 상황(manifest 가 coverage 를
+          담았는데 rows 가 0)은 이제 **만들어질 수 없다** — 커버리지가
+          이벤트에서 나오므로 `applicable > 0` 이면 이벤트가 있었다는 뜻이다.
+          모순된 manifest 라는 입력 자체가 사라졌다. 남은 실제 경우는
+          `applicable == 0` 이고, 그것이 여기서 검사하는 것이다.
+        """
+        result = kpi.field_fill_rate({"event_id": cov.Tally(present=0, applicable=0)})
         metric = result["event_id"]
         self.assertEqual(MetricStatus.UNAVAILABLE, metric.status)
         self.assertIsNone(metric.value, "계산 불가에 값이 붙으면 0 채우기와 같다")
@@ -65,15 +72,18 @@ class TestFieldFillRateHandlesAnEmptyDenominator(unittest.TestCase):
     def test_normal_path_still_computes(self) -> None:
         """가드가 정상 경로를 삼키지 않는다."""
         metric = kpi.field_fill_rate(
-            {"rows": 10, "rejected": 0, "field_coverage": {"event_id": 1.0}}
+            {"event_id": cov.Tally(present=10, applicable=10)}
         )["event_id"]
         self.assertEqual(MetricStatus.OK, metric.status)
         self.assertEqual(1.0, metric.value)
+        # ★ 분모가 **그 필드가 적용되는 이벤트의 실제 수**다. 예전에는 manifest 가
+        #   분모 원수를 담지 않아 `rows` 를 상한으로 적었다 (이슈 #99 가 없앴다).
         self.assertEqual(10, metric.basis.denominator)
+        self.assertEqual(10, metric.basis.observed_count)
 
-    def test_absent_coverage_is_still_unavailable(self) -> None:
-        """기존 동작 — 필드가 coverage 에 없으면 분모 자체가 없다."""
-        metric = kpi.field_fill_rate({"rows": 10, "rejected": 0})["event_id"]
+    def test_absent_field_is_still_unavailable(self) -> None:
+        """기존 동작 — 집계에 키가 아예 없으면 분모 자체가 없다."""
+        metric = kpi.field_fill_rate({})["event_id"]
         self.assertEqual(MetricStatus.UNAVAILABLE, metric.status)
 
     def test_every_ratio_function_handles_an_empty_denominator(self) -> None:
@@ -102,6 +112,9 @@ class TestFieldFillRateHandlesAnEmptyDenominator(unittest.TestCase):
             for parameter, spec in parameters.items():
                 if parameter == "manifest":
                     kwargs[parameter] = manifest
+                elif parameter == "counts":
+                    # 분모가 0 인 경우 = 전 필드 applicable 0 (이슈 #99)
+                    kwargs[parameter] = cov.new_tally()
                 elif parameter == "events":
                     kwargs[parameter] = []
                 elif parameter == "index_date":

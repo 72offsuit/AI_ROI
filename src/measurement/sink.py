@@ -32,10 +32,15 @@ from enum import Enum
 from pathlib import Path
 from typing import Iterable, Iterator
 
+from src.measurement import coverage as cov
 from src.measurement import timeparse as tp
 from src.measurement import schema as sc
 
 MANIFEST_NAME = "manifest.json"
+#: 실행 1건 = 파일 1개. **한 번 쓰고 다시 건드리지 않는다** (이슈 #99 ②).
+#: manifest.json 이 실행마다 덮어써지는 것과 대비된다 — 그쪽은 "마지막
+#: 실행" 을 말하고, 이쪽은 "각 실행이 무엇을 했나" 를 영구히 남긴다.
+RUNS_DIR_NAME = "runs"
 REJECT_LOG_NAME = "rejected.jsonl"
 DEFAULT_CHUNK_ROWS = 200_000
 
@@ -97,17 +102,15 @@ def event_source(record: dict[str, object]) -> EventSource:
 
 
 # ── 결손 추적 (MEA-003) ─────────────────────────────────────────────────────
-
-@dataclass
-class FieldCoverage:
-    """필드별 충족률. 값이 있는 레코드 수 / 해당 필드가 유효한 레코드 수."""
-
-    present: int = 0
-    applicable: int = 0
-
-    @property
-    def ratio(self) -> float:
-        return 0.0 if self.applicable == 0 else self.present / self.applicable
+#
+# ★ 집계 타입과 세는 규칙은 `coverage.py` 한 곳에 있다 (이슈 #99). 예전에는 이
+#   파일에 `FieldCoverage` 와 `_observe()` 가 있었고, `publish` 는 그 결과를
+#   manifest 에서 **읽기만** 했다. 그런데 manifest 는 실행마다 덮어써지므로
+#   이어붙여 생성하면 이전 창의 필드가 "한 번도 없었다" 로 나왔다.
+#
+#   이제 `publish` 는 이벤트에서 직접 센다. 두 곳이 세되 **규칙은 하나여야**
+#   드리프트하지 않는다 — 각자 복사본을 들면 둘 다 따로 보기에는 맞아 보이면서
+#   어긋난다.
 
 
 @dataclass
@@ -145,6 +148,8 @@ class EventSink:
         fmt: str | SinkFormat = "auto",
         chunk_rows: int = DEFAULT_CHUNK_ROWS,
         strict: bool = True,
+        run_id: str | None = None,
+        parent_run_id: str | None = None,
     ) -> None:
         self.root = Path(root)
         self.format = resolve_format(fmt)
@@ -167,12 +172,19 @@ class EventSink:
         self._rejected: list[dict[str, object]] = []
         self._source_counts: Counter[str] = Counter()
         self._event_type_counts: Counter[str] = Counter()
-        self._coverage: dict[str, FieldCoverage] = {
-            f.name: FieldCoverage() for f in sc.EVENT_FIELDS
-        }
+        self._coverage: dict[str, cov.Tally] = cov.new_tally()
         self._rows_written = 0
         self._files: list[Path] = []
         self._part_index: dict[str, int] = {}
+        # ★ 계보 (이슈 #99 ②). run_id 를 주지 않으면 만든다 — 실행이 익명이면
+        #   "직전 데이터까지 추적 가능" 이 성립하지 않는다.
+        self._run_id = run_id or _new_run_id()
+        # parent 를 명시하지 않으면 **디스크의 직전 실행**을 잇는다. 첫 실행이면
+        #   None 이고, 그것이 사슬의 시작이다 — 빈 문자열로 채우지 않는다.
+        self._parent_run_id = (
+            parent_run_id if parent_run_id is not None
+            else latest_run_id(self.root)
+        )
         """date_key → 다음에 쓸 파트 번호.
 
         `Counter` 가 아니라 `dict` 다. `Counter` 는 없는 키에 0 을 돌려주므로
@@ -209,14 +221,8 @@ class EventSink:
         레코드가 통계에 섞인 채 조용히 도는 쪽이 크래시보다 나쁘다.
         """
         self._source_counts[event_source(record).value] += 1
-        event_type = sc.EventType(record["event_type"])
-        self._event_type_counts[event_type.value] += 1
-        for name, coverage in self._coverage.items():
-            if sc.requirement(event_type, name) is sc.Requirement.NOT_APPLICABLE:
-                continue
-            coverage.applicable += 1
-            if record.get(name) is not None:
-                coverage.present += 1
+        self._event_type_counts[sc.EventType(record["event_type"]).value] += 1
+        cov.observe(record, self._coverage)
 
     # ── 저장 ────────────────────────────────────────────────────────────
     def flush(self) -> None:
@@ -264,9 +270,15 @@ class EventSink:
                 for entry in self._rejected:
                     handle.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
         manifest = self.manifest()
-        (self.root / MANIFEST_NAME).write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
+        # ★ 같은 dict 에서 두 곳에 쓴다 (이슈 #99 ②).
+        #   manifest.json 은 하위호환을 위해 남기고, runs/ 가 영구 기록이다.
+        #   두 곳이 드리프트할 수 없도록 **같은 객체**를 쓰고,
+        #   tests/test_lineage.py 가 동일성을 대조한다.
+        payload = json.dumps(manifest, ensure_ascii=False, indent=2)
+        (self.root / MANIFEST_NAME).write_text(payload, encoding="utf-8")
+        runs = self.root / RUNS_DIR_NAME
+        runs.mkdir(parents=True, exist_ok=True)
+        (runs / f"run-{self._run_id}.json").write_text(payload, encoding="utf-8")
         return manifest
 
     def __enter__(self) -> EventSink:
@@ -285,6 +297,11 @@ class EventSink:
         }
         return {
             "schema_version": sc.SCHEMA_VERSION,
+            # ★ 계보 (이슈 #99 ②) — 이 실행이 무엇을 이어받았는지.
+            #   parent 가 None 인 것은 **사슬의 시작**이고, "" 나 "unknown" 으로
+            #   채우지 않는다. 그러면 '첫 실행' 과 '부모를 모른다' 가 같아진다.
+            "run_id": self._run_id,
+            "parent_run_id": self._parent_run_id,
             # KST. 이전에는 UTC 였고, 그것은 manifest 가 같은 파일에서 선언하는
             # "timezone": "Asia/Seoul" 과 어긋나는 자기 규약 위반이었다.
             "created_at": datetime.now(KST).isoformat(timespec="seconds"),
@@ -298,10 +315,7 @@ class EventSink:
             "sources": dict(self._source_counts),
             "event_type_counts": dict(sorted(self._event_type_counts.items())),
             "field_coverage": coverage,
-            "missing_fields": sorted(
-                name for name, item in self._coverage.items()
-                if item.applicable > 0 and item.present == 0
-            ),
+            "missing_fields": cov.missing_fields(self._coverage),
             "unavailable_metrics": self.unavailable_metrics(),
         }
 
@@ -310,11 +324,7 @@ class EventSink:
 
         MEA-003 — 추정값을 만들어내지 않고 계산 불가로 표시한다.
         """
-        return sorted(
-            metric
-            for metric, sources in sc.OBSERVABLE_METRIC_SOURCES.items()
-            if not any(self._event_type_counts.get(s, 0) for s in sources)
-        )
+        return cov.unavailable_metrics(self._event_type_counts)
 
     def _digest(self) -> str:
         digest = hashlib.sha256()
@@ -322,6 +332,159 @@ class EventSink:
             digest.update(path.name.encode())
             digest.update(path.read_bytes())
         return digest.hexdigest()
+
+
+
+# ── 계보 (이슈 #99 ②) ───────────────────────────────────────────────────────
+
+def _new_run_id() -> str:
+    """`MR-<KST YYYYMMDD-HHMMSS>-<8자리>`. `publish` 의 run_id 와 같은 어휘다."""
+    import uuid
+
+    stamp = datetime.now(KST).strftime("%Y%m%d-%H%M%S")
+    return f"SR-{stamp}-{uuid.uuid4().hex[:8]}"
+
+
+def run_records(root: Path | str) -> list[dict[str, object]]:
+    """`runs/` 의 실행 기록 전부. 없으면 빈 목록 — **예외가 아니다.**
+
+    옛 데이터에는 `runs/` 가 없다. 그것은 오류가 아니라 *"계보를 모른다"* 이고,
+    호출부가 `not_run` 으로 값을 만든다. 여기서 던지면 옛 데이터를 읽을 수
+    없게 되고, 빈 목록을 '계보 없음' 과 '계보가 비었음' 으로 구분하지 못하게
+    만드는 것은 호출부의 몫이 아니다 — `runs/` 의 존재 여부로 갈린다.
+    """
+    directory = Path(root) / RUNS_DIR_NAME
+    if not directory.is_dir():
+        return []
+    records: list[dict[str, object]] = []
+    for path in sorted(directory.glob("run-*.json")):
+        try:
+            records.append(json.loads(path.read_text(encoding="utf-8")))
+        except json.JSONDecodeError as error:
+            # ★ 손상된 기록 하나가 전체를 삼키지 않는다. 사실로 만들어 넘긴다 —
+            #   조용히 건너뛰면 사슬이 끊긴 것이 '원래 없었던 것' 처럼 보인다.
+            records.append({
+                "run_id": path.stem.removeprefix("run-"),
+                "unreadable": f"{type(error).__name__}: {error}",
+            })
+    return records
+
+
+def latest_run_id(root: Path | str) -> str | None:
+    """사슬의 머리 — **아무도 부모로 지목하지 않은 실행**. 없으면 `None`.
+
+    ★ 처음에는 `created_at` 이 가장 큰 기록을 골랐다. `created_at` 은 초 단위
+      (`timespec="seconds"`)이고 시뮬레이터는 창을 연속해서 쓴다 — **같은 초에
+      두 실행이 끝나면 동률이 되어 부모가 잘못 잡힌다.** 실제로 그렇게 나왔다.
+
+      사슬 자체가 순서를 안다. 머리는 *"어떤 기록도 parent 로 가리키지 않는
+      run_id"* 이고, 이것은 시계에 의존하지 않는다.
+
+      머리가 둘 이상이면 사슬이 갈라진 것이다. 여기서는 **고르지 않고 `None`**
+      을 돌려준다 — 갈라진 사슬에서 부모를 추측하면 잘못된 사슬을 하나 더
+      만든다. 그 상태는 `verify_lineage()` 가 보고한다.
+    """
+    records = [r for r in run_records(root) if not r.get("unreadable")]
+    ids = {str(r["run_id"]) for r in records if isinstance(r.get("run_id"), str)}
+    claimed = {
+        str(r["parent_run_id"]) for r in records
+        if isinstance(r.get("parent_run_id"), str)
+    }
+    heads = ids - claimed
+    return heads.pop() if len(heads) == 1 else None
+
+
+
+@dataclass(frozen=True)
+class LineageVerification:
+    """계보를 **디스크와 대조한** 결과. 선언만으로는 부족하다 (이슈 #99 ③).
+
+    `runs/` 만 두면 계보는 *대조되지 않는 선언*이 된다 — 이 저장소가 이번
+    사이클 내내 찾아낸 결함의 모양이 정확히 그것이다. 그래서 주장(`runs/` 가
+    적은 파일)과 실제(디스크의 파티션)를 맞댄다.
+    """
+
+    #: ★ 이름이 `status` 가 아니라 `verification` 인 이유: 계약의
+    #: `verify_core_invariants()` 가 `status` 키를 가진 객체를 **지표로 보고**
+    #: `value_formatted`·`reason_code` 를 요구한다. 계보는 지표가 아니다.
+    #: 형제 타입 `freeze.FreezeVerification` 이 같은 이유로 같은 이름을 쓴다.
+    verification: str                 # ok · broken · not_run
+    detail: str
+    runs: int = 0
+    unclaimed_partitions: tuple[str, ...] = ()
+    claimed_but_absent: tuple[str, ...] = ()
+    broken_links: tuple[str, ...] = ()
+    unreadable_records: tuple[str, ...] = ()
+
+    @property
+    def problems(self) -> tuple[str, ...]:
+        return (
+            self.unclaimed_partitions + self.claimed_but_absent
+            + self.broken_links + self.unreadable_records
+        )
+
+
+def verify_lineage(root: Path | str) -> LineageVerification:
+    """`runs/` 의 주장과 디스크의 파티션을 맞댄다.
+
+    ★ `runs/` 가 없으면 **`not_run`** 이다. 통과가 아니다. 옛 데이터가 그 상태이고,
+      "대조하지 않았다" 와 "대조했고 이상 없다" 를 같은 값으로 적으면 계보가
+      있다는 주장이 공짜가 된다.
+    """
+    root = Path(root)
+    if not (root / RUNS_DIR_NAME).is_dir():
+        return LineageVerification(
+            "not_run",
+            f"{RUNS_DIR_NAME}/ 가 없어 계보를 대조하지 않았다 — 이 데이터는 "
+            "실행 기록을 남기기 전에 생성됐다 (통과가 아니다)",
+        )
+
+    records = run_records(root)
+    unreadable = tuple(
+        f"{r['run_id']}: {r['unreadable']}" for r in records if r.get("unreadable")
+    )
+    usable = [r for r in records if not r.get("unreadable")]
+
+    claimed: set[str] = set()
+    absent: list[str] = []
+    for record in usable:
+        for name in record.get("files") or []:
+            claimed.add(str(name))
+            if not (root / str(name)).exists():
+                absent.append(f"{record.get('run_id')} 가 주장하는 {name} 가 없다")
+
+    on_disk = {
+        path.relative_to(root).as_posix()
+        for path in (root / "events").rglob("part-*") if path.is_file()
+    } if (root / "events").is_dir() else set()
+    unclaimed = tuple(
+        f"{name} 를 어떤 실행도 주장하지 않는다" for name in sorted(on_disk - claimed)
+    )
+
+    ids = {str(r["run_id"]) for r in usable if isinstance(r.get("run_id"), str)}
+    broken = tuple(
+        f"{r.get('run_id')} 의 parent {r.get('parent_run_id')} 가 기록에 없다"
+        for r in usable
+        if isinstance(r.get("parent_run_id"), str)
+        and str(r["parent_run_id"]) not in ids
+    )
+
+    result = LineageVerification(
+        "ok", "", len(usable), unclaimed, tuple(absent), broken, unreadable,
+    )
+    if result.problems:
+        return LineageVerification(
+            "broken",
+            f"실행 기록 {len(usable)}건과 디스크가 어긋난다: "
+            + " · ".join(result.problems[:5]),
+            len(usable), unclaimed, tuple(absent), broken, unreadable,
+        )
+    return LineageVerification(
+        "ok",
+        f"실행 기록 {len(usable)}건이 디스크의 파티션 {len(on_disk)}개를 "
+        "빠짐없이 주장하고 사슬이 끊기지 않았다",
+        len(usable),
+    )
 
 
 # ── 파일 입출력 ─────────────────────────────────────────────────────────────

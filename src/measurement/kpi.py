@@ -51,6 +51,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Iterable, Mapping, Sequence
 
+from src.measurement import coverage as cov
 from src.measurement import timeparse as tp
 from src.measurement.schema import (
     Basis,
@@ -307,41 +308,34 @@ def event_type_count(manifest: Mapping[str, object]) -> dict[str, MetricValue]:
     }
 
 
-def field_fill_rate(manifest: Mapping[str, object]) -> dict[str, MetricValue]:
+def field_fill_rate(counts: Mapping[str, "cov.Tally"]) -> dict[str, MetricValue]:
     """필드별 충족률. ★ **22컬럼 전부 낸다.**
 
-    `NOT_APPLICABLE` 은 분모에서 제외된다 — `sink.FieldCoverage` 가 이미 그렇게
-    센다. 그 필드가 어떤 이벤트에도 적용되지 않았으면 `applicable == 0` 이고
-    manifest 에 키가 없다 → **분모가 없으므로 `unavailable`** 이다. `0%` 가 아니다.
+    입력은 `coverage.tally(events)` 의 결과다 — **이벤트에서 직접 센 분자·분모**
+    이지, manifest 가 담아 둔 비율이 아니다 (이슈 #99).
+
+    ★ 예전에는 manifest 의 `field_coverage` 를 읽었고 두 가지가 딸려 왔다:
+
+      1. manifest 는 실행마다 덮어써지므로 **이어붙여 생성하면 이전 창의 필드가
+         "한 번도 없었다" 로 나왔다.** 같은 데이터인데 생성 방식에 따라 게시물이
+         달랐다.
+      2. manifest 는 `round(ratio, 4)` 만 담아 **분모 원수가 없다.** 그래서
+         `denominator` 에 `rows` 를 상한으로 적고 basis 문장으로 그 사실을
+         밝히는 회피가 있었다.
+
+      둘 다 사라진다. 이제 분모는 **그 필드가 적용되는 이벤트의 실제 수**다.
+
+    `NOT_APPLICABLE` 은 분모에서 제외된다 (`coverage.observe()` 가 그렇게 센다).
+    그 필드가 어떤 이벤트에도 적용되지 않았으면 `applicable == 0` 이고
+    → **분모가 없으므로 `unavailable`** 이다. `0%` 가 아니다.
     """
-    coverage = manifest.get("field_coverage") or {}
-    # ★ 분모가 0 이면 계산된 것이 아니다 (이슈 #61 · 리뷰 M2).
-    #
-    #   `MetricValue.ok()` 는 `denominator == 0` 을 생성 시점에 거부한다 —
-    #   잘못된 값이 나가지는 않았다. 대신 **처리되지 않은 `ValueError` 로 죽었다.**
-    #   같은 모듈의 다른 비율 함수 9종은 전부 이 경우를 `unavailable` 로 돌려준다
-    #   (`rejection_rate` 가 대표적이다). 여기만 빠져 있었다 — 설계 오해가 아니라
-    #   국소 누락이다.
-    #
-    #   manifest 에 coverage 항목이 있는데 `rows` 가 0 인 것은 그 자체로 모순이다
-    #   (`sink` 는 `applicable > 0` 인 필드만 coverage 에 넣는다). 정상 Sink 에서는
-    #   나오지 않고, 버전 스큐·손편집·다른 생산자가 만든 manifest 에서 나온다.
-    rows = int(manifest.get("rows", 0) or 0)
     result: dict[str, MetricValue] = {}
-    if rows == 0 and coverage:
-        return {
-            spec.name: MetricValue.unavailable(
-                ReasonCode.NO_SOURCE_EVENT,
-                f"manifest 가 {spec.name} 의 충족률을 담았는데 수집 건수가 0 이다 — "
-                "분모가 없으므로 비율이 성립하지 않는다. 0% 로 적으면 '비어 있었다' 로 "
-                "읽히지만 실제로는 '셀 대상이 없었다' 이며, 두 값이 함께 온 manifest "
-                "자체가 모순이다",
-                unit=Unit.RATIO,
-            )
-            for spec in EVENT_FIELDS
-        }
     for spec in EVENT_FIELDS:
-        if spec.name not in coverage:
+        tally = counts.get(spec.name)
+        # ★ 분모가 0 이면 계산된 것이 아니다 (이슈 #61 · 리뷰 M2).
+        #   `MetricValue.ok()` 는 `denominator == 0` 을 생성 시점에 거부한다 —
+        #   여기서 막지 않으면 처리되지 않은 ValueError 로 죽는다.
+        if tally is None or tally.applicable == 0:
             result[spec.name] = MetricValue.unavailable(
                 ReasonCode.NO_SOURCE_EVENT,
                 f"{spec.name} 이 적용되는 이벤트가 0건이라 충족률의 분모가 없다 — "
@@ -350,23 +344,21 @@ def field_fill_rate(manifest: Mapping[str, object]) -> dict[str, MetricValue]:
             )
             continue
         result[spec.name] = MetricValue.ok(
-            float(coverage[spec.name]),
+            tally.present / tally.applicable,
             unit=Unit.RATIO,
             basis=Basis(
                 population=f"{spec.name} 이 적용되는(NOT_APPLICABLE 이 아닌) 이벤트",
                 denominator_definition="해당 필드가 적용되는 이벤트 수",
                 window=Window(WindowDirection.POINT_IN_TIME),
-                # manifest 는 비율만 담고 분모 원수를 담지 않는다. 비율 지표이므로
-                # 계약이 denominator 를 요구하는데, 없는 수를 지어내지 않고 rows 를
-                # 상한으로 적는다 — basis 문장이 그 사실을 말한다.
-                denominator=rows,
+                denominator=tally.applicable,
+                observed_count=tally.present,
             ),
         )
     return result
 
 
-def missing_field_count(manifest: Mapping[str, object]) -> MetricValue:
-    missing = manifest.get("missing_fields") or []
+def missing_field_count(missing: Sequence[str]) -> MetricValue:
+    """적용 대상인데 한 건도 값이 없는 필드 수. 입력은 `coverage.missing_fields()`."""
     return MetricValue.ok(
         len(missing),
         unit=Unit.COUNT,
@@ -379,13 +371,12 @@ def missing_field_count(manifest: Mapping[str, object]) -> MetricValue:
     )
 
 
-def unavailable_metric_count(manifest: Mapping[str, object]) -> MetricValue:
-    """계산 불가 Observable 지표 수 / 16.
+def unavailable_metric_count(unavailable: Sequence[str]) -> MetricValue:
+    """계산 불가 Observable 지표 수 / 16. 입력은 `coverage.unavailable_metrics()`.
 
     빈 Sink 에서 **16 전부**가 계산 불가다 — `tests/test_sink.py` 의
     `test_empty_sink_marks_every_metric_unavailable` 가 그 동작을 고정한다.
     """
-    unavailable = manifest.get("unavailable_metrics") or []
     total = len(OBSERVABLE_METRIC_SOURCES)
     return MetricValue.ok(
         len(unavailable),
