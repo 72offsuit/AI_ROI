@@ -21,6 +21,7 @@ import unittest
 import uuid
 from datetime import date, timedelta
 
+from src.measurement import coverage as cov
 from src.measurement import kpi
 from src.measurement.schema import (
     DerivedStateType,
@@ -110,7 +111,7 @@ class TestMeasuredZeroVersusNoBasis(unittest.TestCase):
 
     def test_missing_field_coverage_is_unavailable_not_zero_percent(self) -> None:
         """필드가 적용되는 이벤트가 0건이면 분모가 없다 — `0%` 가 아니다."""
-        rates = kpi.field_fill_rate(manifest(field_coverage={}))
+        rates = kpi.field_fill_rate(cov.new_tally())
         self.assertEqual(len(EVENT_FIELDS), len(rates), "22컬럼 전부 낸다")
         for name, metric in rates.items():
             with self.subTest(field=name):
@@ -416,7 +417,7 @@ class TestLayerZeroCompleteness(unittest.TestCase):
 
     def test_empty_sink_reports_every_observable_unavailable(self) -> None:
         """USP-1 회귀 — 빈 Sink 에서 Observable 16개 전부가 계산 불가다."""
-        result = kpi.unavailable_metric_count(manifest())
+        result = kpi.unavailable_metric_count(cov.unavailable_metrics({}))
         self.assertEqual(len(OBSERVABLE_METRIC_SOURCES), result.value)
         self.assertEqual(len(OBSERVABLE_METRIC_SOURCES), result.basis.denominator)  # type: ignore[union-attr]
 

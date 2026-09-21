@@ -222,6 +222,21 @@
       "why": "RFC3339 Z 접미사 (#62 M3). AST 로 직접 호출 재발을 막는다 — 3.10 잡이 없으면 조용히 되돌아간다"
     },
     {
+      "pattern": "src/measurement/coverage.py",
+      "owner": "phillip",
+      "why": "필드 충족 집계의 유일한 규칙 (#99). sink 는 쓰면서 세고 publish 는 읽으며 센다 — 규칙이 두 벌이면 둘 다 따로 맞아 보이면서 어긋난다"
+    },
+    {
+      "pattern": "tests/test_incremental_generation.py",
+      "owner": "phillip",
+      "why": "한 번에 생성 ≡ 나눠 생성 (#99). ★ 게시 경로를 통과시킨다 — 처음엔 coverage 모듈만 검사해 결함 자리를 지나가지 않았고, 되돌려도 통과했다"
+    },
+    {
+      "pattern": "tests/test_lineage.py",
+      "owner": "phillip",
+      "why": "run 기록과 디스크의 대조 (#99 ③). 계보만 두면 대조되지 않는 선언이 된다"
+    },
+    {
       "pattern": "tests/test_config_no_dead_values.py",
       "owner": "phillip",
       "why": "읽는 곳 없는 설정 필드 (#63 M8). 로더가 읽는지가 아니라 계산이 읽는지를 본다 — discount_cost_krw 는 로딩됐기 때문에 살아 보였다"
