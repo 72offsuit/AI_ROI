@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/commerce-exchange/v1-draft/order_items.schema.json",
+  "title": "data/commerce/order_items.jsonl — 주문 품목 (한 줄에 한 품목)",
+  "$comment": "v1 초안 — 커머스와 합의되지 않았다 (이슈 #100 수용 기준 ①). 합의 전까지 이 계약에 맞춰 데이터를 만들지 않는다. 배경과 논의 대상은 같은 디렉터리의 README.md 를 읽는다. ★ 이 파일이 #100 의 본체다. COGS 와 DQ-09 둘 다 여기에 걸려 있다.",
+  "type": "object",
+  "required": [
+    "order_id",
+    "line_no",
+    "product_id",
+    "quantity",
+    "unit_price",
+    "unit_cost"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "pattern": "^O\\d{8}-\\d{6}$"
+    },
+    "line_no": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "주문 내 품목 순번. (order_id, line_no) 가 유일하다"
+    },
+    "product_id": {
+      "type": "string",
+      "description": "catalog.product_id 를 가리킨다. 형식은 schema.py 가 고정한다",
+      "pattern": "^P\\d{4}$"
+    },
+    "quantity": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "unit_price": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "★ 주문 시점 판매가. 카탈로그 현재가가 아니다"
+    },
+    "unit_cost": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "★ 주문 시점 원가. COGS = Σ(unit_cost × quantity) 가 이 값만 쓴다. 모르면 null 이며 **0 으로 채우지 않는다** — 원가 0원인 상품과 원가를 모르는 상품은 다르고, 후자는 그 주문만 NO_COST_BASIS 다"
+    }
+  }
+}
