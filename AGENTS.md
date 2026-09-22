@@ -87,19 +87,31 @@ python3 -m unittest tests.test_isolation -v
 
 **CI에서도 자동 실행된다** — `.github/workflows/isolation.yml`이 모든 PR과 `main` push에서 이 검사를 돌린다. `Plan` 서브모듈은 private이라 체크아웃하지 않으며, 검사 대상이 `src/`·`tests/`뿐이라 필요도 없다.
 
-## 프로젝트 현황 (2026-09-14)
+## 프로젝트 현황 (2026-09-22)
 
 - 스택은 Python으로 확정. 의존성 매니페스트는 `requirements.txt`(`pyarrow`·`PyYAML`)와 `requirements-dev.txt`(`jsonschema`·`referencing`) 2종이며, **버전은 CI와 같은 3.12에서 해석해 고정했다.**
   - SRS NFR-004의 `>= 3.10` 선언에 **코드를 맞췄다** (이슈 `#62`, 결정 B). `datetime.fromisoformat()`의 `Z` 접미사가 3.11부터 지원되므로(bpo-35829) `src/measurement/timeparse.py`가 파싱 전에 `Z` → `+00:00`으로 정규화한다. **`datetime.fromisoformat`을 직접 부르지 않는다** — `tests/test_timeparse.py`가 AST로 강제하고, `python-compat.yml`이 3.10에서 실제로 돌려 확인한다.
-- `src/measurement/`는 구현 완료(M-01~M-09, 모듈 10개 + `__init__.py`). `src/simulator/`·`decision/`·`diagnostics/`·`orchestration/`은 **여전히 지침 파일만 있고 구현 코드가 없다.**
+- `src/measurement/`는 구현 완료(M-01~M-09). `src/simulator/`·`decision/`·`diagnostics/`·`orchestration/`은 **여전히 지침 파일만 있고 `.py` 가 0개다.** 그것이 C2 가 채울 자리다.
+  - 여기에도 **모듈 개수를 적지 않는다.** 이전 판은 `모듈 10개` 라고 적었고 `timeparse.py`·`coverage.py` 가 들어오며 낡았다 — 테스트 건수와 같은 종류의 낡음이다 (`#59`). `ls src/measurement/*.py` 가 답한다.
+- **C2 에서 추가된 것** (이슈 `#63`·`#97`·`#99`·`#101`):
+  - `src/measurement/coverage.py` — 필드 충족 집계의 **유일한 규칙.** `sink` 는 쓰면서 세고 `publish` 는 읽으며 센다. 규칙이 두 벌이면 둘 다 따로 보기에는 맞아 보이면서 어긋난다.
+  - **계보** — `data/raw/runs/run-<id>.json` 이 실행 1건씩을 불변으로 남기고 `parent_run_id` 로 사슬을 이룬다. `sink.verify_lineage()` 가 그 주장을 디스크의 파티션과 대조하며, `runs/` 가 없으면 `not_run` 이다(**통과가 아니다**). 게시물 `provenance.lineage` 로 실려 나간다.
+  - **매출 기준은 순매출이다.** `order_amount` 가 이미 할인 후이므로 `contribution_profit` 에서 쿠폰 할인을 **다시 빼지 않는다.** 쿠폰은 `marketing_cost`(ROI 분모)에 남는다. 근거: `docs/decisions/DR-101-revenue-basis.md`.
+  - `treatment_cost.*.occurs_at` 은 **`EventType` 어휘**다. 로딩 시 실재 여부를 거부하고, `tests/test_treatment_accrual.py` 가 `economics.py` 의 실제 계상 근거와 대조한다.
 - `dashboard/`(Next.js, `:3001`)에 **라우트 8종**이 구현됨(d-01·d-02) — 게시물 연동 6(`V1`~`V6`) + 정적 1(`/triggers`, C1 작동 0종) + 개요 1(`/`). `results/`의 게시물을 **읽기만** 한다(`DB-012`·`DB-013`·`DB-014`).
 - GATE 1은 **부분 봉인(`PARTIAL_FREEZE`)** 상태다. 완전 봉인(`LOCKED`)은 **0종**.
 - CI는 **4종**이다 — `isolation.yml`(의존성 없이, 3.12) · `tests-with-deps.yml`(의존성 설치 후, 3.12) · `python-compat.yml`(**3.10**, 의존성 없이 — SRS 가 선언한 최소 버전을 실제로 도는 유일한 잡) · `dashboard.yml`(경로 격리 · 상태 매핑).
   - ★ **`tokens:test`는 CI에 없다.** `scripts/tokens/verify.mjs`가 `Plan/DESIGN.md`를 읽는데 `Plan`은 private 서브모듈이라 CI가 체크아웃하지 않는다. **사람이 돌려야 하는 검사다** — 대시보드 검증 3종 중 2종만 자동이다.
+- **결정 기록 제도가 있다** — `docs/DECISION_RECORDS.md`. 이슈는 태스크 목록이 아니라 *무엇을 정하고·무엇을 조사하고·무엇을 증거로 남길지*의 안내서이며, **체크박스를 다 채워도 결정 기록이 없으면 그 태스크는 끝난 것이 아니다.** 강제는 `tests/test_decision_records.py`.
 - 저장소 전체 검증은 `python3 -m unittest discover -s tests` 이며 lint·build·타입 검사는 여전히 미정의.
   - 여기에 **건수를 적지 않는다.** 이전 판은 `407건` 이라고 적었고 테스트를 추가한 바로 다음 커밋에 낡았다 — 아무도 대조하지 않는 숫자를 문서에 두는 것이 이슈 `#59` 가 닫은 결함의 모양이다. 건수는 명령을 실행하면 나온다.
 - 저장소 보안 설정 (이슈 `#66` · 보안 F4, 2026-09-14):
   - **Dependabot alerts — 활성화됨.** `gh api -X PUT repos/…/vulnerability-alerts`. 되돌리려면 같은 경로에 `DELETE`.
   - **Secret scanning — `BLOCKED`.** `HTTP 422 Secret scanning is not available for this repository` — private 저장소의 플랜 제한(GitHub Advanced Security 필요)이라 설정으로 열 수 없다. **켜지 않은 것을 켠 것으로 적지 않는다.** 커밋된 비밀값 감시는 여전히 **사람이 본다**.
   - CI 서드파티 액션은 커밋 SHA 로 고정돼 있다. 갱신 시 `uses:` 옆 주석의 태그를 함께 고친다.
+- ★ **로컬 검증은 의존성 두 벌을 다 설치하고 돌린다.**
+  ```bash
+  pip install -r requirements.txt -r requirements-dev.txt
+  ```
+  `requirements-dev.txt`(`jsonschema`·`referencing`)를 빠뜨리면 **계약 스키마 검증이 전부 skip 되고 `OK` 로 보인다.** 실제로 그렇게 게시 계약 위반을 놓쳤고 CI 가 잡았다 (`#99`). **`skip` 은 통과가 아니다** — 끝줄의 `OK` 만 보지 말고 `skipped=` 수를 함께 본다.
 - **존재하지 않는 명령을 문서·게이트·PR 본문에 쓰지 않는다.** 검증을 실행할 수 없으면 `BLOCKED`로 보고한다.
