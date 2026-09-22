@@ -1,0 +1,24 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/commerce-exchange/v1-draft/customers.schema.json",
+  "title": "data/commerce/customers.jsonl — 고객 (한 줄에 한 명)",
+  "$comment": "v1 초안 — 커머스와 합의되지 않았다 (이슈 #100 수용 기준 ①). 합의 전까지 이 계약에 맞춰 데이터를 만들지 않는다. 배경과 논의 대상은 같은 디렉터리의 README.md 를 읽는다. 고객은 DQ-05 와 DQ-03(고아 customer_id)을 위해 필요하다. 세그먼트·인구통계는 넣지 않았다 — 읽는 곳이 없는 필드를 먼저 만들지 않는다 (#63).",
+  "type": "object",
+  "required": [
+    "customer_id",
+    "signup_date"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "customer_id": {
+      "type": "string",
+      "pattern": "^C\\d{8}$",
+      "description": "이벤트의 customer_id 와 같은 형식. schema.py 가 고정한다 — 협상 대상이 아니다"
+    },
+    "signup_date": {
+      "type": "string",
+      "format": "date",
+      "description": "가입일 (YYYY-MM-DD). DQ-05(timestamp < signup_date)가 이 값을 쓴다"
+    }
+  }
+}

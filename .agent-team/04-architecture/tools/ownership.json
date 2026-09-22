@@ -222,6 +222,16 @@
       "why": "RFC3339 Z 접미사 (#62 M3). AST 로 직접 호출 재발을 막는다 — 3.10 잡이 없으면 조용히 되돌아간다"
     },
     {
+      "pattern": "docs/contracts/commerce-exchange/**",
+      "owner": "phillip",
+      "why": "커머스 교환 파일 계약 v1 초안 (#100 A). 합의 전이므로 초안이며, 파일마다 $comment 에 그 사실을 적는다 — 디렉터리 이름만으로는 파일 하나를 연 사람이 모른다"
+    },
+    {
+      "pattern": "tests/test_commerce_exchange_contract.py",
+      "owner": "phillip",
+      "why": "교환 계약 강제 (#100 A). 반례를 실제 validator 로 태우고, 계약이 없을 때의 거동(수용 기준 ④)까지 고정한다 — not_run 과 위반을 가르는 자리다"
+    },
+    {
       "pattern": "tests/test_treatment_accrual.py",
       "owner": "phillip",
       "why": "발생 시점 선언 ↔ 실제 계상 근거 대조 (#97). 이름이 실재하는지와 그 이름이 맞는 이름인지는 다른 질문이라 둘 다 본다"

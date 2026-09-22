@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/commerce-exchange/v1-draft/catalog.schema.json",
+  "title": "data/commerce/catalog.jsonl — 상품 카탈로그 (한 줄에 한 상품)",
+  "$comment": "v1 초안 — 커머스와 합의되지 않았다 (이슈 #100 수용 기준 ①). 합의 전까지 이 계약에 맞춰 데이터를 만들지 않는다. 배경과 논의 대상은 같은 디렉터리의 README.md 를 읽는다. ★ 카탈로그는 참고용이다. COGS 는 order_items 의 주문 시점 스냅샷만 쓴다 — 원가는 시간에 따라 변하고, 오차 방향이 상품별로 달라 총합에서 상쇄되지 않는다.",
+  "type": "object",
+  "required": [
+    "product_id",
+    "category",
+    "unit_price",
+    "unit_cost"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "product_id": {
+      "type": "string",
+      "pattern": "^P\\d{4}$",
+      "description": "이벤트의 product_id 와 같은 형식. schema.py 가 고정한다 — 협상 대상이 아니다"
+    },
+    "category": {
+      "type": "string",
+      "description": "schema.Category 어휘 (fresh_food · meal_solution · dairy · beverage · household)"
+    },
+    "unit_price": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "현재 판매가(원). ★ COGS 에 쓰지 않는다 — 주문 시점 값은 order_items 가 싣는다"
+    },
+    "unit_cost": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "현재 원가(원). ★ COGS 에 쓰지 않는다 (README §3). 모르면 null 이며 0 으로 채우지 않는다"
+    },
+    "name": {
+      "type": "string",
+      "description": "표시명 (선택)"
+    }
+  }
+}

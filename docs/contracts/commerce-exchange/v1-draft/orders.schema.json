@@ -1,0 +1,41 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://72offsuit.local/ai-roi/commerce-exchange/v1-draft/orders.schema.json",
+  "title": "data/commerce/orders.jsonl — 주문 (한 줄에 한 주문)",
+  "$comment": "v1 초안 — 커머스와 합의되지 않았다 (이슈 #100 수용 기준 ①). 합의 전까지 이 계약에 맞춰 데이터를 만들지 않는다. 배경과 논의 대상은 같은 디렉터리의 README.md 를 읽는다. ★ 배송비를 넣지 않았다. 넣으면 가정 A-SHIPPING(규칙 유도)이 해소되지만, 읽는 곳 없는 필드를 먼저 만들지 않는다 (#63). README §8-4 의 논의 대상이다.",
+  "type": "object",
+  "required": [
+    "order_id",
+    "customer_id",
+    "ordered_at",
+    "order_amount",
+    "discount"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "order_id": {
+      "type": "string",
+      "pattern": "^O\\d{8}-\\d{6}$",
+      "description": "purchase 이벤트의 order_id 와 같아야 한다. schema.py 가 고정한다"
+    },
+    "customer_id": {
+      "type": "string",
+      "pattern": "^C\\d{8}$"
+    },
+    "ordered_at": {
+      "type": "string",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}(\\.\\d{1,6})?\\+09:00$",
+      "description": "KST 오프셋을 명시한 RFC 3339. 이벤트와 같은 규약이다"
+    },
+    "order_amount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "★ 할인 후 금액. 이벤트의 order_amount 와 같아야 하며 DQ-09 가 대조한다"
+    },
+    "discount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "★ 필수다. DQ-09 의 등식 order_amount = Σ(unit_price×quantity) − discount 가 이 값 없이는 성립하지 않는다. 할인이 없으면 0 이며, 그것은 '할인 0원' 이라는 측정값이지 결손이 아니다"
+    }
+  }
+}
