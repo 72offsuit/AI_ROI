@@ -549,6 +549,12 @@ class TestEndToEndWithTheRealCommerceSample(unittest.TestCase):
             self.metric("revenue")["value"],
         )
 
+    def test_coupon_cost_is_the_actual_discount(self) -> None:
+        """#108 — 커머스 쿠폰에는 처치 ID 가 없다. 0 원이 아니라 실제 할인액이다."""
+        coupon = self.metric("coupon_cost")
+        self.assertEqual("ok", coupon["status"], coupon)
+        self.assertEqual(self.commerce["couponDiscountKrw"], coupon["value"])
+
     def test_contribution_profit_is_computed(self) -> None:
         """수용 기준 ③ — 품목이 있으면 빈 `items` 대체 없이 기여이익이 계산된다."""
         self.assertEqual("ok", self.metric("contribution_profit")["status"])
