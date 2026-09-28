@@ -232,6 +232,21 @@
       "why": "교환 계약 강제 (#100 A). 반례를 실제 validator 로 태우고, 계약이 없을 때의 거동(수용 기준 ④)까지 고정한다 — not_run 과 위반을 가르는 자리다"
     },
     {
+      "pattern": "tests/fixtures/commerce_exchange_v1/**",
+      "owner": "phillip",
+      "why": "커머스가 실제로 만든 교환 파일·이벤트·기여이익 표본 (#100 B). 손으로 쓴 기대값이 아니다 — 형식이 바뀌면 같은 절차로 다시 만든다"
+    },
+    {
+      "pattern": "tests/test_coupon_cost.py",
+      "owner": "phillip",
+      "why": "쿠폰 비용 근거 선택 (#108). 처치 ID 없는 쿠폰 주문이 0 원 · ok 로 게시되던 모양을 그대로 고정한다"
+    },
+    {
+      "pattern": "tests/test_roster_checks.py",
+      "owner": "phillip",
+      "why": "커머스 명부 대조 DQ-02·03·05 (#110). 범위(커머스 분할)·스냅샷 이후 제외·날짜 단위 한계를 고정한다"
+    },
+    {
       "pattern": "tests/test_treatment_accrual.py",
       "owner": "phillip",
       "why": "발생 시점 선언 ↔ 실제 계상 근거 대조 (#97). 이름이 실재하는지와 그 이름이 맞는 이름인지는 다른 질문이라 둘 다 본다"
