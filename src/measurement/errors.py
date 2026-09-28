@@ -59,6 +59,17 @@ class PartitionKeyError(ContractError):
     """
 
 
+class ExchangeContractError(ContractError):
+    """커머스 교환 파일(`data/commerce/`)이 계약 v1 을 어겼다.
+
+    행 하나의 형식이 틀리거나 매니페스트 행 수와 파일이 어긋나면 묶음 전체를
+    거부한다. 일부만 읽으면 COGS 가 **일부 주문의 합계**인데 전체처럼 보인다.
+    품목이 없는 주문은 형식 위반이 아니라 `DQ-09` 위반이므로 여기서 막지 않는다.
+    """
+
+    exit_code = 3
+
+
 class ContractViolation(ContractError):
     """게시물이 자기 계약(`docs/contracts/**`)을 어겼다. 게시를 중단한다.
 

@@ -91,7 +91,7 @@ revenue = Σ order_amount        환불된 매출을 뺄 수 없다
 | Parquet 경로 검증 (`DQ-17`) | **저장 형식**의 문제이지 **스키마 계약**의 문제가 아니다. 단 `#44` 완료 조건이므로 이슈 종결과는 별개 |
 | `write_batch()` 미구현 | 인터페이스 편의. 계약이 아니다 |
 | 6개 추가 테이블 | §3 에서 **Lock 대상에서 제외**로 판정 |
-| `DQ-09` 금액 정합성 | 저장 구조의 문제다. `not_run` + `PRECONDITION_MISSING` 으로 남긴다 |
+| `DQ-09` 금액 정합성 | 저장 구조의 문제다. 커머스 교환 파일(`data/commerce/`, #100)이 있으면 실행되고, 없으면 `not_run` + `PRECONDITION_MISSING` 으로 남긴다 |
 | `customers` 테이블 부재 | 모집단이 성립하지 않는 지표를 `PRECONDITION_MISSING` 으로 **게시하는 것**이 정직한 상태다. 계산 계약 자체는 확정됐다 |
 
 ---

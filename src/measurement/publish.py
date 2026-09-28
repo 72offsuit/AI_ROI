@@ -50,6 +50,7 @@ from src.measurement import timeparse as tp
 from src.measurement import contracts as ct
 from src.measurement import coverage as cov
 from src.measurement import economics as ec
+from src.measurement import exchange as ex
 from src.measurement import freeze as fz
 from src.measurement import kpi
 from src.measurement import schema as sc
@@ -153,26 +154,30 @@ def partition_by_source(events: Iterable[Mapping[str, object]]) -> SourceSplit:
 
 def assemble_orders(
     events: Sequence[Mapping[str, object]],
+    exchange: ex.CommerceExchange | None = None,
 ) -> tuple[ec.OrderView, ...]:
     """`purchase` 이벤트를 `OrderView` 로 조립한다.
 
-    ★ **`items` 가 항상 비어 있다. 그것이 C1 의 정상 상태다.**
-
     `purchase` 는 주문 단위 1행이고 `product_id`·`quantity`·`unit_price` 가
     `NOT_APPLICABLE` 이다 — 값이 있으면 `validate_event()` 가 거부한다. 즉 **한
-    주문의 품목을 `events` 안에서 재구성할 방법이 없다.** `order_items` 테이블이
-    있어야 성립한다.
+    주문의 품목을 `events` 안에서 재구성할 방법이 없다.** 품목·원가·배송비는 커머스
+    교환 파일(`exchange`, 이슈 #100)이 싣고, 같은 `order_id` 인 주문에만 붙는다.
+
+    ★ 붙이는 기준은 출처가 아니라 **`order_id` 가 교환 파일에 있는가**다. 교환
+    파일에 없는 주문은 `items=()` 로 남고 `cogs()` 가 `NO_COST_BASIS` 를 낸다.
+
+    ★ 매출은 **이벤트의** `order_amount` 다. 교환 파일의 금액으로 바꾸지 않는다 —
+    둘이 같은지는 `DQ-09` 가 본다. 여기서 바꾸면 대조할 두 값이 하나가 된다.
 
     `add_to_cart` 로 근사하지 않는다: `remove_from_cart` 가 있고, 담았지만 사지
     않은 품목이 있고, 결제 실패가 있다. 근사하면 COGS 가 그럴듯하게 틀린다.
-
-    → `cogs()` 가 `NO_COST_BASIS` 를 내고, 그것이 USP-1 대표 장면의 실제 내용이다.
     """
     coupon_orders = {
         event.get("order_id")
         for event in events
         if event.get("event_type") == sc.EventType.COUPON_USE.value
     }
+    known = exchange.orders if exchange is not None else {}
     orders: list[ec.OrderView] = []
     for event in events:
         if event.get("event_type") != sc.EventType.PURCHASE.value:
@@ -184,13 +189,16 @@ def assemble_orders(
             # DQ-11(Key 결측)이 잡는다 — 여기서 조용히 보정하지 않는다.
             continue
         treatment = event.get("treatment_id")
+        exchanged = known.get(order_id)
         orders.append(
             ec.OrderView(
                 order_id=order_id,
                 order_amount=amount,
-                items=(),  # ★ 위 독트링 참조
+                items=exchanged.items if exchanged else (),
                 treatment_ids=(treatment,) if isinstance(treatment, str) else (),
                 has_coupon_use=order_id in coupon_orders,
+                shipping_fee=exchanged.shipping_fee if exchanged else None,
+                shipping_charged=exchanged.shipping_charged if exchanged else None,
             )
         )
     return tuple(orders)
@@ -198,6 +206,7 @@ def assemble_orders(
 
 def assemble_campaign(
     events: Sequence[Mapping[str, object]],
+    exchange: ex.CommerceExchange | None = None,
 ) -> ec.CampaignView:
     """`push_sent`·`coupon_use` 에서 캠페인 관측 사실을 조립한다.
 
@@ -220,7 +229,7 @@ def assemble_campaign(
             if isinstance(event.get("customer_id"), str)
         }),
         campaigns_run=len(campaign_ids),
-        coupon_used_orders=assemble_orders(events),
+        coupon_used_orders=assemble_orders(events, exchange),
     )
 
 
@@ -980,6 +989,7 @@ def build_kpi_report(
     *,
     index_date: date,
     config: CostAccountingConfig,
+    exchange: ex.CommerceExchange | None = None,
 ) -> dict[str, object]:
     """V4 — 지표 가용성.
 
@@ -1007,21 +1017,22 @@ def build_kpi_report(
             e, index_date=index_date),
         "campaign_response_count": lambda e: kpi.campaign_response_count(
             e, index_date=index_date),
-        "revenue": lambda e: ec.revenue(assemble_orders(e)),
-        "cogs": lambda e: _sum_cogs(assemble_orders(e)),
+        "revenue": lambda e: ec.revenue(assemble_orders(e, exchange)),
+        "cogs": lambda e: _sum_cogs(assemble_orders(e, exchange)),
         "message_cost": lambda e: ec.message_cost(
-            assemble_campaign(e), config=config),
+            assemble_campaign(e, exchange), config=config),
         "coupon_cost": lambda e: ec.coupon_cost(
-            assemble_campaign(e), config=config),
+            assemble_campaign(e, exchange), config=config),
         "campaign_fixed_cost": lambda e: ec.campaign_fixed_cost(
-            assemble_campaign(e), config=config),
+            assemble_campaign(e, exchange), config=config),
         "shipping_subsidy": lambda e: ec.shipping_subsidy(
-            assemble_orders(e), config=config),
+            assemble_orders(e, exchange), config=config),
         "marketing_cost": lambda e: ec.marketing_cost(
-            assemble_campaign(e), config=config),
+            assemble_campaign(e, exchange), config=config),
         "contribution_profit": lambda e: ec.contribution_profit(
-            assemble_orders(e), assemble_campaign(e), config=config),
-        "n_targeted": lambda e: ec.n_targeted(assemble_campaign(e)),
+            assemble_orders(e, exchange), assemble_campaign(e, exchange),
+            config=config),
+        "n_targeted": lambda e: ec.n_targeted(assemble_campaign(e, exchange)),
     }
 
     metrics: list[dict[str, object]] = []
@@ -1329,6 +1340,7 @@ def publish(
     source_root: Path = DEFAULT_SOURCE_ROOT,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     config_path: Path = DEFAULT_ECONOMIC_CONFIG,
+    exchange_root: Path | None = None,
     index_date: date | None = None,
     now: datetime | None = None,
 ) -> PublishOutcome:
@@ -1337,6 +1349,9 @@ def publish(
     순서가 계약이다: staging 에 전부 쓰고 → 자기검증하고 → `os.replace` 로 옮기고
     → **`index.json` 을 마지막에** 쓴다. 검증이 실패하면 최종 경로에 아무것도
     남지 않는다.
+
+    `exchange_root` 기본값은 `source_root` 의 형제 `commerce/` 다
+    (`data/raw` → `data/commerce`). 없으면 교환 파일 없이 게시한다.
     """
     run_id = ct.new_run_id(now=now)
     # ★ cost_accounting 만 꺼낸다. product_generation(원가율)은 계산층으로
@@ -1347,6 +1362,7 @@ def publish(
     manifest = _read_manifest(source_root)
     events = list(read_events(source_root)) if (source_root / "events").exists() else []
     rejected = _read_rejected(source_root)
+    exchange = ex.read_exchange(exchange_root or ex.default_root(source_root))
     split = partition_by_source(events)
     partition_dates = _partition_dates(source_root)
     effective_index_date = index_date or _latest_date(partition_dates, now=now)
@@ -1388,14 +1404,15 @@ def publish(
             reference="issue #99",
         ))
 
-    quality = dq.build_report(events)
+    quality = dq.build_report(events, exchange=exchange)
     ingestion = build_ingestion_report(manifest, split, partition_dates)
     bodies: dict[str, dict[str, object]] = {
         "ingestion_report": ingestion,
         "rejection_report": build_rejection_report(manifest, rejected),
         "field_coverage_report": build_field_coverage_report(events, split),
         "kpi_report": build_kpi_report(
-            events, split, index_date=effective_index_date, config=config
+            events, split, index_date=effective_index_date, config=config,
+            exchange=exchange,
         ),
         "data_quality_report": quality,
         "freeze_status": build_freeze_status(),
@@ -1697,6 +1714,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="게시 대상 (기본 results)")
     parser.add_argument("--config", type=Path, default=DEFAULT_ECONOMIC_CONFIG,
                         help="경제 규칙 config (기본 config/economic_config.yaml)")
+    parser.add_argument("--exchange", type=Path, default=None,
+                        help="커머스 교환 파일 루트 (기본: --source 의 형제 commerce/)")
     parser.add_argument("--index-date", type=date.fromisoformat, default=None,
                         help="지표 기준일 D (기본: 마지막 파티션 날짜)")
     parser.add_argument("--fail-on-quality", action="store_true",
@@ -1706,7 +1725,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         outcome = publish(
             source_root=args.source, output_root=args.out,
-            config_path=args.config, index_date=args.index_date,
+            config_path=args.config, exchange_root=args.exchange,
+            index_date=args.index_date,
         )
     except MeasurementError as error:
         print(f"게시 실패: {error}", file=sys.stderr)

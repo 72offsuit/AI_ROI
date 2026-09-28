@@ -1,0 +1,3 @@
+{"order_id":"O20260928-000001","customer_id":"C00000004","ordered_at":"2026-09-28T16:48:54.819+09:00","order_amount":35190,"discount":3910,"shipping_fee":3000,"shipping_charged":3000}
+{"order_id":"O20260928-000002","customer_id":"C00000005","ordered_at":"2026-09-28T16:48:54.822+09:00","order_amount":3900,"discount":0,"shipping_fee":3000,"shipping_charged":3000}
+{"order_id":"O20260928-000003","customer_id":"C00000006","ordered_at":"2026-09-28T16:48:54.826+09:00","order_amount":28500,"discount":3000,"shipping_fee":3000,"shipping_charged":3000}

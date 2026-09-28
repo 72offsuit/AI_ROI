@@ -1,47 +1,50 @@
-"""Pins the draft commerce exchange contract and what we do without it (issue #100).
+"""Pins the commerce exchange contract v1 and what we do with and without it (issue #100).
 
 `purchase` is one row per order, and `product_id`/`quantity`/`unit_price` are
-`NOT_APPLICABLE` on it -- `validate_event()` refuses them. So a order's line items
-cannot be reconstructed from events, and two things stay blocked: `cogs()` returns
-`NO_COST_BASIS`, and `DQ-09` (`order_amount = Σ(unit_price × quantity) − discount`)
-cannot run at all.
+`NOT_APPLICABLE` on it -- `validate_event()` refuses them. So an order's line items
+cannot be reconstructed from events. The commerce exchange bundle (`data/commerce/`,
+produced by `Ecommerce_Service` `npm run exchange:export`) carries the items, the
+order-time cost snapshot, the discount and the shipping amounts.
 
-`DQ-09` is blocked twice over: the items are missing **and** `discount` is not one
-of the 22 event columns. The exchange files have to carry both.
+What this file covers:
 
-What this file covers, and what it deliberately does not:
+  schemas    the four schemas are valid draft 2020-12, **refuse counterexamples**,
+             use the event id formats, and agree with the stdlib loader's field table
+  loader     absent -> `None` (not an empty bundle); malformed -> the whole bundle
+             is refused, because reading part of it makes a partial sum look whole
+  DQ-09      `not_run` without the bundle; with it, every exchange order must have
+             items, satisfy the amount equation, and match its purchase event
+  end to end the real commerce sample (tests/fixtures/commerce_exchange_v1/) goes
+             through `EventSink` and `publish()` and reproduces the commerce side's
+             own COGS and contribution
 
-  checked    the four schemas are valid draft 2020-12 and **refuse counterexamples**
-             -- a schema that accepts everything is not a contract
-  checked    the id formats match what `schema.py` already fixes, so the join can
-             actually happen (those two are not negotiable; they are GATE 1 canon)
-  checked    ★ what happens with no exchange files at all -- today's real state.
-             `DQ-09` must be `not_run`, never a pass and never a violation
-  NOT        reading the files or wiring COGS. **The contract is not agreed yet**
-             (issue #100 acceptance criterion ①), and building the consumer against
-             an unagreed shape is how rework happens. That is slice B.
-
-★ The distinction `not_run` vs violation is the point of the last group. "we did
-  not compare" and "we compared and it was fine" must never collapse into one
-  value -- the same rule that gives this repo `vacuous`, `met: null` and
-  `verification: not_run`.
+★ The distinction `not_run` vs violation still matters. "we did not compare" and
+  "we compared and it was fine" must never collapse into one value.
 """
 
 from __future__ import annotations
 
 import json
+import shutil
+import tempfile
 import unittest
+from datetime import date
 from pathlib import Path
 
 from src.measurement import economics as ec
+from src.measurement import exchange as ex
+from src.measurement import publish as pub
 from src.measurement import schema as sc
 from src.measurement import validate as dq
+from src.measurement.config_loader import yaml_available
+from src.measurement.errors import ExchangeContractError
 from src.measurement.kpi import MetricStatus
+from src.measurement.sink import EventSink
+from tests.test_economics import fixture_config
 
-CONTRACT = (
-    Path(__file__).resolve().parent.parent
-    / "docs" / "contracts" / "commerce-exchange" / "v1-draft"
-)
+REPO_ROOT = Path(__file__).resolve().parent.parent
+CONTRACT = REPO_ROOT / "docs" / "contracts" / "commerce-exchange" / "v1"
+SAMPLE = Path(__file__).resolve().parent / "fixtures" / "commerce_exchange_v1"
 SCHEMAS = ("customers", "catalog", "orders", "order_items")
 
 
@@ -57,13 +60,50 @@ NEEDS_JSONSCHEMA = (
     "BLOCKED: jsonschema 미설치 — 반례를 실제 validator 로 태우지 않았다. "
     "`pip install -r requirements-dev.txt`"
 )
+NEEDS_YAML = (
+    "BLOCKED: PyYAML 미설치 — publish() 가 경제 규칙 config 를 읽어야 해서 "
+    "종단 경로를 검증하지 않았다"
+)
 
 
 def load(name: str) -> dict:
     return json.loads((CONTRACT / f"{name}.schema.json").read_text(encoding="utf-8"))
 
 
-class TestTheDraftExists(unittest.TestCase):
+def sample_rows(name: str) -> list[dict]:
+    path = SAMPLE / "exchange" / f"{name}.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def copy_sample(target: Path) -> Path:
+    shutil.copytree(SAMPLE / "exchange", target)
+    return target
+
+
+def rewrite(root: Path, name: str, rows: list[dict], *, keep_manifest: bool = False) -> None:
+    (root / f"{name}.jsonl").write_text(
+        "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows),
+        encoding="utf-8",
+    )
+    if keep_manifest:
+        return
+    manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+    manifest["files"][f"{name}.jsonl"] = len(rows)
+    (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+
+
+class TempDirTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.tmp = Path(self._tmp.name)
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+
+# ── 스키마 ──────────────────────────────────────────────────────────────────
+
+class TestTheContractIsAgreed(unittest.TestCase):
     def test_all_four_schemas_and_the_readme(self) -> None:
         self.assertTrue(CONTRACT.is_dir(), f"{CONTRACT} 가 없다")
         self.assertTrue((CONTRACT / "README.md").is_file())
@@ -71,108 +111,92 @@ class TestTheDraftExists(unittest.TestCase):
             with self.subTest(schema=name):
                 self.assertTrue((CONTRACT / f"{name}.schema.json").is_file())
 
-    def test_every_schema_says_it_is_a_draft(self) -> None:
-        """★ 초안이라는 사실이 파일 안에 있어야 한다.
-
-        디렉터리 이름(`v1-draft`)만으로는 파일 하나를 따로 열어 본 사람이 모른다.
-        합의되지 않은 계약을 합의된 것으로 읽으면 그 데이터를 만들기 시작한다.
-        """
+    def test_every_schema_names_the_agreement_and_the_producer(self) -> None:
+        """파일 하나만 열어 본 사람도 합의 근거와 생산자를 알 수 있어야 한다."""
         for name in SCHEMAS:
             with self.subTest(schema=name):
                 comment = load(name).get("$comment", "")
-                self.assertIn("초안", comment)
+                self.assertIn("합의", comment)
                 self.assertIn("#100", comment)
+                self.assertIn("exchange:export", comment)
+                self.assertNotIn("초안", comment)
+                self.assertIn("/v1/", load(name)["$id"])
 
     def test_no_schema_accepts_unknown_fields(self) -> None:
-        """`additionalProperties: false` — 계약에 없는 필드가 조용히 들어오지 않는다."""
         for name in SCHEMAS:
             with self.subTest(schema=name):
                 self.assertIs(False, load(name).get("additionalProperties"))
 
+    def test_loader_field_table_matches_the_schemas(self) -> None:
+        """★ 런타임 로더는 jsonschema 없이 돈다. 필드 표가 두 벌이면 갈라진다.
+
+        스키마의 `required` 가 로더의 필수 필드이고, 나머지 `properties` 가
+        로더의 선택 필드여야 한다.
+        """
+        for name in SCHEMAS:
+            with self.subTest(schema=name):
+                schema = load(name)
+                self.assertEqual(set(schema["required"]), set(ex.FIELDS[name]))
+                self.assertEqual(
+                    set(schema["properties"]) - set(schema["required"]),
+                    set(ex._OPTIONAL.get(name, {})),
+                )
+
 
 class TestIdFormatsMatchTheEventContract(unittest.TestCase):
-    """★ 결합이 실제로 성립하려면 형식이 같아야 한다.
-
-    `order_id`·`customer_id` 형식은 **협상 대상이 아니다.** `schema.py` 가 이미
-    정규식으로 고정하고 있고 그것은 GATE 1 정본이다. 교환 파일이 다른 형식을
-    쓰면 결합이 되지 않고, 그 사실은 고아 레코드(DQ-03)로만 뒤늦게 드러난다.
-    """
-
-    def _event_pattern(self, field: str) -> str:
-        """정본은 `schema.IDENTIFIER_PATTERNS` 하나다.
-
-        ★ 처음에는 `FieldSpec.pattern` 을 찾다가 없어서 `skipTest` 로 넘겼고,
-          **그 상태로 두 검사가 통과처럼 보였다.** 값을 찾지 못해 건너뛴 것을
-          결과로 적으면 결합이 어긋나도 아무도 모른다. 실제 상수를 쓴다.
-        """
-        return sc.IDENTIFIER_PATTERNS[field]
+    """★ 결합이 실제로 성립하려면 형식이 같아야 한다 — `schema.py` 가 GATE 1 정본이다."""
 
     def test_order_id_pattern_is_the_event_pattern(self) -> None:
-        self.assertEqual(
-            self._event_pattern("order_id"),
-            load("orders")["properties"]["order_id"]["pattern"],
-        )
-        self.assertEqual(
-            self._event_pattern("order_id"),
-            load("order_items")["properties"]["order_id"]["pattern"],
-        )
+        for name in ("orders", "order_items"):
+            with self.subTest(schema=name):
+                self.assertEqual(
+                    sc.IDENTIFIER_PATTERNS["order_id"],
+                    load(name)["properties"]["order_id"]["pattern"],
+                )
 
     def test_product_id_pattern_is_the_event_pattern(self) -> None:
-        """★ 초안은 여기를 `minLength: 1` 로 느슨하게 뒀었다.
-
-        `product_id` 도 `^P\\d{4}$` 로 고정돼 있다. 교환 파일이 다른 형식을
-        쓰면 `catalog` ↔ `order_items` ↔ 이벤트 결합이 어긋나고, 그 사실은
-        고아 레코드(DQ-03)로만 뒤늦게 드러난다.
-        """
-        pattern = self._event_pattern("product_id")
         for name in ("catalog", "order_items"):
             with self.subTest(schema=name):
                 self.assertEqual(
-                    pattern, load(name)["properties"]["product_id"]["pattern"]
+                    sc.IDENTIFIER_PATTERNS["product_id"],
+                    load(name)["properties"]["product_id"]["pattern"],
                 )
 
     def test_customer_id_pattern_is_the_event_pattern(self) -> None:
-        pattern = self._event_pattern("customer_id")
         for name in ("orders", "customers"):
             with self.subTest(schema=name):
                 self.assertEqual(
-                    pattern, load(name)["properties"]["customer_id"]["pattern"]
+                    sc.IDENTIFIER_PATTERNS["customer_id"],
+                    load(name)["properties"]["customer_id"]["pattern"],
                 )
 
 
-class TestDiscountIsRequiredNotOptional(unittest.TestCase):
-    """★ `#100` 초기 논의에서 '있으면 좋은 것' 으로 적었던 것을 정정한다.
-
-    순매출 기준(`#101`)에서 기여이익은 실제 할인액을 요구하지 않는다. 그래서
-    선택 사항으로 적었는데, **`DQ-09` 가 그것 없이는 성립하지 않는다** —
-    등식 자체에 `− discount` 가 들어간다. 필수다.
-    """
-
-    def test_discount_is_in_required(self) -> None:
-        self.assertIn("discount", load("orders")["required"])
+class TestRequiredAmounts(unittest.TestCase):
+    def test_discount_and_shipping_are_required(self) -> None:
+        """`discount` 없이는 `DQ-09` 가 성립하지 않고, 배송비 둘 없이는 배송보조가
+        규칙 유도(A-SHIPPING)로 돌아간다."""
+        required = load("orders")["required"]
+        for field in ("discount", "shipping_fee", "shipping_charged"):
+            with self.subTest(field=field):
+                self.assertIn(field, required)
 
     def test_unit_cost_is_required_but_nullable(self) -> None:
-        """★ 필수인데 `null` 을 받는다 — 모순이 아니라 구분이다.
-
-        키가 없는 것은 계약 위반이고, `null` 은 *"원가를 모른다"* 는 **측정값**이다.
-        `0` 으로 채우면 원가 0원인 상품과 구분이 사라진다.
-        """
+        """키 누락은 위반이고 `null` 은 "원가를 모른다"는 측정값이다. 0 으로 채우지 않는다."""
         items = load("order_items")
         self.assertIn("unit_cost", items["required"])
         self.assertIn("null", items["properties"]["unit_cost"]["type"])
 
-    def test_quantity_has_no_null(self) -> None:
-        """수량은 모를 수 없다 — 품목 줄이 있다는 것 자체가 샀다는 뜻이다."""
-        self.assertEqual("integer", load("order_items")["properties"]["quantity"]["type"])
+    def test_catalog_uses_the_commerce_field_names(self) -> None:
+        """커머스가 #43 에서 먼저 내보내던 `selling_price`·`snapshot_at` 에 맞췄다."""
+        catalog = load("catalog")
+        self.assertIn("selling_price", catalog["required"])
+        self.assertIn("snapshot_at", catalog["required"])
+        self.assertNotIn("unit_price", catalog["properties"])
 
 
 @unittest.skipUnless(_jsonschema_available(), NEEDS_JSONSCHEMA)
 class TestSchemasRefuseCounterexamples(unittest.TestCase):
-    """★ 통과하는 예제가 아니라 **반례가 거부되는지**를 본다.
-
-    전부 통과시키는 스키마도 '검증한다' 고 말할 수 있다. 무엇을 막는지가
-    계약의 내용이다.
-    """
+    """★ 통과하는 예제가 아니라 **반례가 거부되는지**를 본다."""
 
     def _validator(self, name: str):
         import jsonschema
@@ -184,26 +208,29 @@ class TestSchemasRefuseCounterexamples(unittest.TestCase):
         "quantity": 1, "unit_price": 8900, "unit_cost": 6900,
     }
 
-    def test_the_valid_example_passes(self) -> None:
-        """★ 이것이 실패하면 아래 반례 검사가 전부 무의미하다."""
-        self._validator("order_items").validate(self.VALID_ITEM)
+    def test_the_real_commerce_sample_passes(self) -> None:
+        """★ 이것이 실패하면 아래 반례 검사가 전부 무의미하다 — 실제 산출물이다."""
+        for name in SCHEMAS:
+            validator = self._validator(name)
+            for row in sample_rows(name):
+                with self.subTest(schema=name, row=row):
+                    validator.validate(row)
 
     def test_wrong_order_id_shape_is_refused(self) -> None:
         import jsonschema
 
-        bad = {**self.VALID_ITEM, "order_id": "O00000001"}  # -000001 이 없다
         with self.assertRaises(jsonschema.ValidationError):
-            self._validator("order_items").validate(bad)
+            self._validator("order_items").validate(
+                {**self.VALID_ITEM, "order_id": "O00000001"}
+            )
 
     def test_unknown_field_is_refused(self) -> None:
         import jsonschema
 
-        bad = {**self.VALID_ITEM, "margin_rate": 0.22}
         with self.assertRaises(jsonschema.ValidationError):
-            self._validator("order_items").validate(bad)
+            self._validator("order_items").validate({**self.VALID_ITEM, "margin_rate": 0.22})
 
     def test_missing_unit_cost_key_is_refused(self) -> None:
-        """키 누락은 위반이다 — `null` 과 다르다."""
         import jsonschema
 
         bad = {k: v for k, v in self.VALID_ITEM.items() if k != "unit_cost"}
@@ -220,43 +247,228 @@ class TestSchemasRefuseCounterexamples(unittest.TestCase):
             self._validator("order_items").validate({**self.VALID_ITEM, "unit_price": -1})
 
     def test_naive_timestamp_is_refused(self) -> None:
-        """KST 오프셋이 없으면 순간을 특정할 수 없다."""
         import jsonschema
 
-        order = {
-            "order_id": "O00000001-000001", "customer_id": "C00000001",
-            "ordered_at": "2026-01-01T10:00:00.000", "order_amount": 8900,
-            "discount": 0,
-        }
+        order = {**sample_rows("orders")[0], "ordered_at": "2026-01-01T10:00:00.000"}
         with self.assertRaises(jsonschema.ValidationError):
             self._validator("orders").validate(order)
-        self._validator("orders").validate(
-            {**order, "ordered_at": "2026-01-01T10:00:00.000+09:00"}
-        )
 
 
-class TestBehaviourWithoutTheExchangeFiles(unittest.TestCase):
-    """★★ 수용 기준 ④ — 계약이 없을 때 무엇을 말하는가. **오늘의 실제 상태다.**"""
+# ── 로더 ────────────────────────────────────────────────────────────────────
 
-    def test_dq09_is_not_run_not_a_pass_and_not_a_violation(self) -> None:
-        report = dq.build_report([])
-        checks = report.get("checks") or report.get("items") or []
-        found = [c for c in checks if str(c.get("id", "")).startswith("DQ-09")]
-        self.assertEqual(1, len(found), "DQ-09 를 찾지 못했다 — 검사가 비어 있다")
-        check = found[0]
+class TestReadExchange(TempDirTest):
+    def test_absent_is_none_not_an_empty_bundle(self) -> None:
+        """★ 빈 묶음은 "주문 0건"이라는 측정값이 된다. 없는 것과 다르다."""
+        self.assertIsNone(ex.read_exchange(self.tmp / "commerce"))
+
+    def test_default_root_is_the_sibling_of_the_sink(self) -> None:
+        self.assertEqual(Path("data/commerce"), ex.default_root(Path("data/raw")))
+
+    def test_the_real_sample_is_read_and_grouped_by_order(self) -> None:
+        bundle = ex.read_exchange(SAMPLE / "exchange")
+        assert bundle is not None
+        self.assertEqual(len(sample_rows("orders")), len(bundle.orders))
         self.assertEqual(
-            "not_run", check["status"],
-            "대조하지 않은 것을 통과나 위반으로 적으면 둘 다 거짓말이 된다",
+            len(sample_rows("order_items")),
+            sum(len(order.items) for order in bundle.orders.values()),
         )
+        for order in bundle.orders.values():
+            with self.subTest(order=order.order_id):
+                self.assertTrue(order.items)
+                self.assertTrue(all(item.unit_cost is not None for item in order.items))
+
+    def test_row_count_disagreeing_with_manifest_is_refused(self) -> None:
+        """잘린 파일을 받아들이면 COGS 가 일부 주문의 합계인데 전체처럼 보인다."""
+        root = copy_sample(self.tmp / "commerce")
+        rewrite(root, "order_items", sample_rows("order_items")[:-1], keep_manifest=True)
+        with self.assertRaises(ExchangeContractError):
+            ex.read_exchange(root)
+
+    def test_missing_manifest_is_refused(self) -> None:
+        root = copy_sample(self.tmp / "commerce")
+        (root / "manifest.json").unlink()
+        with self.assertRaises(ExchangeContractError):
+            ex.read_exchange(root)
+
+    def test_other_contract_version_is_refused(self) -> None:
+        root = copy_sample(self.tmp / "commerce")
+        manifest = json.loads((root / "manifest.json").read_text(encoding="utf-8"))
+        manifest["contract"] = "commerce-exchange/v2"
+        (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        with self.assertRaises(ExchangeContractError):
+            ex.read_exchange(root)
+
+    def test_zero_filled_cost_key_missing_is_refused(self) -> None:
+        root = copy_sample(self.tmp / "commerce")
+        rows = sample_rows("order_items")
+        del rows[0]["unit_cost"]
+        rewrite(root, "order_items", rows)
+        with self.assertRaises(ExchangeContractError):
+            ex.read_exchange(root)
+
+    def test_bool_is_not_an_amount(self) -> None:
+        """`True` 는 파이썬에서 `int` 다. 금액 자리에 들어오면 1원으로 읽힌다."""
+        root = copy_sample(self.tmp / "commerce")
+        rows = sample_rows("orders")
+        rows[0]["discount"] = True
+        rewrite(root, "orders", rows)
+        with self.assertRaises(ExchangeContractError):
+            ex.read_exchange(root)
+
+    def test_item_of_an_unknown_order_is_refused(self) -> None:
+        root = copy_sample(self.tmp / "commerce")
+        rows = sample_rows("order_items")
+        rows[0]["order_id"] = "O19990101-000001"
+        rewrite(root, "order_items", rows)
+        with self.assertRaises(ExchangeContractError):
+            ex.read_exchange(root)
+
+    def test_order_without_items_is_read_not_refused(self) -> None:
+        """품목 없는 주문은 형식 위반이 아니라 `DQ-09` 위반이다 — 판정은 검사가 한다."""
+        root = copy_sample(self.tmp / "commerce")
+        orders = sample_rows("orders")
+        rewrite(root, "order_items", [
+            row for row in sample_rows("order_items")
+            if row["order_id"] != orders[0]["order_id"]
+        ])
+        bundle = ex.read_exchange(root)
+        assert bundle is not None
+        self.assertEqual((), bundle.orders[orders[0]["order_id"]].items)
+
+
+# ── DQ-09 ───────────────────────────────────────────────────────────────────
+
+def sample_events() -> list[dict]:
+    path = SAMPLE / "events.jsonl"
+    return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def dq09(events: list[dict], exchange: ex.CommerceExchange | None) -> dict:
+    report = dq.build_report(events, exchange=exchange)
+    found = [c for c in report["checks"] if c["id"] == "DQ-09"]
+    assert len(found) == 1, "DQ-09 를 찾지 못했다"
+    return found[0]
+
+
+class TestAmountEquation(TempDirTest):
+    def test_without_the_bundle_it_is_not_run(self) -> None:
+        """★ 오늘의 기본 상태. 대조하지 않은 것을 통과나 위반으로 적으면 둘 다 거짓말이다."""
+        check = dq09(sample_events(), None)
+        self.assertEqual("not_run", check["status"])
         self.assertEqual("PRECONDITION_MISSING", check["reason_code"])
-        self.assertIn(
-            "order_items", check["reason_detail"],
-            "무엇이 있어야 성립하는지가 없으면 읽는 사람이 해소 방법을 모른다",
+        self.assertIn("order_items", check["reason_detail"])
+
+    def test_the_real_sample_passes(self) -> None:
+        check = dq09(sample_events(), ex.read_exchange(SAMPLE / "exchange"))
+        self.assertEqual("pass", check["status"], check)
+        self.assertEqual(len(sample_rows("orders")), check["examined_rows"])
+        self.assertEqual(0, check["violations"])
+
+    def test_pre_discount_event_amount_is_a_violation(self) -> None:
+        """★★ #106 의 모양 그대로다. 교환 파일 안에서는 등식이 맞아도 이벤트가
+        할인 전 금액을 말하면 위반이어야 한다 — 이것을 못 잡으면 매출이 과대다."""
+        exchange = ex.read_exchange(SAMPLE / "exchange")
+        assert exchange is not None
+        discounted = next(o for o in exchange.orders.values() if o.discount > 0)
+        events = [
+            {**e, "order_amount": e["order_amount"] + discounted.discount}
+            if e.get("event_type") == "purchase" and e.get("order_id") == discounted.order_id
+            else e
+            for e in sample_events()
+        ]
+        check = dq09(events, exchange)
+        self.assertEqual("fail", check["status"])
+        self.assertEqual(1, check["violations"])
+        self.assertIn(discounted.order_id, check["samples"][0])
+
+    def test_order_without_items_is_a_violation(self) -> None:
+        root = copy_sample(self.tmp / "commerce")
+        first = sample_rows("orders")[0]["order_id"]
+        rewrite(root, "order_items", [
+            row for row in sample_rows("order_items") if row["order_id"] != first
+        ])
+        check = dq09(sample_events(), ex.read_exchange(root))
+        self.assertEqual("fail", check["status"])
+        self.assertIn("품목이 없다", check["samples"][0])
+
+    def test_equation_broken_inside_the_bundle_is_a_violation(self) -> None:
+        root = copy_sample(self.tmp / "commerce")
+        orders = sample_rows("orders")
+        orders[0]["discount"] += 1
+        rewrite(root, "orders", orders)
+        check = dq09(sample_events(), ex.read_exchange(root))
+        self.assertEqual("fail", check["status"])
+
+    def test_order_without_purchase_event_is_a_violation(self) -> None:
+        exchange = ex.read_exchange(SAMPLE / "exchange")
+        events = [e for e in sample_events() if e.get("event_type") != "purchase"]
+        check = dq09(events, exchange)
+        self.assertEqual("fail", check["status"])
+        self.assertEqual(len(sample_rows("orders")), check["violations"])
+
+
+# ── 경제 계산 ───────────────────────────────────────────────────────────────
+
+class TestEconomicsWithTheBundle(unittest.TestCase):
+    def setUp(self) -> None:
+        exchange = ex.read_exchange(SAMPLE / "exchange")
+        assert exchange is not None
+        self.orders = pub.assemble_orders(sample_events(), exchange)
+        self.commerce = json.loads((SAMPLE / "contribution.json").read_text(encoding="utf-8"))
+
+    def test_cogs_reproduces_the_commerce_report(self) -> None:
+        """수용 기준 ② — Σ(unit_cost × quantity) 가 커머스가 계산한 COGS 와 같다."""
+        cogs = pub._sum_cogs(self.orders)
+        self.assertIs(MetricStatus.OK, cogs.status, cogs.reason_detail)
+        self.assertEqual(self.commerce["cogsKrw"], cogs.value)
+
+    def test_net_and_gross_revenue_give_the_same_margin(self) -> None:
+        """★ DR-101 — 순매출(AI_ROI)과 총매출(커머스) 표시는 같은 이익을 내야 한다.
+
+        이벤트 금액이 할인 전이면(#106) 이 등식이 할인액만큼 어긋난다.
+        """
+        revenue = ec.revenue(self.orders).value
+        cogs = pub._sum_cogs(self.orders).value
+        shipping = ec.shipping_subsidy(self.orders, config=fixture_config()).value
+        commerce_margin = (
+            self.commerce["revenueKrw"] - self.commerce["cogsKrw"]
+            - self.commerce["couponDiscountKrw"] - self.commerce["shippingSubsidyKrw"]
         )
+        self.assertEqual(commerce_margin, revenue - cogs - shipping)
+
+    def test_shipping_is_observed_not_derived(self) -> None:
+        subsidy = ec.shipping_subsidy(self.orders, config=fixture_config())
+        self.assertFalse(subsidy.derived, subsidy.derivation)
+        self.assertEqual(self.commerce["shippingSubsidyKrw"], subsidy.value)
+
+    def test_orders_without_the_bundle_keep_the_rule(self) -> None:
+        """교환 파일에 없는 주문은 여전히 D-3 규칙이다 — 판정 기준은 값이 있는가다."""
+        subsidy = ec.shipping_subsidy(
+            pub.assemble_orders(sample_events(), None), config=fixture_config()
+        )
+        self.assertTrue(subsidy.derived)
+
+    def test_observed_subsidy_is_fee_minus_charged(self) -> None:
+        orders = (
+            ec.OrderView("O1", 30_000, shipping_fee=3000, shipping_charged=0),
+            ec.OrderView("O2", 50_000, shipping_fee=3000, shipping_charged=3000),
+        )
+        subsidy = ec.shipping_subsidy(orders, config=fixture_config())
+        self.assertEqual(3000, subsidy.value)
+        self.assertFalse(subsidy.derived)
+
+    def test_mixed_observed_and_derived_is_marked_derived(self) -> None:
+        """관측과 유도가 섞인 합계를 관측값처럼 보이게 하지 않는다."""
+        orders = (
+            ec.OrderView("O1", 30_000, shipping_fee=3000, shipping_charged=0),
+            ec.OrderView("O2", 10_000, treatment_ids=("T1",)),
+        )
+        subsidy = ec.shipping_subsidy(orders, config=fixture_config())
+        self.assertTrue(subsidy.derived)
+        self.assertIn("관측 1건", subsidy.derivation or "")
 
     def test_cogs_without_items_is_unavailable_and_names_the_table(self) -> None:
-        order = ec.OrderView(order_id="O00000001-000001", order_amount=8900)
-        result = ec.cogs(order)
+        result = ec.cogs(ec.OrderView(order_id="O00000001-000001", order_amount=8900))
         self.assertIs(MetricStatus.UNAVAILABLE, result.status)
         self.assertIsNone(result.value, "계산 불가에 값이 붙으면 0 채우기와 같다")
         self.assertIn(
@@ -265,10 +477,7 @@ class TestBehaviourWithoutTheExchangeFiles(unittest.TestCase):
         )
 
     def test_items_absent_and_cost_absent_are_different(self) -> None:
-        """★ 해소 방법이 다르다 — 전자는 테이블이, 후자는 컬럼이 필요하다.
-
-        둘을 같은 문구로 적으면 커머스가 무엇을 보내야 하는지 알 수 없다.
-        """
+        """★ 해소 방법이 다르다 — 전자는 테이블이, 후자는 컬럼이 필요하다."""
         no_items = ec.cogs(ec.OrderView(order_id="O00000001-000001", order_amount=8900))
         no_cost = ec.cogs(ec.OrderView(
             order_id="O00000002-000001", order_amount=8900,
@@ -276,23 +485,70 @@ class TestBehaviourWithoutTheExchangeFiles(unittest.TestCase):
         ))
         self.assertIs(MetricStatus.UNAVAILABLE, no_items.status)
         self.assertIs(MetricStatus.UNAVAILABLE, no_cost.status)
-        self.assertNotEqual(
-            no_items.reason_detail, no_cost.reason_detail,
-            "품목을 모르는 것과 원가를 모르는 것이 같은 문구로 나온다",
+        self.assertNotEqual(no_items.reason_detail, no_cost.reason_detail)
+
+
+# ── 종단 ────────────────────────────────────────────────────────────────────
+
+@unittest.skipUnless(yaml_available(), NEEDS_YAML)
+class TestEndToEndWithTheRealCommerceSample(unittest.TestCase):
+    """★★ 수용 기준 ⑤ — 커머스가 실제로 내보낸 이벤트와 교환 파일을 파이프라인에 넣는다.
+
+    이벤트는 `EventSink` 로 쓰고 교환 파일은 `data/commerce` 자리(`raw` 의 형제)에
+    둔다. `publish()` 가 기본 경로에서 스스로 찾는지까지 본다.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._tmp = tempfile.TemporaryDirectory()
+        root = Path(cls._tmp.name)
+        shutil.copytree(SAMPLE / "exchange", root / "commerce")
+        with EventSink(root / "raw") as sink:
+            result = sink.write_events(sample_events())
+        cls.rejected = result.rejected
+        cls.outcome = pub.publish(
+            source_root=root / "raw", output_root=root / "results",
+            config_path=REPO_ROOT / "config/economic_config.yaml",
+            index_date=date.fromisoformat(sample_events()[0]["timestamp"][:10]),
+        )
+        cls.kpi = json.loads(
+            (root / "results" / pub.artifact_relative("kpi_report")).read_text(encoding="utf-8")
+        )
+        cls.quality = json.loads(
+            (root / "results" / pub.artifact_relative("data_quality_report"))
+            .read_text(encoding="utf-8")
+        )
+        cls.commerce = json.loads((SAMPLE / "contribution.json").read_text(encoding="utf-8"))
+
+    @classmethod
+    def tearDownClass(cls) -> None:
+        cls._tmp.cleanup()
+
+    def metric(self, name: str) -> dict:
+        entry = next(m for m in self.kpi["metrics"] if m["name"] == name)
+        return entry["value"]["by_source"]["commerce"]
+
+    def test_every_artifact_passed_its_own_contract(self) -> None:
+        self.assertEqual("ok", self.outcome.publish_result, self.outcome.artifacts)
+
+    def test_commerce_events_are_all_accepted(self) -> None:
+        self.assertEqual(0, self.rejected)
+
+    def test_dq09_runs_and_passes(self) -> None:
+        check = next(c for c in self.quality["checks"] if c["id"] == "DQ-09")
+        self.assertEqual("pass", check["status"], check)
+
+    def test_cogs_is_published_and_matches_commerce(self) -> None:
+        cogs = self.metric("cogs")
+        self.assertEqual("ok", cogs["status"], cogs)
+        self.assertEqual(self.commerce["cogsKrw"], cogs["value"])
+
+    def test_revenue_is_net_of_discount(self) -> None:
+        self.assertEqual(
+            self.commerce["revenueKrw"] - self.commerce["couponDiscountKrw"],
+            self.metric("revenue")["value"],
         )
 
-    def test_cogs_computes_when_the_snapshot_is_there(self) -> None:
-        """★ 거짓 양성 — 원가가 있으면 실제로 계산돼야 한다.
-
-        계약이 오면 무엇이 열리는지를 이 테스트가 보인다.
-        """
-        order = ec.OrderView(
-            order_id="O00000001-000001", order_amount=17_800,
-            items=(
-                ec.OrderItem("P0001", 2, 8900, unit_cost=6900),
-                ec.OrderItem("P0002", 1, 0, unit_cost=0),
-            ),
-        )
-        result = ec.cogs(order)
-        self.assertIs(MetricStatus.OK, result.status, result.reason_detail)
-        self.assertEqual(13_800.0, result.value, "Σ(unit_cost × quantity)")
+    def test_contribution_profit_is_computed(self) -> None:
+        """수용 기준 ③ — 품목이 있으면 빈 `items` 대체 없이 기여이익이 계산된다."""
+        self.assertEqual("ok", self.metric("contribution_profit")["status"])
