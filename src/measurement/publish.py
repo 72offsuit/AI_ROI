@@ -616,10 +616,10 @@ _SCHEMA_GAPS: tuple[dict[str, object], ...] = (
         "blocks_metrics": ["cogs", "contribution_profit", "marketing_cost"],
         "reason_code": sc.ReasonCode.NO_COST_BASIS.value,
         "reason_detail": (
-            "DATA-003 22컬럼에 unit_cost 가 없고 order_items 테이블도 없어 "
-            "매출원가를 계산할 근거가 없다. 원가율을 곱해 추정하지 않는다 "
-            "(EC-1) — 그러면 기여이익이 매출의 상수배가 되어 "
-            "revenue_up_profit_down 가드레일이 발동할 수 없다"
+            "DATA-003 22컬럼에 unit_cost 가 없다. 커머스 교환 파일(order_items, "
+            "#100)이 있는 주문은 주문 시점 원가로 계산하고, 없는 주문은 근거가 "
+            "없다. 원가율을 곱해 추정하지 않는다 (EC-1) — 그러면 기여이익이 "
+            "매출의 상수배가 되어 revenue_up_profit_down 가드레일이 발동할 수 없다"
         ),
     },
     {
@@ -644,8 +644,9 @@ _SCHEMA_GAPS: tuple[dict[str, object], ...] = (
         "blocks_metrics": ["shipping_subsidy", "contribution_profit"],
         "reason_code": sc.ReasonCode.MISSING_FIELD.value,
         "reason_detail": (
-            "배송비 필드가 22컬럼에 없다. 무료배송 기준과 T1 처치에서 유도한다 "
-            "(D-3, derived: true)"
+            "배송비 필드가 22컬럼에 없다. 커머스 교환 파일이 있는 주문은 "
+            "shipping_fee − shipping_charged 관측값을 쓰고(#100), 없는 주문은 "
+            "무료배송 기준과 T1 처치에서 유도한다 (D-3, derived: true)"
         ),
     },
     {
