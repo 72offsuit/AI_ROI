@@ -98,6 +98,8 @@ class OrderView:
     items: tuple[OrderItem, ...] = ()
     treatment_ids: tuple[str, ...] = ()
     has_coupon_use: bool = False
+    discount: int | None = None
+    """실제 할인액(교환 파일). `None` 이면 관측값이 없어 D-16 규칙으로 유도한다."""
     shipping_fee: int | None = None
     """주문 시점 정책 배송비. `None` 이면 관측값이 없어 D-3 규칙으로 유도한다."""
     shipping_charged: int | None = None
@@ -270,19 +272,47 @@ def coupon_cost(
     최소주문금액 미달로 쿠폰이 쓰이지 않으면 이 비용은 `0` 이 아니라 **발생하지
     않는다.** 그 경우 `message_cost` 만 남는다 — 둘의 차이가 캠페인 효율의 실질이다.
 
-    `discount` 필드가 스키마에 없으므로 `treatment_cost` 에서 유도한다 (D-16).
-    유도값이므로 `derived=True` + `derivation` 을 함께 싣는다 — 저장된 사실과
-    구분되어야 한다.
+    쿠폰이 쓰인 주문마다 근거를 고른다. 기준은 출처가 아니라 **값이 있는가**다 (EC-2):
+
+        관측  교환 파일의 실제 할인액 (#100)          그 값
+        유도  쿠폰 처치(T2·T3)가 적용된 주문 (D-16)   Σ treatment_cost[t]
+        없음  coupon_use 는 있는데 둘 다 없다          계산 불가 — 0 원으로 두지 않는다
+
+    ★ 마지막 줄이 #108 이다. 커머스 운영 쿠폰은 AI 처치가 아니라 처치 ID 가 없다.
+      그래서 유도가 아무것도 세지 못했고, 실제 할인이 있었는데 **0 원이 `ok` 로**
+      게시됐다. "쿠폰 비용이 없었다"와 "셀 근거가 없었다"가 같은 값이 되면 ROI
+      분모가 조용히 작아진다.
+
+    유도값이 하나라도 섞이면 `derived=True` 로 싣는다 — 관측과 유도가 섞인 합계를
+    관측값처럼 보이게 하지 않는다.
     """
     coupon_treatments = set(config.coupon_treatments)
     total = 0
+    observed = 0
+    derived = 0
     for order in campaign.coupon_used_orders:
         if not order.has_coupon_use:
             # coupon_use 이벤트가 없으면 발생하지 않았다. 0 을 더하는 것과 다르다.
             continue
-        for treatment_id in order.treatment_ids:
-            if treatment_id not in coupon_treatments:
-                continue
+        if order.discount is not None:
+            total += order.discount
+            observed += 1
+            continue
+        applied = [t for t in order.treatment_ids if t in coupon_treatments]
+        if not applied:
+            return MetricValue.unavailable(
+                ReasonCode.MISSING_FIELD,
+                f"주문 {order.order_id} 에 coupon_use 가 있는데 실제 할인액(교환 "
+                "파일)도 쿠폰 처치 ID 도 없다 — 할인액을 알 수 없으며 0 원으로 "
+                "간주하지 않는다",
+                unit=Unit.KRW,
+                blocked_by=(
+                    BlockerRef(
+                        BlockerKind.SCHEMA_GAP, "discount", ReasonCode.MISSING_FIELD
+                    ),
+                ),
+            )
+        for treatment_id in applied:
             if treatment_id not in config.treatment_cost:
                 # config 에 없는 처치를 0 원으로 읽지 않는다. `.get(k, 0)` 을 쓰면
                 # "설정이 빠졌다"가 "공짜다"로 조용히 바뀐다.
@@ -300,7 +330,14 @@ def coupon_cost(
                     ),
                 )
             total += config.treatment_cost[treatment_id]
-    used = sum(1 for order in campaign.coupon_used_orders if order.has_coupon_use)
+        derived += 1
+    used = observed + derived
+    excluded = len(campaign.coupon_used_orders) - used
+    rule = (
+        "Σ treatment_cost[t].unit_cost_krw for t in (order.treatment_ids ∩ "
+        "coupon_treatments), coupon_use 이벤트가 있는 주문에 한해 (D-16 유도 규칙)"
+    )
+    is_derived = derived > 0 or observed == 0
     return MetricValue.ok(
         total,
         unit=Unit.KRW,
@@ -309,21 +346,25 @@ def coupon_cost(
             denominator_definition=_SUM_DENOMINATOR,
             window=_NO_WINDOW,
             observed_count=used,
-            excluded_count=len(campaign.coupon_used_orders) - used,
+            excluded_count=excluded,
             excluded_reason=(
                 "coupon_use 이벤트가 없어 할인이 발생하지 않은 주문 "
                 "(최소주문금액 미달 등)"
             )
-            if len(campaign.coupon_used_orders) - used
+            if excluded
             else None,
             source_event_types=("coupon_use",),
         ),
-        derived=True,
+        derived=is_derived,
         derivation=(
-            "Σ treatment_cost[t].unit_cost_krw for t in (order.treatment_ids ∩ "
-            "coupon_treatments), coupon_use 이벤트가 있는 주문에 한해 (D-16 유도 규칙)"
+            f"관측 {observed}건은 교환 파일 discount, 나머지 {derived}건은 {rule}"
+            if observed else rule
+        ) if is_derived else None,
+        limit_note=(
+            None if not is_derived
+            else "실제 할인액이 없는 주문은 처치 단가에서 유도한 값이다" if observed
+            else "discount 필드가 스키마에 없어 처치 단가에서 유도한 값이다"
         ),
-        limit_note="discount 필드가 스키마에 없어 처치 단가에서 유도한 값이다",
     )
 
 

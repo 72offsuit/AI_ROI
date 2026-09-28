@@ -1180,7 +1180,8 @@ METRIC_SPECS: tuple[MetricSpec, ...] = (
     MetricSpec("revenue", 2, "business", "computable",
                "purchase 0건이면 unavailable + NO_SOURCE_EVENT — 0원이 아니다"),
     MetricSpec("coupon_cost", 2, "business", "computable",
-               "discount 필드 부재 → treatment_cost 에서 유도, derived: true (D-16)"),
+               "교환 파일 discount 우선, 없으면 treatment_cost 에서 유도 (D-16, "
+               "derived: true), 둘 다 없으면 계산 불가 (#108)"),
     MetricSpec("message_cost", 2, "business", "computable",
                "발송 전원 계상 — 반응 무관 (EC-3 1원칙)"),
     MetricSpec("campaign_fixed_cost", 2, "business", "computable"),

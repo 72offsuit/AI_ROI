@@ -197,6 +197,7 @@ def assemble_orders(
                 items=exchanged.items if exchanged else (),
                 treatment_ids=(treatment,) if isinstance(treatment, str) else (),
                 has_coupon_use=order_id in coupon_orders,
+                discount=exchanged.discount if exchanged else None,
                 shipping_fee=exchanged.shipping_fee if exchanged else None,
                 shipping_charged=exchanged.shipping_charged if exchanged else None,
             )
@@ -629,8 +630,9 @@ _SCHEMA_GAPS: tuple[dict[str, object], ...] = (
         "reason_code": sc.ReasonCode.MISSING_FIELD.value,
         "reason_detail": (
             "schema.py 가 order_amount 를 이 식으로 정의하는데 discount 가 "
-            "22컬럼에 없다. treatment_cost 에서 유도한다 (D-16) — 유도값이므로 "
-            "derived: true + derivation 을 함께 싣는다"
+            "22컬럼에 없다. 커머스 교환 파일이 있는 주문은 실제 할인액을 쓰고, "
+            "없으면 treatment_cost 에서 유도한다 (D-16, derived: true). 둘 다 "
+            "없는 쿠폰 사용 주문이 있으면 coupon_cost 는 계산 불가다 (#108)"
         ),
     },
     {
@@ -843,7 +845,11 @@ _KPI_META: Mapping[str, dict[str, object]] = {
         "layer": "business_kpi", "population": "orders",
         "window": {"direction": "none"},
         "denominator_definition": "분모 없음 (합계)",
-        "formula": "Σ treatment_cost[t] for t in (처치 ∩ coupon_treatments), coupon_use 있는 주문만",
+        "formula": (
+            "coupon_use 있는 주문마다: 교환 파일 discount, 없으면 "
+            "Σ treatment_cost[t] for t in (처치 ∩ coupon_treatments), "
+            "둘 다 없으면 계산 불가"
+        ),
         "definition_ref": "economic-rule-v1.md §6 D-16",
         "source_events": ["coupon_use"],
     },
