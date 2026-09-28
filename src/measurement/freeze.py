@@ -393,25 +393,41 @@ _GATE1_ASSUMPTIONS: tuple[Mapping[str, object], ...] = (
     {
         "id": "A-DISCOUNT",
         "decision": "D-16 (리드 판정)",
-        "assumed": "discount 필드가 스키마에 없어 treatment_cost 에서 유도한다",
+        "assumed": (
+            "discount 필드가 이벤트 스키마에 없다. 커머스 교환 파일에 실제 할인액이 "
+            "있는 주문은 그 값을 쓰고, 없는 주문만 treatment_cost 에서 유도한다. "
+            "쿠폰을 썼는데 둘 다 없으면 coupon_cost 는 계산 불가다 (#108)"
+        ),
         "error_direction": (
-            "coupon_use 이벤트가 있는 주문만 계상하므로 과소계상 방향이다"
+            "유도분만 오차가 있다 — 처치 단가(T2 3,000 · T3 7,000)와 실제 할인의 차이라 "
+            "주문마다 방향이 다르다. 관측분은 오차가 없다"
         ),
         "why_no_verdict_impact": (
-            "유도값에 derived:true + derivation 이 붙어 저장된 사실과 구분된다"
+            "실험 판정은 시뮬레이터 생성분만 쓰고(MEA-002) 시뮬레이터가 처치를 "
+            "배정하므로 유도가 정의상 정확하다. 유도값에는 derived:true + derivation "
+            "이 붙어 저장된 사실과 구분된다"
         ),
-        "carried_in": ["config assumptions.discount_derived_from_treatment"],
+        "carried_in": [
+            "config assumptions.discount_derived_from_treatment",
+            "docs/decisions/DR-108-coupon-cost-basis.md",
+        ],
     },
     {
         "id": "A-SHIPPING",
         "decision": "D-3 (사용자 추천 ⑴)",
         "assumed": (
-            "배송비 필드가 없어 무료배송 기준과 T1 처치에서 유도한다"
+            "배송비 필드가 이벤트 스키마에 없다. 커머스 교환 파일이 있는 주문은 "
+            "shipping_fee − shipping_charged 관측값을 쓰고, 없는 주문만 무료배송 "
+            "기준과 T1 처치에서 유도한다 (#100)"
         ),
         "error_direction": (
-            "커머스 실측분은 MISSING_FIELD 이므로 계상되지 않는다 (과소)"
+            "교환 파일이 없는 커머스 주문은 처치 ID 가 없어 배송보조가 계상되지 "
+            "않는다 (과소). 교환 파일이 있으면 해소된다"
         ),
-        "carried_in": ["config assumptions.shipping_subsidy_derived_from_rule"],
+        "carried_in": [
+            "config assumptions.shipping_subsidy_derived_from_rule",
+            "docs/contracts/commerce-exchange/v1/README.md §5",
+        ],
     },
     {
         "id": "A-AI-INVESTMENT",

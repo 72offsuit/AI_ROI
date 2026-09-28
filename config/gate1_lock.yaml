@@ -6,9 +6,9 @@ declaration: PARTIAL_FREEZE
 experiment_environment_v1_declared: false
 declaration_note: C1 은 GATE 1 을 통과시키지 않는다. 측정 계층이 소유한 항목만 부분 봉인하고 나머지는 봉인 대기로 남긴다.
   EXPERIMENT_ENVIRONMENT_v1 을 선언하지 않는다.
-locked_at: '2026-09-21T20:54:06.279+09:00'
+locked_at: '2026-09-28T19:15:03.314+09:00'
 locked_by: Danto7632
-repo_commit: 6212fdfca8b77b59e7e72fe602c5b736e240491b
+repo_commit: 1493964f6c1797744e0122a338668b51ccebfd7d
 simulator_commit: null
 items:
 - item: SERVICE_v1
@@ -55,9 +55,9 @@ items:
     GATE 2 다 (결정 D-4). 그래서 metrics[].role 이 전부 none 이다 — 배정하지 않은 것이지 빠뜨린 것이 아니다
 canonical_files:
   src/measurement/schema.py: 4b9dafcb4517e3e5590decae78ede8a834debb1fd65b8bc9fa38bcf24394b4b3
-  config/economic_config.yaml: 9641f9fe9323f1a79d937a91d30878aa9e26fef1cf3472647f5c5d2d9031da65
+  config/economic_config.yaml: a9a46dcde1dc09ad3079073e6071ac3b3e58ac518077403f3b5558dfc6fb2a78
   docs/event_schema.md: ed4a13e3b4cecc81f09588d3f71138bff175804701cfeacd3d1c7980dad2ca57
-  docs/measurement_contract.md: 0fac34afa8fda799d09a1f76cdbadcb7ac3b844e5fcecd9498f6a90aa2666212
+  docs/measurement_contract.md: 855df25209e053f31d1b2b0b1cd073cfe87384a5e4d30fea33b269e1bd816c35
 assumptions:
 - id: A-REFUND
   decision: D-2 (사용자, 2026-09-11)
@@ -74,17 +74,23 @@ assumptions:
   - results/measurement/kpi_report.json notices REFUND_NOT_ADJUSTED
 - id: A-DISCOUNT
   decision: D-16 (리드 판정)
-  assumed: discount 필드가 스키마에 없어 treatment_cost 에서 유도한다
-  error_direction: coupon_use 이벤트가 있는 주문만 계상하므로 과소계상 방향이다
-  why_no_verdict_impact: 유도값에 derived:true + derivation 이 붙어 저장된 사실과 구분된다
+  assumed: discount 필드가 이벤트 스키마에 없다. 커머스 교환 파일에 실제 할인액이 있는 주문은 그 값을 쓰고, 없는 주문만 treatment_cost
+    에서 유도한다. 쿠폰을 썼는데 둘 다 없으면 coupon_cost 는 계산 불가다 (#108)
+  error_direction: 유도분만 오차가 있다 — 처치 단가(T2 3,000 · T3 7,000)와 실제 할인의 차이라 주문마다 방향이 다르다.
+    관측분은 오차가 없다
+  why_no_verdict_impact: 실험 판정은 시뮬레이터 생성분만 쓰고(MEA-002) 시뮬레이터가 처치를 배정하므로 유도가 정의상 정확하다.
+    유도값에는 derived:true + derivation 이 붙어 저장된 사실과 구분된다
   carried_in:
   - config assumptions.discount_derived_from_treatment
+  - docs/decisions/DR-108-coupon-cost-basis.md
 - id: A-SHIPPING
   decision: D-3 (사용자 추천 ⑴)
-  assumed: 배송비 필드가 없어 무료배송 기준과 T1 처치에서 유도한다
-  error_direction: 커머스 실측분은 MISSING_FIELD 이므로 계상되지 않는다 (과소)
+  assumed: 배송비 필드가 이벤트 스키마에 없다. 커머스 교환 파일이 있는 주문은 shipping_fee − shipping_charged
+    관측값을 쓰고, 없는 주문만 무료배송 기준과 T1 처치에서 유도한다 (#100)
+  error_direction: 교환 파일이 없는 커머스 주문은 처치 ID 가 없어 배송보조가 계상되지 않는다 (과소). 교환 파일이 있으면 해소된다
   carried_in:
   - config assumptions.shipping_subsidy_derived_from_rule
+  - docs/contracts/commerce-exchange/v1/README.md §5
 - id: A-AI-INVESTMENT
   decision: 미결 — 값에 외부 출처가 없다
   assumed: 인건비 400만원/월 · 상각 12개월 · 컴퓨트 단가가 가정 기반 추정치다

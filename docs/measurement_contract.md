@@ -62,13 +62,13 @@
 
 **커머스 구현자가 가장 밟기 쉬운 자리다** — 주문 품목을 `purchase` 에 담으려다 레코드 전체가 거부된다. 품목은 `add_to_cart` 에 있다.
 
-**대가:** 한 주문의 `Σ(unit_price × quantity)` 를 `events` 만으로 재구성할 수 없다. `order_items` 테이블이 필요하고 **그것은 미구현**이다. 결과:
+**대가:** 한 주문의 `Σ(unit_price × quantity)` 를 `events` 만으로 재구성할 수 없다. 품목·주문 시점 원가·할인·배송비는 **커머스 교환 파일**(`data/commerce/`, 계약 `docs/contracts/commerce-exchange/v1/`, 이슈 `#100`)이 싣는다. 결과:
 
-| 지표 | C1 상태 |
-|---|---|
-| `cogs` (매출원가) | **`NO_COST_BASIS`** — 원가율을 곱해 추정하지 않는다 (§6.2) |
-| `contribution_profit` | **계산 불가** — `cogs` 의존 |
-| `DQ-09` (금액 등식 검사) | **`PRECONDITION_MISSING`** — 대조할 품목 합계가 없다 |
+| 지표 | 교환 파일이 있는 주문 | 교환 파일이 없는 주문 |
+|---|---|---|
+| `cogs` (매출원가) | `Σ(order_items.unit_cost × quantity)` — 주문 시점 원가 | **`NO_COST_BASIS`** — 원가율을 곱해 추정하지 않는다 (§6.2) |
+| `contribution_profit` | 계산된다 | **계산 불가** — `cogs` 의존 |
+| `DQ-09` (금액 등식 검사) | 실행된다 — 품목 합계 − 할인 = 교환 파일 금액 = 이벤트 금액 | **`not_run` · `PRECONDITION_MISSING`** — 대조할 품목 합계가 없다 |
 
 ---
 
@@ -162,7 +162,7 @@ def event_source(record) -> EventSource:
 
 ## 4. 상품 참조 계약
 
-측정 계층이 원가를 계산하려면 **저장된 `unit_cost`** 가 필요하다 (§6.2 `EC-1`). 그 원천이 상품 카탈로그다.
+측정 계층이 원가를 계산하려면 **저장된 `unit_cost`** 가 필요하다 (§6.2 `EC-1`). ★ **COGS 의 원천은 주문 시점 원가 스냅샷(`order_items.unit_cost`)이고, 카탈로그는 참고용이다** — 원가는 시간에 따라 변하므로 과거 주문을 현재 카탈로그 원가로 계산하면 상품마다 방향이 다른 오차가 생긴다. 둘 다 커머스 교환 파일로 온다 (`docs/contracts/commerce-exchange/v1/` §3).
 
 | 필드 | 형식 | 의미 |
 |---|---|---|
@@ -184,7 +184,7 @@ def event_source(record) -> EventSource:
 {"snapshot_at":"2025-10-01T00:00:00.000+09:00","product_id":"P0043","category":"dairy","selling_price":4200,"unit_cost":null}
 ```
 
-**C1 에 이 스냅샷이 없다.** 그래서 `cogs` 가 항상 `NO_COST_BASIS` 다 — **결함이 아니라 정직한 상태**다.
+이 스냅샷은 교환 파일 `catalog.jsonl` 이다. 교환 파일이 없으면 `cogs` 가 `NO_COST_BASIS` 다 — **결함이 아니라 정직한 상태**다.
 
 ---
 
@@ -220,11 +220,11 @@ def event_source(record) -> EventSource:
 | # | 공백 | 결론 | 차단? |
 |---|---|---|---|
 | ① | 파생 상태 기록 경로 | **게시 시점 계산** (리드 판정 ④) | **아니다** |
-| ② | `shipping_subsidy` 필드 부재 | **규칙 유도 + `derived: true`** (D-3) | **아니다** |
-| ③ | `discount` 필드 부재 | **규칙 유도 + `derived: true`** (D-16) | **아니다** |
+| ② | `shipping_subsidy` 필드 부재 | 교환 파일 관측값 우선, 없으면 **규칙 유도 + `derived: true`** (D-3 · `#100`) | **아니다** |
+| ③ | `discount` 필드 부재 | 교환 파일 관측값 우선, 없으면 **규칙 유도 + `derived: true`** (D-16 · `#108`) | **아니다** |
 | ④ | `customers` 테이블 부재 | **`PRECONDITION_MISSING` 재분류** | **아니다** — 단 §6.4 조건부 |
 
-**넷 다 "필드를 추가한다"가 아니라 "규칙을 정한다"로 풀렸다.** 진짜 차단은 규칙을 안 정한 채 Lock 하는 것이다 — 다음 사이클이 임의로 정하면 Lock 이후 변경이다.
+**넷 다 "필드를 추가한다"가 아니라 "규칙을 정한다"로 풀렸다.** ②③은 이후 커머스 교환 파일(`#100`)이 실제 값을 싣게 되어, 값이 있는 주문은 규칙 대신 관측값을 쓴다 — 이벤트 스키마는 여전히 바뀌지 않았다. 진짜 차단은 규칙을 안 정한 채 Lock 하는 것이다 — 다음 사이클이 임의로 정하면 Lock 이후 변경이다.
 
 ---
 
@@ -275,9 +275,17 @@ has_cost_basis(order) := 주문의 모든 품목에 unit_cost 값이 존재한�
 
 ---
 
-### 6.3 `discount` · `shipping_subsidy` — 유도 규칙 (D-16 · D-3)
+### 6.3 `discount` · `shipping_subsidy` — 관측값 우선, 없으면 유도 규칙 (D-16 · D-3)
 
-**둘 다 DATA-003 22컬럼에 없다.** 필드 추가는 `Plan/` SRS 개정을 요구하고 그것은 이 팀의 권한 밖이다.
+**둘 다 DATA-003 22컬럼에 없다.** 필드 추가는 `Plan/` SRS 개정을 요구하고 그것은 이 팀의 권한 밖이다. 그래서 **이벤트 밖에서** 온다:
+
+```
+주문마다 (기준은 출처가 아니라 값이 있는가 — EC-2):
+  교환 파일에 값이 있다   → 관측값     discount · shipping_fee − shipping_charged   (#100 · #108)
+  없다                    → 아래 유도 규칙                                           derived: true
+  쿠폰을 썼는데 할인도 쿠폰 처치도 없다 → coupon_cost 계산 불가 (0 원이 아니다)       (#108)
+관측과 유도가 섞인 합계는 derived: true 로 싣는다
+```
 
 > **리드 판정 (D-16):** *"차단되는 것은 필드의 부재가 아니라 **결정의 부재**다. `G-16` 의 충족 조건은 '필드를 추가한다'가 아니라 **'유도 규칙을 `ECONOMIC RULE v1` 에 넣는다'** 이다."*
 
@@ -293,12 +301,13 @@ shipping_subsidy(order) := shipping_fee_krw
 
 **두 규칙은 `config/economic_config.yaml` 의 `assumptions` 에 조항으로 있다.** 유도값이므로 산출물에 **`derived: true` + `derivation`** 이 붙는다.
 
-**커머스에게 요구할 것:**
-
 | 대상 | 처리 |
 |---|---|
 | 시뮬레이터 생성분 | 규칙 유도가 정확하다 — 처치를 시뮬레이터가 배정하므로 |
-| 커머스 실측분 | **`MISSING_FIELD`** — `shippingKrw = 0` 하드코딩(`purchase.ts:41`)이고 주문에 배송비를 저장하지 않는다. 저장하기 시작하면 규칙 유도를 쓰지 않고 실측을 쓴다 |
+| 커머스 실측분 (교환 파일 있음) | **관측값.** 커머스는 주문마다 할인·정책 배송비·실제 배송비를 저장하고(`Ecommerce_Service` #36 · #42) 교환 파일로 낸다(#51) |
+| 커머스 실측분 (교환 파일 없음) | 커머스 주문에는 처치 ID 가 없어 유도가 성립하지 않는다 — 배송보조는 계상되지 않고(과소), 쿠폰을 쓴 주문이 있으면 `coupon_cost` 는 **계산 불가**다 |
+
+결정: `docs/decisions/DR-108-coupon-cost-basis.md` · 계약: `docs/contracts/commerce-exchange/v1/` §5
 
 ---
 
@@ -370,7 +379,9 @@ contribution_profit = revenue − COGS − 배송보조 − 메시지 − 캠페
 marketing_cost      = 쿠폰 + 메시지 + 캠페인 고정비          ROI 분모 — 유지
 ```
 
-**왜 이 기준인가.** 총매출 기준(매출에 할인을 되돌리고 비용으로 한 번 빼기)도 **같은 기여이익을 낸다** — `15,700 − 11,000 − 1,570 = 14,130 − 11,000 = 3,130`. 단 **같은 할인액을 쓸 때만** 그렇다. 이 저장소가 가진 할인액은 실제 금액이 아니라 `treatment_cost` 유도값(`D-16` · `T2`=3,000 · `T3`=7,000)이라 커머스 실제 할인(예 1,570)과 어긋난다. 순매출은 `order_amount` 안의 **실제 할인**을 쓰므로 커머스 산출과 자동으로 일치하고, 가정 `A-DISCOUNT` 가 기여이익에서 빠진다.
+**왜 이 기준인가.** 총매출 기준(매출에 할인을 되돌리고 비용으로 한 번 빼기)도 **같은 기여이익을 낸다** — `15,700 − 11,000 − 1,570 = 14,130 − 11,000 = 3,130`. 단 **같은 할인액을 쓸 때만** 그렇다. 유도 할인(`D-16` · `T2`=3,000 · `T3`=7,000)은 커머스 실제 할인(예 1,570)과 어긋나므로, 순매출은 `order_amount` 안의 **실제 할인**을 쓰고 가정 `A-DISCOUNT` 가 기여이익에서 빠진다.
+
+★ 이 기준은 **커머스 이벤트가 `order_amount` 를 실제로 할인 후 금액으로 싣는다**는 사실에 기댄다. 처음 확정할 때 확인하지 않았고 사실이 아니었다(커머스가 할인 전 소계를 싣고 있었다 — `#106`). 커머스가 고쳤고(`Ecommerce_Service` #52), `DQ-09` 가 이벤트와 교환 파일의 금액을 주문마다 대조한다. 실제 커머스 산출물에서 두 기준의 기여이익이 같음을 `tests/test_commerce_exchange_contract.py` 가 확인한다.
 
 **쿠폰이 분모에 남는 것은 중복이 아니다.** 분자(이익)와 분모(지출)는 다른 것이고, 할인의 이익 영향은 이미 매출 감소로 들어가 있다. 양쪽에서 빼면 ROI 가 과대평가된다.
 
@@ -420,7 +431,9 @@ ingestion_gap_attribution       not_run   그것이 무엇인지는 모른다
 
 ---
 
-## 8. `Ecommerce_Service` 적용 — **이슈 초안. 발행하지 않았다**
+## 8. `Ecommerce_Service` 적용 — **이슈 초안. 발행하지 않았다** (커머스가 따로 이행함)
+
+> ★ **이 초안은 이행됐다** (2026-09-28 확인). 이벤트 기록은 커머스 `#28`, 가입일은 `#29`, 원가·할인·배송비는 `#42`·`#51`(교환 파일)로 들어왔다. 아래 본문은 **당시 초안 원문**이며 현재 상태를 말하지 않는다 — 특히 "선행 의존"의 이슈 상태와 "영구히 `NO_COST_BASIS`" 문장은 지난 사실이다.
 
 **이 저장소는 `Ecommerce_Service` 파일을 변경하지 않았다.** 아래는 초안이며 **발행은 사용자 승인 사항**이다 (권한 L3).
 
@@ -490,7 +503,7 @@ python3 scripts/gen_event_schema_doc.py | diff - docs/event_schema.md
 
 ## 10. 이 계약이 Lock 되면
 
-**`EVENT SCHEMA v1` Lock 범위는 `events` 테이블에 한정된다** (결정 D-8). 나머지 6개 테이블(`customers`·`products`·`orders`·`order_items`·`campaigns`·`treatments`)은 미정의 상태다.
+**`EVENT SCHEMA v1` Lock 범위는 `events` 테이블에 한정된다** (결정 D-8). 나머지 6개 테이블(`customers`·`products`·`orders`·`order_items`·`campaigns`·`treatments`)은 이 Lock 의 대상이 아니다. 그중 `customers`·`products`·`orders`·`order_items` 의 **교환 형식**은 별도 계약 `docs/contracts/commerce-exchange/v1/`(`#100`)이 정한다 — `campaigns`·`treatments` 는 여전히 미정의다.
 
 Lock 이후 아래를 바꾸면 `FREEZE-003` — **버전 상향 + 전 데이터 재생성 + Baseline 부터 전 전략 재실행**:
 
