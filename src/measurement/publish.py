@@ -1411,7 +1411,9 @@ def publish(
             reference="issue #99",
         ))
 
-    quality = dq.build_report(events, exchange=exchange)
+    # ★ 교환 파일 명부는 커머스 것이다. 명부 대조(DQ-03·DQ-05)에는 커머스 출처
+    #   이벤트만 넘긴다 — 출처를 아는 것은 이 층이고 validate 는 모른다 (#110).
+    quality = dq.build_report(events, exchange=exchange, exchange_scope=split.commerce)
     ingestion = build_ingestion_report(manifest, split, partition_dates)
     bodies: dict[str, dict[str, object]] = {
         "ingestion_report": ingestion,

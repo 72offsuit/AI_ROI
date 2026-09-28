@@ -25,11 +25,13 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 from typing import Callable, Mapping
 
 from src.measurement import economics as ec
 from src.measurement import schema as sc
+from src.measurement import timeparse as tp
 from src.measurement.errors import ExchangeContractError
 
 CONTRACT_ID = "commerce-exchange/v1"
@@ -115,7 +117,13 @@ class ExchangeOrder:
 class CommerceExchange:
     root: Path
     manifest: Mapping[str, object]
+    generated_at: datetime
+    """묶음을 만든 시각. 명부(`customers`·`catalog`)는 이 시각까지만 책임진다."""
     orders: Mapping[str, ExchangeOrder]
+    signup_dates: Mapping[str, date]
+    """고객 명부 — `customer_id` → 가입일(KST 날짜)."""
+    product_ids: frozenset[str]
+    """상품 명부 — 판매 중단 상품도 들어 있다."""
 
 
 def default_root(source_root: Path) -> Path:
@@ -177,6 +185,12 @@ def read_exchange(root: Path) -> CommerceExchange | None:
         raise _fail(root, f"manifest.json 이 JSON 이 아니다 ({error.msg})") from error
     if not isinstance(manifest, dict) or manifest.get("contract") != CONTRACT_ID:
         raise _fail(root, f"manifest.contract 가 {CONTRACT_ID} 가 아니다")
+    if not _pattern(_KST)(manifest.get("generated_at")):
+        raise _fail(
+            root, "manifest.generated_at 이 KST 오프셋 RFC 3339 가 아니다 — 명부가 "
+            "언제까지를 책임지는지 알 수 없다",
+        )
+    generated_at = tp.parse_datetime(str(manifest["generated_at"]))
 
     rows = {name: _read_rows(root, name) for name in FILES}
     declared = manifest.get("files")
@@ -189,6 +203,16 @@ def read_exchange(root: Path) -> CommerceExchange | None:
                 f"{name}.jsonl 이 {len(found)}행인데 매니페스트는 "
                 f"{declared.get(f'{name}.jsonl')!r}행이라 한다 — 잘렸거나 섞였다",
             )
+
+    signup_dates: dict[str, date] = {}
+    for row in rows["customers"]:
+        customer_id = str(row["customer_id"])
+        if customer_id in signup_dates:
+            raise _fail(root, f"customers.jsonl 에 {customer_id} 가 두 번 있다")
+        signup_dates[customer_id] = date.fromisoformat(str(row["signup_date"]))
+    product_ids = [str(row["product_id"]) for row in rows["catalog"]]
+    if len(set(product_ids)) != len(product_ids):
+        raise _fail(root, "catalog.jsonl 에 같은 product_id 가 두 번 있다")
 
     orders: dict[str, dict[str, object]] = {}
     for row in rows["orders"]:
@@ -216,6 +240,9 @@ def read_exchange(root: Path) -> CommerceExchange | None:
     return CommerceExchange(
         root=root,
         manifest=manifest,
+        generated_at=generated_at,
+        signup_dates=signup_dates,
+        product_ids=frozenset(product_ids),
         orders={
             order_id: ExchangeOrder(
                 order_id=order_id,

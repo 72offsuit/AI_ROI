@@ -121,9 +121,20 @@ customers.customer_id  ↔  이벤트의 customer_id
 | 품목은 있는데 `unit_cost` 가 `null` | 그 주문만 `NO_COST_BASIS` (blocked_by `field:unit_cost`) — 품목을 모르는 것과 원가를 모르는 것은 해소 방법이 다르다 |
 | 이벤트에는 있는데 교환 파일에 없는 주문 | 그 주문의 `cogs()` `NO_COST_BASIS` — 품목이 붙지 않는다 |
 
-## 9. 아직 쓰지 않는 것
+## 9. 명부 대조 — `DQ-02` · `DQ-03` · `DQ-05` (#110)
 
-`customers.jsonl`·`catalog.jsonl` 은 **읽고 형식을 검사하지만 아직 어떤 검사도 소비하지 않는다.** `DQ-03`(고아 `customer_id`·`product_id`)과 `DQ-05`(`timestamp < signup_date`)가 이 둘을 쓸 자리이며, 두 검사는 여전히 `not_run` 이다. 연결은 별도 이슈로 다룬다.
+`customers.jsonl`·`catalog.jsonl`·`orders.jsonl` 은 **커머스 명부**다. 교환 파일이 있으면 세 검사가 실행되고, 없으면 `not_run` 이다.
+
+| 검사 | 무엇을 | 범위 |
+|---|---|---|
+| `DQ-02` | `order_id` 전역 유일 | `orders.jsonl` 전 행. 중복이 있으면 로더가 묶음 전체를 거부하므로, 읽힌 묶음은 통과한 것이다 |
+| `DQ-03` | 고아 `customer_id`·`product_id` | **커머스 출처 이벤트만** — 시뮬레이터 이벤트는 대조할 명부가 없다. 출처는 `publish.py` 가 나눠 넘긴다 |
+| `DQ-05` | 가입일 이전 이벤트 | 명부에 있는 고객의 커머스 이벤트. **KST 날짜 단위** — 가입 당일 가입 시각 이전의 이벤트는 잡지 못한다 |
+
+- **명부는 `manifest.generated_at` 까지를 책임진다.** 그 뒤의 이벤트는 대조하지 않고 건수를 `reason_detail` 에 싣는다 — 스냅샷 이후 가입한 고객이 거짓 고아가 되지 않게 한다. 위반도 통과도 아니다
+- 로더는 `customers` 의 중복 `customer_id`, `catalog` 의 중복 `product_id`, `generated_at` 이 없는 매니페스트를 거부한다
+
+결정: `docs/decisions/DR-110-roster-checks.md`
 
 ## 10. 강제
 
@@ -133,3 +144,4 @@ customers.customer_id  ↔  이벤트의 customer_id
 | 로더 거부 규칙 | 같은 파일 `TestReadExchange` |
 | `DQ-09` | 같은 파일 `TestAmountEquation` |
 | 실제 커머스 산출물 종단 (`EventSink` → `publish()`) | 같은 파일 `TestEndToEndWithTheRealCommerceSample` · 픽스처 `tests/fixtures/commerce_exchange_v1/` |
+| 명부 대조 `DQ-02`·`DQ-03`·`DQ-05` | `tests/test_roster_checks.py` |

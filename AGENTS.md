@@ -93,13 +93,14 @@ python3 -m unittest tests.test_isolation -v
   - SRS NFR-004의 `>= 3.10` 선언에 **코드를 맞췄다** (이슈 `#62`, 결정 B). `datetime.fromisoformat()`의 `Z` 접미사가 3.11부터 지원되므로(bpo-35829) `src/measurement/timeparse.py`가 파싱 전에 `Z` → `+00:00`으로 정규화한다. **`datetime.fromisoformat`을 직접 부르지 않는다** — `tests/test_timeparse.py`가 AST로 강제하고, `python-compat.yml`이 3.10에서 실제로 돌려 확인한다.
 - `src/measurement/`는 구현 완료(M-01~M-09). `src/simulator/`·`decision/`·`diagnostics/`·`orchestration/`은 **여전히 지침 파일만 있고 `.py` 가 0개다.** 그것이 C2 가 채울 자리다.
   - 여기에도 **모듈 개수를 적지 않는다.** 이전 판은 `모듈 10개` 라고 적었고 `timeparse.py`·`coverage.py` 가 들어오며 낡았다 — 테스트 건수와 같은 종류의 낡음이다 (`#59`). `ls src/measurement/*.py` 가 답한다.
-- **C2 에서 추가된 것** (이슈 `#63`·`#97`·`#99`·`#101`·`#100`·`#106`·`#108`):
+- **C2 에서 추가된 것** (이슈 `#63`·`#97`·`#99`·`#101`·`#100`·`#106`·`#108`·`#110`):
   - `src/measurement/coverage.py` — 필드 충족 집계의 **유일한 규칙.** `sink` 는 쓰면서 세고 `publish` 는 읽으며 센다. 규칙이 두 벌이면 둘 다 따로 보기에는 맞아 보이면서 어긋난다.
   - **계보** — `data/raw/runs/run-<id>.json` 이 실행 1건씩을 불변으로 남기고 `parent_run_id` 로 사슬을 이룬다. `sink.verify_lineage()` 가 그 주장을 디스크의 파티션과 대조하며, `runs/` 가 없으면 `not_run` 이다(**통과가 아니다**). 게시물 `provenance.lineage` 로 실려 나간다.
   - **매출 기준은 순매출이다.** 계약이 `order_amount` 를 할인 후 상품 합계(배송비 제외)로 정의하므로 `contribution_profit` 에서 쿠폰 할인을 **다시 빼지 않는다.** 쿠폰은 `marketing_cost`(ROI 분모)에 남는다. 근거: `docs/decisions/DR-101-revenue-basis.md`.
     - ★ 이 전제는 **커머스 코드가 실제로 지켜야 성립한다.** DR-101 은 처음에 확인 없이 "커머스가 이미 할인 후를 내보낸다"고 적었고 사실이 아니었다(`#106`). 지금은 커머스가 고쳤고 `DQ-09` ③이 이벤트와 교환 파일의 금액을 매번 대조한다.
   - **커머스 교환 파일** (`#100`) — `data/commerce/`(Sink 루트의 형제)에 커머스가 `npm run exchange:export` 로 만든 주문·품목·고객·카탈로그 묶음이 있으면 `publish` 가 읽는다. 품목·주문 시점 원가·배송비가 붙어 `cogs`·`contribution_profit` 이 계산되고 `DQ-09` 가 실행된다. 없으면 오늘처럼 `NO_COST_BASIS`·`not_run` 이다. 계약: `docs/contracts/commerce-exchange/v1/`, 로더: `src/measurement/exchange.py`.
   - **쿠폰 비용(ROI 분모)은 주문마다 실제 할인액을 먼저 쓴다** (`#108`). 교환 파일 `discount` → 없으면 처치 단가 유도(D-16) → 둘 다 없는데 쿠폰을 썼으면 **계산 불가**(0 원이 아니다). 커머스 운영 쿠폰도 마케팅 비용이다. 근거: `docs/decisions/DR-108-coupon-cost-basis.md`.
+  - **명부 대조** (`#110`) — 교환 파일이 있으면 `DQ-02`·`DQ-03`·`DQ-05` 가 실행된다. 대조 대상은 **커머스 출처 이벤트만**(명부가 커머스 것이다)이고, 명부 생성 시각 이후 이벤트는 대조하지 않고 건수를 남긴다. 근거: `docs/decisions/DR-110-roster-checks.md`.
   - `treatment_cost.*.occurs_at` 은 **`EventType` 어휘**다. 로딩 시 실재 여부를 거부하고, `tests/test_treatment_accrual.py` 가 `economics.py` 의 실제 계상 근거와 대조한다.
 - `dashboard/`(Next.js, `:3001`)에 **라우트 8종**이 구현됨(d-01·d-02) — 게시물 연동 6(`V1`~`V6`) + 정적 1(`/triggers`, C1 작동 0종) + 개요 1(`/`). `results/`의 게시물을 **읽기만** 한다(`DB-012`·`DB-013`·`DB-014`).
 - GATE 1은 **부분 봉인(`PARTIAL_FREEZE`)** 상태다. 완전 봉인(`LOCKED`)은 **0종**.

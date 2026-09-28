@@ -379,7 +379,7 @@ class TestAmountEquation(TempDirTest):
         check = dq09(events, exchange)
         self.assertEqual("fail", check["status"])
         self.assertEqual(1, check["violations"])
-        self.assertIn(discounted.order_id, check["samples"][0])
+        self.assertIn(discounted.order_id, check["samples"][0]["detail"])
 
     def test_order_without_items_is_a_violation(self) -> None:
         root = copy_sample(self.tmp / "commerce")
@@ -389,7 +389,7 @@ class TestAmountEquation(TempDirTest):
         ])
         check = dq09(sample_events(), ex.read_exchange(root))
         self.assertEqual("fail", check["status"])
-        self.assertIn("품목이 없다", check["samples"][0])
+        self.assertIn("품목이 없다", check["samples"][0]["detail"])
 
     def test_equation_broken_inside_the_bundle_is_a_violation(self) -> None:
         root = copy_sample(self.tmp / "commerce")
@@ -537,6 +537,14 @@ class TestEndToEndWithTheRealCommerceSample(unittest.TestCase):
     def test_dq09_runs_and_passes(self) -> None:
         check = next(c for c in self.quality["checks"] if c["id"] == "DQ-09")
         self.assertEqual("pass", check["status"], check)
+
+    def test_roster_checks_run_on_the_commerce_split(self) -> None:
+        """#110 — publish 가 커머스 출처 이벤트만 명부 대조에 넘긴다."""
+        for check_id in ("DQ-02", "DQ-03", "DQ-05"):
+            with self.subTest(check=check_id):
+                check = next(c for c in self.quality["checks"] if c["id"] == check_id)
+                self.assertEqual("pass", check["status"], check)
+                self.assertGreater(check["examined_rows"], 0)
 
     def test_cogs_is_published_and_matches_commerce(self) -> None:
         cogs = self.metric("cogs")

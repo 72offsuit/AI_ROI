@@ -808,5 +808,45 @@ class TestMetricValueBranchesWithValidator(unittest.TestCase):
                 )
 
 
+@unittest.skipUnless(_jsonschema_available(), NEEDS_JSONSCHEMA)
+class TestFailingQualityReportMeetsItsContract(unittest.TestCase):
+    """★ #113 — 위반 표본이 있는 품질 리포트도 계약을 지켜야 한다.
+
+    표본은 `fail` 일 때만 생긴다. 초록 장면만 검증하면 이 경로는 한 번도 지나지
+    않고, 게시 직전 자기검증(`contracts.dump`)은 핵심 불변식만 본다 — 실제로
+    표본이 문자열로 게시되고 있었다.
+    """
+
+    def test_samples_are_objects_with_detail(self) -> None:
+        from jsonschema import Draft202012Validator
+        from referencing import Registry, Resource
+
+        from src.measurement import contracts as ct
+        from src.measurement import validate as dq
+
+        registry = Registry().with_resources([
+            (schema["$id"], Resource.from_contents(schema))
+            for schema in map(_load, sorted(CONTRACTS.glob("*.schema.json")))
+        ])
+        duplicated = {"event_id": "a", "event_type": "session_start"}
+        body = dq.build_report([duplicated, dict(duplicated)])
+        self.assertTrue(
+            any(check.get("samples") for check in body["checks"]),
+            "★ 표본이 있는 검사가 없으면 이 테스트는 아무것도 보지 않는다",
+        )
+        payload = json.loads(ct.dump({
+            **ct.envelope(
+                "data_quality_report", run_id=ct.new_run_id(),
+                provenance=ct.build_provenance(source_root="data/raw"), notices=[],
+            ),
+            **body,
+        }))
+        validator = Draft202012Validator(
+            {"$ref": f"{BASE_URI}data_quality_report.schema.json"}, registry=registry
+        )
+        errors = [f"{e.json_path}: {e.message}" for e in validator.iter_errors(payload)]
+        self.assertEqual([], errors)
+
+
 if __name__ == "__main__":
     unittest.main()
