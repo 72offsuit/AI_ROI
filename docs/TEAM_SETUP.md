@@ -15,10 +15,10 @@
 | **무엇을 만드나** | C1 이 만든 측정 계층 위에 **고객 시뮬레이터**와 **의사결정 시스템**을 올린다 |
 | **왜 팀을 나누나** | 시뮬레이터는 **정답을 만드는 쪽**, 의사결정은 **정답을 맞히는 쪽**이다. 수험생이 답안지를 보면 점수는 100 점이 나오지만 실력은 0 이다 |
 | **두 팀이 만나는 곳** | `src/measurement/` — C1 에서 완성됐고 **읽기만** 한다 |
-| **지금 상태** | 측정 계층·대시보드 완료. 나머지 네 파트는 **빈 디렉터리 + 지침 파일**뿐이다 |
+| **지금 상태** (2026-09-29) | 측정 계층·대시보드·커머스 교환 파일 소비 완료. 리드 몫 선행 이슈 0건 — **두 팀 모두 바로 착수할 수 있다** |
 
 ```
-src/measurement/    ✅ 10 모듈 · 7,600 줄 — 계약, 두 팀 공용 (읽기 전용)
+src/measurement/    ✅ 완성 — 계약, 두 팀 공용 (읽기 전용)
 src/simulator/      ⬜ 비어 있음 — 시뮬 팀
 src/decision/       ⬜ 비어 있음 — 시스템 팀
 src/orchestration/  ⬜ 비어 있음 — 시스템 팀
@@ -82,38 +82,71 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 
 ## 3. 착수 절차
 
-```bash
-git clone <repo> && cd AI_ROI
-git submodule update --init          # Plan/ (private, 기획 문서)
+### 3.1 준비물
 
-# 1) 자기 파트 지침을 읽는다 — 이것이 실제 규칙이다
-cat AGENTS.md                        # 저장소 전체
+| | |
+|---|---|
+| GitHub 권한 | `AI_ROI` · `Plan`(private 서브모듈) · `Ecommerce_Service` — 네 명 모두 이미 있다 |
+| `git` · [`gh`](https://cli.github.com) | `gh auth login` 을 한 번 해 둔다. 이슈·PR 을 터미널에서 본다 |
+| **Python 3.12** | CI 와 같은 판이다. 선언된 최소는 3.10(`python-compat.yml` 이 CI 에서 확인)이지만 로컬은 3.12 로 맞춘다 |
+| Node.js | `dashboard/` 를 건드릴 때만 |
+
+### 3.2 받기 · 환경 · 첫 검증
+
+```bash
+git clone https://github.com/72offsuit/AI_ROI.git && cd AI_ROI
+git submodule update --init                  # Plan/ (기획 문서 PRD/SRS · 공통 규약)
+
+python3.12 -m venv .venv && source .venv/bin/activate      # Windows: .venv\Scripts\activate
+pip install -r requirements.txt -r requirements-dev.txt    # ★ 두 벌 다
+
+python3 -m unittest discover -s tests        # 끝줄이 OK (skipped=3) 이어야 한다
+```
+
+★ **`skipped=` 수까지 본다.** `requirements-dev.txt`(`jsonschema`·`referencing`)를 빠뜨리면 계약 스키마 검증이 전부 skip 되고 **끝줄은 여전히 `OK` 다** — 실제로 그렇게 계약 위반을 놓쳤고 CI 가 잡았다(`#99`). 두 벌을 설치한 상태의 정상은 `skipped=3` 이고, 90 안팎이면 의존성이 빠진 것이다. **`skip` 은 통과가 아니다.**
+
+의존성 없이도 스위트는 돌아야 한다(격리 CI 잡이 그렇게 돈다) — 그래서 테스트가 실패하지 않고 skip 으로 빠진다. 그것이 로컬 검증을 의존성 없이 해도 된다는 뜻은 아니다.
+
+### 3.3 읽기 — 이 순서로
+
+```bash
+cat AGENTS.md                        # 저장소 전체 규칙
 cat src/AGENTS.md                    # 파트 경계
-cat src/<내 파트>/AGENTS.md           # 내 파트
-
-# 2) 계약을 읽는다 (두 팀 공용, 읽기 전용)
-cat docs/measurement_contract.md     # 이벤트 기록 계약
-cat docs/event_schema.md             # 22 컬럼 · event_type 16 종
-ls docs/contracts/measurement-publish/v1/   # 게시물 계약 9 종
-
-# 3) 검증이 도는지 확인한다
-python3 -m unittest discover -s tests        # 전부 통과해야 한다
-python3 -m unittest tests.test_isolation -v  # 격리
-python3 -m unittest tests.test_team_boundaries -v   # 팀 경계
-
-# 4) 브랜치를 만든다 — <type>/<short-kebab>
-git switch -c feat/s1-simulator-skeleton
+cat src/<내 파트>/AGENTS.md           # 내 파트 (simulator · decision · orchestration · diagnostics)
+cat docs/DECISION_RECORDS.md         # 결정 기록 제도
+cat docs/measurement_contract.md     # 이벤트 기록 계약 (두 팀 공용, 읽기 전용)
+ls  docs/contracts/measurement-publish/v1/   # 게시물 계약
+gh issue view <내 첫 이슈 번호>
 ```
 
-### 푸시 전 반드시
+### 3.4 작업 → PR
 
 ```bash
-python3 -m unittest discover -s tests                   # 전건 통과
-python3 -m unittest tests.test_team_boundaries          # 경계를 넘지 않았는가
-python3 .agent-team/04-architecture/tools/check_ownership.py
+git switch -c feat/s1-simulator-skeleton     # <type>/<short-kebab>. main 직접 커밋 금지
+# … 작업 …
+
+# 푸시 전 반드시
+python3 -m unittest discover -s tests                   # 전건 통과 · skipped=3
+python3 -m unittest tests.test_team_boundaries          # 한 브랜치가 두 팀 경로를 건드리지 않았는가
+python3 .agent-team/04-architecture/tools/check_ownership.py   # 새 파일이 소유자를 갖는가 (CI 에 없다)
+
+git add <경로를 명시한다>                                 # git add -A 지양
+git commit -m "feat: 시뮬레이터 골격과 api.py 계약"          # 제목 한 줄
+git push -u origin feat/s1-simulator-skeleton
+gh pr create --base main                                 # 본문은 docs/GIT_WORKFLOW.md §5
 ```
 
-**의존성 설치 없이 도는 것이 원칙이다.** `pip install -r requirements.txt` 는 Parquet·YAML 경로를 검증할 때만 필요하고, 그 없이도 전체 스위트가 돌아야 한다(BLOCKED skip 으로 보고된다).
+`check_ownership.py` 가 "소유자 없음"을 내면 `.agent-team/04-architecture/tools/ownership.json` 의 `rules` 에 새 파일을 한 줄 등록한다(`pattern` · `owner` · `why`). 파트 디렉터리(`src/simulator/**` 등)는 C1 때 통째로 등록돼 있어 그 아래 새 파일은 걸리지 않는다 — **걸리는 것은 주로 새 테스트 파일(`tests/test_*.py`)이다.**
+
+| PR 본문에 반드시 | |
+|---|---|
+| 연결 이슈 | `Closes #75` |
+| 파트 격리 영향 | 어느 파트를 건드렸고 경계를 넘지 않았는가 |
+| 봉인 영향 | GATE 1·2 봉인 항목을 건드렸는가 |
+| 테스트 결과 | `unittest` 끝줄 (`skipped=` 포함) |
+| 결정 기록 | 이 PR 이 만든 `docs/decisions/DR-*.md` · `MC-*.md` |
+
+**병합 기준** — CI `Tests` 통과 · **리뷰 승인 1건** · squash merge. ★ **리뷰는 같은 팀 동료가 한다.** 다른 팀 사람은 그 코드를 읽으면 안 된다(§2) — 시뮬 PR 은 성환·민정이, 시스템 PR 은 인성·광진이 서로 본다.
 
 ---
 
@@ -134,6 +167,7 @@ python3 .agent-team/04-architecture/tools/check_ownership.py
 | 식별자 형식 | `customer_id` `^C\d{8}$` · `session_id` `^S-C\d{8}-\d{13}$` · `order_id` `^O\d{8}-\d{6}$` · `treatment_id` `^T[0-4]$` 등 9 종 |
 | 출처 판별 | `simulator_version` · `random_seed` 가 있으면 시뮬레이터, 둘 다 `null` 이면 커머스 (`MEA-002`) |
 | 타임존 | 오프셋 있는 표기만 허용(`+09:00` · `Z` 둘 다). 오프셋 없으면 **거부**. Sink 가 KST 로 정규화 |
+| 커머스 교환 파일 | `data/commerce/` — 커머스 주문·품목(주문 시점 원가)·고객·카탈로그. 있으면 COGS·기여이익과 `DQ-02`·`03`·`05`·`09` 가 계산된다. 계약 `docs/contracts/commerce-exchange/v1/`. ★ **실험 판정에는 시뮬레이터 생성분만 쓴다**(`MEA-002`) — 커머스 데이터는 관측·대조용이다 |
 
 **계약을 바꾸려면 양 팀 합의 + `FREEZE-003`**(버전 상향 → 전 데이터 재생성 → Baseline 부터 재실행). 한 팀이 단독으로 고치지 않는다.
 
@@ -186,7 +220,7 @@ metrics(start, end)
 
 ### 착수 순서 — 두 팀은 **병렬로 시작한다**
 
-계약(`src/measurement/`)이 이미 완성돼 있어 **서로를 기다리지 않는다.** 시스템 팀은 `S4` 의 실제 이벤트가 나오기 전까지 **계약 형식의 픽스처**로 `D1` 을 만들 수 있다.
+계약(`src/measurement/`)이 이미 완성돼 있어 **서로를 기다리지 않는다.** 시스템 팀은 `S4` 의 실제 이벤트가 나오기 전까지 **계약 형식의 픽스처**로 `D1` 을 만들 수 있다 — 형식 예시로 커머스가 실제로 만든 이벤트 `tests/fixtures/commerce_exchange_v1/events.jsonl` 이 있다(26건, 커머스 출처라 시뮬레이터 메타 필드는 `null`). **첫 태스크는 `S1`(#75)과 `D1`(#83)이다.**
 
 ```
 시뮬   S1 ─ S2 ─┬─ S3 ─┐
@@ -216,7 +250,7 @@ metrics(start, end)
 | **GATE 1** | `S7` | Persona 구성비 · Hidden Trait 분포 · 행동 규칙 · Churn 임계값 · Treatment 반응 · 경제 파라미터 · Event Schema | `FREEZE-003` — 버전 상향 → **전 데이터 재생성 → Baseline 부터 전 전략 재실행** |
 | **GATE 2** | `D7` | `decision/strategies/rule_based.py` · 예산 상한 | 같음 |
 
-**C1 에서 GATE 1 은 부분 봉인(`PARTIAL_FREEZE`)까지 갔다.** 측정 계층 항목만 잠겼고 시뮬레이터 항목 5 종은 `OUT_OF_SCOPE` 다 — `S7` 이 그것을 채운다.
+**GATE 1 은 부분 봉인(`PARTIAL_FREEZE`)이다.** 완전히 잠긴(`LOCKED`) 항목은 아직 0 종이고, 측정 계층 항목은 `PENDING`·`PARTIAL`, 시뮬레이터 항목 5 종은 `OUT_OF_SCOPE` 다 — `S7` 이 그것을 채운다. 정본 4종(`schema.py` · `economic_config.yaml` · `event_schema.md` · `measurement_contract.md`)의 해시가 기록돼 있어, 이 넷을 고치면 재봉인(사람 서명)이 필요하다. 마지막 재봉인 2026-09-28(`#109`).
 
 봉인 기록은 `config/gate1_lock.yaml` 이며 **사람이 손으로 쓰지 않는다** (`freeze.record()` 가 쓴다). 봉인 이후 정본 파일이 바뀌면 해시 대조가 실패하고 CI 가 잡는다.
 
@@ -252,6 +286,54 @@ C1 에서 반복해 확인된 것들이다. 새 코드에도 그대로 적용된
 | 경계 테스트가 실패한다 | 브랜치를 팀별로 나눈다. 두 팀에 걸치는 작업은 애초에 한 PR 이 아니다 |
 | 시뮬레이터 작업 중 성능 이야기가 나온다 | **멈추고 보고한다** (PRD §80 Risk 1) |
 | 봉인된 파일을 고쳐야 한다 | `FREEZE-003` 절차. 사람의 서명이 필요하다 |
+
+---
+
+## 9. AI 에이전트로 작업할 때
+
+Claude Code · Codex 모두 된다. 저장소의 `AGENTS.md`(Claude 는 `CLAUDE.md` 를 거쳐)를 자동으로 읽고, `src/` 아래로 들어가면 파트별 `AGENTS.md` 가 규칙을 더한다.
+
+- **처음에 자기 팀과 이슈 번호를 말해 준다.** 예: *"나는 시뮬레이터 팀이다. #75 를 한다. docs/TEAM_SETUP.md 부터 읽어라."*
+- **에이전트 권한은 L1(제안만)이다.** 커밋·푸시·이슈·PR 은 사람이 "커밋해"·"PR 올려" 라고 말한 뒤에만, 병합·이슈 닫기·브랜치 삭제는 매번 따로 승인한다
+- 시뮬레이터 작업 중 에이전트가 AUC·Qini·Incremental Profit 을 꺼내면 **멈추게 한다** (§2)
+- "통과했다" 는 보고를 받으면 **`skipped=` 수를 직접 확인한다** (§3.2)
+
+### 선택 — BATHOS
+
+리드가 쓰는 에이전트 운영 도구다. **없어도 작업할 수 있다** — C2 는 웨이브가 아니라 이슈 단위로 진행하고, 규칙은 저장소(`AGENTS.md`·테스트·CI)가 강제한다. 쓰면 얻는 것:
+
+| | |
+|---|---|
+| 안전 훅 | 강제 푸시·하드 리셋·`rm -rf` 같은 파괴 명령을 에이전트가 실행하기 전에 막는다 |
+| 세션 저장·복원 | `/save-session` → 다음에 `/cold-start` 로 어디까지 했는지 그대로 이어간다 |
+| 역할 에이전트 | 코드 리뷰(`thomas-code-reviewer`)·보안 점검 등을 따로 불러 쓸 수 있다 |
+
+**설치 — 저장소 밖 상위 폴더에 한다.** AI_ROI 안에 설치하면 `.claude/` 가 저장소에 섞이고, `AI_ROI/.agent-team/`(C1 의사결정 기록, 커밋돼 있다)을 덮어쓸 수 있다.
+
+```bash
+# 작업 폴더 — 상위 폴더가 BATHOS 워크스페이스, 저장소는 그 아래
+mkdir -p ~/72offsuit && cd ~/72offsuit
+git clone https://github.com/72offsuit/AI_ROI.git          # §3.2 는 여기서 한다
+
+# 엔진 빌드 + 워크스페이스에 주입 (Rust · jq 필요)
+git clone https://github.com/taxideftis/bathos.git ~/bathos
+~/bathos/install.sh --into ~/72offsuit                      # Windows: .\install.ps1 -Into <경로>\72offsuit
+echo 'export BATHOS_BIN="$HOME/bathos/core/target/release/bathos"' >> ~/.zshrc
+"$BATHOS_BIN" doctor                                         # 배선 점검
+
+cd ~/72offsuit && claude                                     # ★ 상위 폴더에서 연다
+```
+
+플랫폼별 전 과정은 BATHOS 저장소의 `docs/macos-linux-install-kr.md` · `windows-install-kr.md` · `wsl-install-kr.md`.
+
+**알려진 함정**
+
+| | |
+|---|---|
+| **AI_ROI 안에서 `/team-kickoff`·`/wave*` 를 실행하지 않는다** | C1 기록(`AI_ROI/.agent-team/`)이 덮인다. C2 는 웨이브를 쓰지 않는다 |
+| 병합한 브랜치가 `git branch -d` 로 안 지워진다 | squash 병합이라 git 이 병합으로 보지 않는다. `-D` 가 필요한데 안전 훅이 **의도적으로** 막는다 — 병합 커밋과 파일 차이가 없는지 확인한 뒤 사람이 직접 실행한다(Claude Code 에서는 `! git branch -D …`) |
+| 문서를 고치는 셸 명령이 막힌다 | 안전 훅은 명령 **글자**를 본다. 편집할 본문에 위험 명령 문자열이 들어 있으면 오탐으로 막힌다 — 셸 대신 편집 도구로 고친다 |
+| 리드의 `.claude/` 를 복사해 쓰지 않는다 | 리드 개인 도구 경로가 섞여 있다. 위 `install.sh` 로 새로 받는다 |
 
 ---
 
