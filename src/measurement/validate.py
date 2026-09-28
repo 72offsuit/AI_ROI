@@ -44,6 +44,7 @@ from typing import Iterable, Mapping, Sequence
 
 from src.measurement import timeparse as tp
 from src.measurement import schema as sc
+from src.measurement.exchange import CommerceExchange
 from src.measurement.errors import QualityGateFailure
 from src.measurement.sink import parquet_available
 
@@ -132,15 +133,16 @@ DQ_ALL: tuple[CheckSpec, ...] = (
     ),
     CheckSpec(
         "DQ-09", "금액 정합성", "order_amount = Σ(unit_price×quantity) − discount",
-        "purchase 이벤트의 금액과 품목 합계의 대조", "precondition_missing",
-        # 두 겹의 장벽이고 둘 다 스키마 변경을 요구한다:
-        #   ① discount 필드가 DATA-003 22컬럼에 없다
-        #   ② purchase 는 주문 단위 1행이고 product_id·quantity·unit_price 가
-        #      NOT_APPLICABLE 이다 — 품목 합계를 재구성할 수 없다
+        "커머스 교환 파일의 주문 — purchase 이벤트 금액과 품목 합계·할인의 대조",
+        "precondition_missing",
+        # 이벤트만으로는 두 겹으로 막힌다: discount 가 DATA-003 22컬럼에 없고,
+        # purchase 는 주문 단위 1행이라 품목 합계를 재구성할 수 없다. 둘 다
+        # 커머스 교환 파일(#100)이 싣는다. 교환 파일이 없으면 이 사유로 not_run 이다.
         # add_to_cart 로 근사하지 않는다: remove_from_cart 가 있고, 담았지만 사지
         # 않은 품목이 있고, 결제 실패가 있다.
         "discount 필드가 없고 purchase 가 주문 단위 1행이라 품목 합계를 "
-        "재구성할 수 없다. order_items 테이블이 있어야 성립한다",
+        "재구성할 수 없다. order_items 가 있는 커머스 교환 파일(data/commerce/)이 "
+        "있어야 성립한다",
     ),
     CheckSpec(
         "DQ-10", "금액 정합성", "음수 금액 0건",
@@ -348,6 +350,54 @@ def check_order_id_single_purchase(
     return _outcome(
         DQ_INDEX["DQ-02b"], examined=len(order_ids), violations=len(duplicates),
         samples=[str(key) for key in duplicates],
+    )
+
+
+def check_amount_equation(
+    events: Sequence[Mapping[str, object]],
+    exchange: CommerceExchange | None,
+) -> CheckResult:
+    """`DQ-09` — 이벤트와 교환 파일이 **같은 주문을 같게 말하는가.**
+
+    교환 파일의 주문마다 셋을 본다. 하나라도 어긋나면 그 주문이 위반이다:
+
+        ① 품목이 1줄 이상 있다          없으면 계약이 약속한 것이 없다
+        ② order_amount = Σ(unit_price × quantity) − discount   (교환 파일 안)
+        ③ 같은 order_id 의 purchase 이벤트가 있고 그 order_amount 가 ②와 같다
+
+    ③이 이 검사의 값어치다. 한 출처 안에서만 계산하면 그 출처가 스스로
+    일관되기만 하면 통과한다. 이벤트의 금액 기준이 어긋났던 것(#106)은 ②로는
+    안 보이고 ③으로만 보인다.
+
+    교환 파일이 없으면 `not_run` 이다 — 대조하지 않은 것이지 위반이 아니다.
+    """
+    spec = DQ_INDEX["DQ-09"]
+    if exchange is None:
+        return _not_run(spec)
+    purchases: dict[object, object] = {
+        e.get("order_id"): e.get("order_amount")
+        for e in events
+        if e.get("event_type") == sc.EventType.PURCHASE.value
+    }
+    samples: list[str] = []
+    for order_id, order in sorted(exchange.orders.items()):
+        if not order.items:
+            samples.append(f"{order_id}: 품목이 없다")
+            continue
+        items_total = sum(item.unit_price * item.quantity for item in order.items)
+        if order.order_amount != items_total - order.discount:
+            samples.append(
+                f"{order_id}: 교환 파일 {order.order_amount} ≠ "
+                f"품목 {items_total} − 할인 {order.discount}"
+            )
+        elif order_id not in purchases:
+            samples.append(f"{order_id}: purchase 이벤트가 없다")
+        elif purchases[order_id] != order.order_amount:
+            samples.append(
+                f"{order_id}: 이벤트 {purchases[order_id]} ≠ 교환 파일 {order.order_amount}"
+            )
+    return _outcome(
+        spec, examined=len(exchange.orders), violations=len(samples), samples=samples,
     )
 
 
@@ -644,6 +694,7 @@ def run_all(
     events: Sequence[Mapping[str, object]],
     *,
     parquet_digests: Sequence[str] | None = None,
+    exchange: CommerceExchange | None = None,
 ) -> list[CheckResult]:
     """★ **항상 18종을 낸다.** 실행 못 한 것도 목록에 남는다 (AC-3 · Q-4).
 
@@ -657,6 +708,7 @@ def run_all(
         "DQ-06": lambda: check_timezone_single(events),
         "DQ-07": lambda: check_purchase_funnel(events),
         "DQ-08": lambda: check_coupon_funnel(events),
+        "DQ-09": lambda: check_amount_equation(events, exchange),
         "DQ-10": lambda: check_no_negative_amounts(events),
         "DQ-11": lambda: check_key_completeness(events),
         "DQ-17": lambda: check_parquet_reproducible(digests=parquet_digests),
@@ -710,6 +762,7 @@ def build_report(
     events: Sequence[Mapping[str, object]],
     *,
     parquet_digests: Sequence[str] | None = None,
+    exchange: CommerceExchange | None = None,
 ) -> dict[str, object]:
     """`results/data_quality_report.json` 의 본문 (봉투는 `contracts.envelope`).
 
@@ -717,7 +770,7 @@ def build_report(
     한다. 파이프라인 중단은 호출자(`publish.py`)가 `raise_on_fail()` 로 한다.
     실패 사실을 담은 리포트를 게시하지 못하면 **무엇이 실패했는지 화면이 모른다.**
     """
-    checks = run_all(events, parquet_digests=parquet_digests)
+    checks = run_all(events, parquet_digests=parquet_digests, exchange=exchange)
     return {
         "gate_result": gate_result(checks),
         "spec_coverage": spec_coverage(checks),

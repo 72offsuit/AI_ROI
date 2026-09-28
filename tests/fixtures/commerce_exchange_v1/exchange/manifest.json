@@ -1,0 +1,13 @@
+{
+  "contract": "commerce-exchange/v1",
+  "source": "Ecommerce_Service",
+  "source_commit": "3ac62ba4cecbf94270168381c9dc8a32a022310e",
+  "generated_at": "2026-09-28T16:48:54.995+09:00",
+  "mode": "full",
+  "files": {
+    "customers.jsonl": 6,
+    "catalog.jsonl": 41,
+    "orders.jsonl": 3,
+    "order_items.jsonl": 5
+  }
+}

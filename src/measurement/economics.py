@@ -32,11 +32,12 @@ config 도 dataclass 로 받는다 — 그래서 `tests/test_economics.py` 가 P
 `-> int` 를 돌려주는 함수를 두지 않는다. 그러면 원가 근거가 없을 때 `0` 을 돌려줄
 자리가 생기고, `0` 은 기여이익 = 매출을 만든다. `MetricValue` 에는 그 자리가 없다.
 
-## C1 의 실제 동작 — 미리 알아둘 것
+## 품목·원가·배송비는 이벤트 밖에서 온다
 
-`purchase` 는 주문 단위 1행이고 `unit_cost` 컬럼이 스키마에 없다. 그래서 C1 에서
-`OrderView.items` 는 **두 출처 모두 비어 있고** `cogs` 는 항상 `NO_COST_BASIS` 를
-낸다. 그것이 결함이 아니라 USP-1 대표 장면의 실제 내용이다.
+`purchase` 는 주문 단위 1행이고 `unit_cost` 컬럼이 스키마에 없다. 품목·원가·할인·
+배송비는 커머스 교환 파일(`exchange.py`, 이슈 #100)이 싣고 `publish.py` 가 주문에
+붙인다. 교환 파일이 없는 주문은 `OrderView.items` 가 비어 `cogs` 가 `NO_COST_BASIS`
+를 낸다 — 결함이 아니라 근거가 없다는 사실이다.
 """
 
 from __future__ import annotations
@@ -97,6 +98,10 @@ class OrderView:
     items: tuple[OrderItem, ...] = ()
     treatment_ids: tuple[str, ...] = ()
     has_coupon_use: bool = False
+    shipping_fee: int | None = None
+    """주문 시점 정책 배송비. `None` 이면 관측값이 없어 D-3 규칙으로 유도한다."""
+    shipping_charged: int | None = None
+    """실제로 받은 배송비. `shipping_fee − shipping_charged` 가 관측된 배송보조다."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -325,33 +330,66 @@ def coupon_cost(
 def shipping_subsidy(
     orders: tuple[OrderView, ...], *, config: CostAccountingConfig
 ) -> MetricValue:
-    """배송비 보조. `order_amount < 무료배송 기준` ∧ `T1` 적용 → 배송비 (D-3 유도)."""
+    """배송비 보조. 관측값이 있는 주문은 **관측값**, 없는 주문은 D-3 규칙으로 유도한다.
+
+        관측 (교환 파일)   shipping_fee − shipping_charged
+        유도 (D-3)         order_amount < 무료배송 기준 ∧ T1 적용 → 배송비
+
+    판정 기준은 출처가 아니라 **값이 있는가**다 (EC-2 와 같은 규율). 한 주문이라도
+    규칙을 썼으면 `derived=True` 로 싣는다 — 관측과 유도가 섞인 합계를 관측값처럼
+    보이게 하지 않는다.
+    """
+    observed = [
+        order for order in orders
+        if order.shipping_fee is not None and order.shipping_charged is not None
+    ]
+    observed_ids = {order.order_id for order in observed}
+    rest = [order for order in orders if order.order_id not in observed_ids]
     eligible = [
         order
-        for order in orders
+        for order in rest
         if order.order_amount < config.free_shipping_threshold_krw
         and "T1" in order.treatment_ids
     ]
+    observed_total = sum(
+        order.shipping_fee - order.shipping_charged  # type: ignore[operator]
+        for order in observed
+    )
+    rule = (
+        f"order_amount < {config.free_shipping_threshold_krw} ∧ T1 ∈ treatment_ids "
+        f"→ {config.shipping_fee_krw}원 (D-3 유도 규칙)"
+    )
+    derived = bool(rest) or not observed
+    excluded = len(rest) - len(eligible)
     return MetricValue.ok(
-        len(eligible) * config.shipping_fee_krw,
+        observed_total + len(eligible) * config.shipping_fee_krw,
         unit=Unit.KRW,
         basis=Basis(
-            population="T1(무료배송) 처치가 적용된 무료배송 기준 미달 주문",
+            population=(
+                "배송비가 관측된 주문과 T1(무료배송) 처치가 적용된 무료배송 기준 미달 주문"
+                if observed else
+                "T1(무료배송) 처치가 적용된 무료배송 기준 미달 주문"
+            ),
             denominator_definition=_SUM_DENOMINATOR,
             window=_NO_WINDOW,
-            observed_count=len(eligible),
-            excluded_count=len(orders) - len(eligible),
-            excluded_reason="무료배송 기준 이상이거나 T1 처치가 아닌 주문"
-            if len(orders) - len(eligible)
-            else None,
+            observed_count=len(observed) + len(eligible),
+            excluded_count=excluded,
+            excluded_reason=(
+                ("배송비가 관측되지 않았고 " if observed else "")
+                + "무료배송 기준 이상이거나 T1 처치가 아닌 주문"
+            ) if excluded else None,
             source_event_types=("purchase",),
         ),
-        derived=True,
+        derived=derived,
         derivation=(
-            f"order_amount < {config.free_shipping_threshold_krw} ∧ T1 ∈ treatment_ids "
-            f"→ {config.shipping_fee_krw}원 (D-3 유도 규칙)"
+            f"관측 {len(observed)}건은 shipping_fee − shipping_charged, "
+            f"나머지 {len(rest)}건은 {rule}" if observed else rule
+        ) if derived else None,
+        limit_note=(
+            None if not derived
+            else "배송비가 관측되지 않은 주문은 규칙에서 유도한 값이다" if observed
+            else "shipping_subsidy 필드가 스키마에 없어 규칙에서 유도한 값이다"
         ),
-        limit_note="shipping_subsidy 필드가 스키마에 없어 규칙에서 유도한 값이다",
     )
 
 
@@ -567,13 +605,13 @@ def contribution_profit(
     `data_spec` §6.3 항목별 현황:
 
         revenue          ← order_amount   ✅ (할인 후 · 순매출)
-        cogs             ← unit_cost      ❌ 스키마에 없다
+        cogs             ← unit_cost      △ 교환 파일이 있는 주문만 (#100)
         coupon_cost      ← discount       ⊘ 매출에 이미 반영 (빼지 않는다)
-        shipping_subsidy ← 배송비          △ 규칙 유도 (D-3)
+        shipping_subsidy ← 배송비          △ 교환 파일은 관측, 나머지는 규칙 유도 (D-3)
         message_cost     ← push_sent      ✅
         campaign_fixed   ← 캠페인 수       ✅
 
-    그래서 이 함수는 C1 에서 **거의 항상 `unavailable`** 이다. `blocked_by` 가 실제
+    교환 파일이 없는 주문이 하나라도 있으면 `unavailable` 이다. `blocked_by` 가 실제
     원인을 담으므로 화면이 결손→영향 사슬을 추론하지 않는다 (DB-012).
 
     ★ `blocked_by` 에는 **직접 원인만** 담는다. 전이 사슬(원인의 원인)은
