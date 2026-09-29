@@ -27,9 +27,14 @@ from src.measurement import exchange as ex
 from src.measurement import publish as pub
 from src.measurement.kpi import MetricStatus
 from src.measurement.schema import ReasonCode
+from src.measurement.sink import EventSource
 from tests.test_economics import fixture_config
 
 SAMPLE = Path(__file__).resolve().parent / "fixtures" / "commerce_exchange_v1"
+
+def read_commerce(root: Path) -> ex.ExchangeBundle | None:
+    return ex.read_exchange(root, EventSource.COMMERCE)
+
 
 
 def campaign(*orders: ec.OrderView) -> ec.CampaignView:
@@ -111,7 +116,7 @@ class TestTheRealCommerceSample(unittest.TestCase):
             json.loads(line)
             for line in (SAMPLE / "events.jsonl").read_text(encoding="utf-8").splitlines()
         ]
-        self.exchange = ex.read_exchange(SAMPLE / "exchange")
+        self.exchange = read_commerce(SAMPLE / "exchange")
         assert self.exchange is not None
         self.discounts = sum(o.discount for o in self.exchange.orders.values())
         self.commerce = json.loads((SAMPLE / "contribution.json").read_text(encoding="utf-8"))

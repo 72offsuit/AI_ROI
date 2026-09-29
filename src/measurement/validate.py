@@ -44,7 +44,7 @@ from typing import Iterable, Mapping, Sequence
 
 from src.measurement import timeparse as tp
 from src.measurement import schema as sc
-from src.measurement.exchange import CommerceExchange
+from src.measurement.exchange import ExchangeBundle
 from src.measurement.errors import QualityGateFailure
 from src.measurement.sink import KST, parquet_available
 
@@ -90,10 +90,11 @@ DQ_ALL: tuple[CheckSpec, ...] = (
     ),
     CheckSpec(
         "DQ-02", "유일성", "order_id 전역 유일",
-        "커머스 교환 파일 orders.jsonl 의 전 행. 중복이 있으면 로더가 묶음 전체를 "
-        "거부하므로, 읽힌 묶음은 이 검사를 통과한 것이다 (#110)",
+        "교환 파일(커머스 · 시뮬레이터) orders.jsonl 의 전 행 — 묶음 안의 유일성. 중복이 "
+        "있으면 로더가 묶음 전체를 거부하므로, 읽힌 묶음은 이 검사를 통과한 것이다 "
+        "(#110 · #117)",
         "precondition_missing",
-        "커머스 교환 파일(orders.jsonl)이 없어 주문 명부가 없다. events 만으로는 "
+        "교환 파일(orders.jsonl)이 없어 주문 명부가 없다. events 만으로는 "
         "주문 명부를 알 수 없다 — DQ-02b 가 events 안의 범위 축소판을 본다",
     ),
     CheckSpec(
@@ -106,12 +107,12 @@ DQ_ALL: tuple[CheckSpec, ...] = (
     ),
     CheckSpec(
         "DQ-03", "참조 무결성", "고아 customer_id·product_id 0건",
-        "커머스 출처 이벤트의 customer_id·product_id 와 교환 파일 명부"
-        "(customers·catalog)의 대조. 명부 생성 시각(manifest.generated_at) 이후 "
-        "이벤트는 대조하지 않는다. 시뮬레이터 이벤트는 대조할 명부가 없어 대상이 "
-        "아니다 (#110)",
+        "각 교환 묶음의 명부(customers·catalog)와 **같은 출처** 이벤트의 "
+        "customer_id·product_id 대조. 명부 생성 시각(manifest.generated_at) 이후 "
+        "이벤트는 대조하지 않는다. 묶음이 없는 출처의 이벤트는 대상이 아니다 "
+        "(#110 · #117)",
         "precondition_missing",
-        "커머스 교환 파일(customers·catalog)이 없어 대조할 명부가 없다",
+        "교환 파일(customers·catalog)이 없어 대조할 명부가 없다",
     ),
     CheckSpec(
         "DQ-04", "시간 정합성", "세션 내 이벤트 순서",
@@ -119,11 +120,11 @@ DQ_ALL: tuple[CheckSpec, ...] = (
     ),
     CheckSpec(
         "DQ-05", "시간 정합성", "timestamp < signup_date 0건",
-        "커머스 출처 이벤트 중 명부에 있는 고객의 이벤트 — KST 날짜가 가입일보다 "
+        "각 교환 묶음의 명부에 있는 고객의 **같은 출처** 이벤트 — KST 날짜가 가입일보다 "
         "앞서는가. 가입일이 날짜 단위라 가입 당일 가입 시각 이전의 이벤트는 잡지 "
-        "못한다. 명부 생성 시각 이후 이벤트는 대조하지 않는다 (#110)",
+        "못한다. 명부 생성 시각 이후 이벤트는 대조하지 않는다 (#110 · #117)",
         "precondition_missing",
-        "커머스 교환 파일(customers.signup_date)이 없어 가입일을 모른다",
+        "교환 파일(customers.signup_date)이 없어 가입일을 모른다",
     ),
     CheckSpec(
         "DQ-06", "시간 정합성", "모든 시각이 KST 단일",
@@ -143,8 +144,8 @@ DQ_ALL: tuple[CheckSpec, ...] = (
     ),
     CheckSpec(
         "DQ-09", "금액 정합성", "order_amount = Σ(unit_price×quantity) − discount",
-        "커머스 교환 파일의 주문 — 커머스 출처 purchase 이벤트 금액과 품목 합계·할인의 "
-        "대조. 시뮬레이터 이벤트는 대조하지 않는다 (#116)",
+        "교환 파일의 주문 — **같은 출처** purchase 이벤트 금액과 품목 합계·할인의 대조. "
+        "다른 출처의 이벤트와는 대조하지 않는다 (#116 · #117)",
         "precondition_missing",
         # 이벤트만으로는 두 겹으로 막힌다: discount 가 DATA-003 22컬럼에 없고,
         # purchase 는 주문 단위 1행이라 품목 합계를 재구성할 수 없다. 둘 다
@@ -152,8 +153,8 @@ DQ_ALL: tuple[CheckSpec, ...] = (
         # add_to_cart 로 근사하지 않는다: remove_from_cart 가 있고, 담았지만 사지
         # 않은 품목이 있고, 결제 실패가 있다.
         "discount 필드가 없고 purchase 가 주문 단위 1행이라 품목 합계를 "
-        "재구성할 수 없다. order_items 가 있는 커머스 교환 파일(data/commerce/)이 "
-        "있어야 성립한다",
+        "재구성할 수 없다. order_items 가 있는 교환 파일(data/commerce/ · "
+        "data/simulator_exchange/)이 있어야 성립한다",
     ),
     CheckSpec(
         "DQ-10", "금액 정합성", "음수 금액 0건",
@@ -366,10 +367,18 @@ def check_order_id_single_purchase(
     )
 
 
-def check_amount_equation(
-    exchange: CommerceExchange | None,
-    exchange_scope: Sequence[Mapping[str, object]] | None,
-) -> CheckResult:
+#: 교환 묶음과 **그 묶음이 책임지는 이벤트**(같은 출처의 이벤트)의 쌍. `publish.py` 가
+#: 출처별로 만든다 — 이 모듈은 출처를 묻지 않고 받은 쌍 안에서만 대조한다 (#110 · #117).
+ExchangePair = tuple[ExchangeBundle, Sequence[Mapping[str, object]]]
+
+_SOURCE_LABELS = {"commerce": "커머스", "simulator": "시뮬레이터"}
+
+
+def _label(bundle: ExchangeBundle) -> str:
+    return _SOURCE_LABELS.get(bundle.source.value, bundle.source.value)
+
+
+def check_amount_equation(exchanges: Sequence[ExchangePair]) -> CheckResult:
     """`DQ-09` — 이벤트와 교환 파일이 **같은 주문을 같게 말하는가.**
 
     교환 파일의 주문마다 셋을 본다. 하나라도 어긋나면 그 주문이 위반이다:
@@ -382,72 +391,66 @@ def check_amount_equation(
     일관되기만 하면 통과한다. 이벤트의 금액 기준이 어긋났던 것(#106)은 ②로는
     안 보이고 ③으로만 보인다.
 
-    ★ ③의 `purchase` 는 **교환 파일이 책임지는 이벤트(`exchange_scope`)에서만**
-      찾는다(#116). 전체 이벤트에서 찾으면 두 가지가 틀어진다 — 커머스 이벤트가
-      하나도 없는 데이터에서 교환 파일 주문이 전부 위반이 되고, 시뮬레이터 주문이
-      같은 `order_id` 를 쓰면 시뮬레이터 금액을 커머스 교환 파일과 대조한다.
-      어느 이벤트가 그 범위인지는 출처를 아는 `publish.py` 가 정한다.
+    ★ ③의 `purchase` 는 **같은 출처의 이벤트에서만** 찾는다(#116 · #117). 다른
+      출처에서 찾으면 대조할 상대가 없는 데이터에서 주문이 전부 위반이 되고, 두
+      출처가 같은 `order_id` 를 쓰면 다른 출처의 금액과 대조한다.
 
-    교환 파일이 없거나, 범위가 없거나, 범위에 `purchase` 가 한 건도 없으면
-    `not_run` 이다 — 대조할 상대가 없는 것이지 위반이 아니다.
+    묶음이 없으면 `not_run` 이다. 묶음은 있는데 같은 출처의 `purchase` 가 한 건도
+    없으면 그 묶음은 대조하지 않고 사유에 남긴다 — 대조할 상대가 없는 것이지
+    위반이 아니다. 모든 묶음이 그렇다면 검사 전체가 `not_run` 이다.
     """
     spec = DQ_INDEX["DQ-09"]
-    if exchange is None:
+    if not exchanges:
         return _not_run(spec)
-    if exchange_scope is None:
-        return _not_scoped(
-            spec,
-            "교환 파일은 있지만 대조할 이벤트 범위(exchange_scope)가 주어지지 않았다 — "
-            "전체 이벤트와 대조하면 다른 출처의 주문과 섞인다",
-        )
-    purchases: dict[object, object] = {
-        e.get("order_id"): e.get("order_amount")
-        for e in exchange_scope
-        if e.get("event_type") == sc.EventType.PURCHASE.value
-    }
-    if not purchases:
+    examined = 0
+    samples: list[str] = []
+    idle: list[str] = []
+    for bundle, scope in exchanges:
+        purchases: dict[object, object] = {
+            e.get("order_id"): e.get("order_amount")
+            for e in scope
+            if e.get("event_type") == sc.EventType.PURCHASE.value
+        }
+        label = _label(bundle)
+        if not purchases:
+            idle.append(f"{label} 주문 {len(bundle.orders)}건")
+            continue
+        examined += len(bundle.orders)
+        for order_id, order in sorted(bundle.orders.items()):
+            if not order.items:
+                samples.append(f"[{label}] {order_id}: 품목이 없다")
+                continue
+            items_total = sum(item.unit_price * item.quantity for item in order.items)
+            if order.order_amount != items_total - order.discount:
+                samples.append(
+                    f"[{label}] {order_id}: 교환 파일 {order.order_amount} ≠ "
+                    f"품목 {items_total} − 할인 {order.discount}"
+                )
+            elif order_id not in purchases:
+                samples.append(f"[{label}] {order_id}: purchase 이벤트가 없다")
+            elif purchases[order_id] != order.order_amount:
+                samples.append(
+                    f"[{label}] {order_id}: 이벤트 {purchases[order_id]} ≠ "
+                    f"교환 파일 {order.order_amount}"
+                )
+    if examined == 0:
         return CheckResult(
             id=spec.id, spec_ref=spec.spec_item, title=spec.title,
             status="not_run", scope=spec.scope, examined_rows=0, violations=None,
             reason_code=sc.ReasonCode.PRECONDITION_MISSING.value,
             reason_detail=(
-                f"교환 파일에 주문 {len(exchange.orders)}건이 있지만 대조할 커머스 "
-                "purchase 이벤트가 한 건도 없다 — 대조할 상대가 없는 것이지 위반이 "
-                "아니다. 커머스 이벤트를 수집하지 않은 데이터(예: 시뮬레이터 전용 "
-                "실행)라면 정상이다"
+                f"교환 파일은 있지만({', '.join(idle)}) 같은 출처의 purchase 이벤트가 "
+                "한 건도 없다 — 대조할 상대가 없는 것이지 위반이 아니다. 그 출처의 "
+                "이벤트를 수집하지 않은 데이터라면 정상이다"
             ),
         )
-    samples: list[str] = []
-    for order_id, order in sorted(exchange.orders.items()):
-        if not order.items:
-            samples.append(f"{order_id}: 품목이 없다")
-            continue
-        items_total = sum(item.unit_price * item.quantity for item in order.items)
-        if order.order_amount != items_total - order.discount:
-            samples.append(
-                f"{order_id}: 교환 파일 {order.order_amount} ≠ "
-                f"품목 {items_total} − 할인 {order.discount}"
-            )
-        elif order_id not in purchases:
-            samples.append(f"{order_id}: purchase 이벤트가 없다")
-        elif purchases[order_id] != order.order_amount:
-            samples.append(
-                f"{order_id}: 이벤트 {purchases[order_id]} ≠ 교환 파일 {order.order_amount}"
-            )
-    return _outcome(
-        spec, examined=len(exchange.orders), violations=len(samples), samples=samples,
+    note = (
+        f"같은 출처의 purchase 이벤트가 없어 대조하지 않은 묶음: {', '.join(idle)} — "
+        "위반이 아니다"
+        if idle else None
     )
-
-
-def _not_scoped(spec: CheckSpec, detail: str | None = None) -> CheckResult:
-    return CheckResult(
-        id=spec.id, spec_ref=spec.spec_item, title=spec.title,
-        status="not_run", scope=spec.scope, examined_rows=0, violations=None,
-        reason_code=sc.ReasonCode.PRECONDITION_MISSING.value,
-        reason_detail=detail or (
-            "교환 파일은 있지만 명부가 책임지는 이벤트 범위(exchange_scope)가 "
-            "주어지지 않았다 — 전체 이벤트와 대조하면 다른 출처가 전부 고아가 된다"
-        ),
+    return _with_note(
+        _outcome(spec, examined=examined, violations=len(samples), samples=samples), note,
     )
 
 
@@ -465,7 +468,7 @@ def _with_note(result: CheckResult, note: str | None) -> CheckResult:
 
 
 def _within_snapshot(
-    events: Sequence[Mapping[str, object]], exchange: CommerceExchange,
+    events: Sequence[Mapping[str, object]], bundle: ExchangeBundle,
 ) -> tuple[list[Mapping[str, object]], str | None]:
     """명부 생성 시각 이후 이벤트를 뺀다. 시각을 읽을 수 없는 이벤트는 남긴다 —
     스냅샷 이후라고 증명할 수 없으면 대조한다."""
@@ -473,72 +476,78 @@ def _within_snapshot(
     later = 0
     for event in events:
         moment = _parse(event.get("timestamp"))
-        if moment is not None and moment.tzinfo is not None and moment > exchange.generated_at:
+        if moment is not None and moment.tzinfo is not None and moment > bundle.generated_at:
             later += 1
             continue
         kept.append(event)
     note = (
-        f"명부 생성 시각({exchange.generated_at.isoformat()}) 이후 이벤트 {later}건은 "
-        "명부가 책임지지 않아 대조하지 않았다 — 위반도 통과도 아니다"
+        f"{_label(bundle)} 명부 생성 시각({bundle.generated_at.isoformat()}) 이후 이벤트 "
+        f"{later}건은 명부가 책임지지 않아 대조하지 않았다 — 위반도 통과도 아니다"
         if later else None
     )
     return kept, note
 
 
-def check_order_id_global_unique(exchange: CommerceExchange | None) -> CheckResult:
+def _join_notes(notes: Sequence[str | None]) -> str | None:
+    kept = [note for note in notes if note]
+    return " · ".join(kept) if kept else None
+
+
+def check_order_id_global_unique(exchanges: Sequence[ExchangePair]) -> CheckResult:
     """`DQ-02` — 교환 파일 주문 명부의 `order_id` 전역 유일.
 
     ★ 중복 방어는 로더(`exchange.read_exchange`)에 있다. 중복이 있으면 묶음 전체를
     거부하므로 여기까지 온 명부는 유일하다. 그래도 `not_run` 이 아니라 검사한 주문
     수와 함께 `pass` 로 게시한다 — 명부가 있고 유일함이 확인된 것은 사실이다.
+    유일성은 **묶음 안**에서다. 두 출처가 같은 `order_id` 를 쓰는지는 `DQ-02b` 가
+    전체 이벤트에서 본다.
     """
     spec = DQ_INDEX["DQ-02"]
-    if exchange is None:
+    if not exchanges:
         return _not_run(spec)
-    return _outcome(spec, examined=len(exchange.orders), violations=0)
-
-
-def check_roster_references(
-    exchange: CommerceExchange | None,
-    exchange_scope: Sequence[Mapping[str, object]] | None,
-) -> CheckResult:
-    """`DQ-03` — 고아 `customer_id`·`product_id` 0건.
-
-    대조 대상은 **명부가 책임지는 이벤트**(`exchange_scope`)뿐이다. 교환 파일은
-    커머스 전용 명부라, 전체 이벤트와 대조하면 시뮬레이터 이벤트가 전부 고아가
-    된다. 어느 이벤트가 그 범위인지는 출처를 아는 `publish.py` 가 정한다 — 이
-    모듈은 출처를 묻지 않는다.
-    """
-    spec = DQ_INDEX["DQ-03"]
-    if exchange is None:
-        return _not_run(spec)
-    if exchange_scope is None:
-        return _not_scoped(spec)
-    events, note = _within_snapshot(exchange_scope, exchange)
-    examined = 0
-    samples: list[str] = []
-    for event in events:
-        customer_id = event.get("customer_id")
-        product_id = event.get("product_id")
-        if customer_id is None and product_id is None:
-            continue
-        examined += 1
-        missing = []
-        if customer_id is not None and customer_id not in exchange.signup_dates:
-            missing.append(f"customer_id {customer_id}")
-        if product_id is not None and product_id not in exchange.product_ids:
-            missing.append(f"product_id {product_id}")
-        if missing:
-            samples.append(f"{event.get('event_id')}: {' · '.join(missing)} 가 명부에 없다")
-    return _with_note(
-        _outcome(spec, examined=examined, violations=len(samples), samples=samples), note,
+    return _outcome(
+        spec, examined=sum(len(bundle.orders) for bundle, _ in exchanges), violations=0,
     )
 
 
-def check_before_signup(
-    exchange: CommerceExchange | None,
-    exchange_scope: Sequence[Mapping[str, object]] | None,
-) -> CheckResult:
+def check_roster_references(exchanges: Sequence[ExchangePair]) -> CheckResult:
+    """`DQ-03` — 고아 `customer_id`·`product_id` 0건.
+
+    각 묶음의 명부는 **같은 출처의 이벤트**와만 대조한다. 커머스 명부와 시뮬레이터
+    이벤트를 대조하면 시뮬레이터 이벤트가 전부 고아가 된다.
+    """
+    spec = DQ_INDEX["DQ-03"]
+    if not exchanges:
+        return _not_run(spec)
+    examined = 0
+    samples: list[str] = []
+    notes: list[str | None] = []
+    for bundle, scope in exchanges:
+        events, note = _within_snapshot(scope, bundle)
+        notes.append(note)
+        for event in events:
+            customer_id = event.get("customer_id")
+            product_id = event.get("product_id")
+            if customer_id is None and product_id is None:
+                continue
+            examined += 1
+            missing = []
+            if customer_id is not None and customer_id not in bundle.signup_dates:
+                missing.append(f"customer_id {customer_id}")
+            if product_id is not None and product_id not in bundle.product_ids:
+                missing.append(f"product_id {product_id}")
+            if missing:
+                samples.append(
+                    f"[{_label(bundle)}] {event.get('event_id')}: "
+                    f"{' · '.join(missing)} 가 명부에 없다"
+                )
+    return _with_note(
+        _outcome(spec, examined=examined, violations=len(samples), samples=samples),
+        _join_notes(notes),
+    )
+
+
+def check_before_signup(exchanges: Sequence[ExchangePair]) -> CheckResult:
     """`DQ-05` — 가입일 이전 이벤트 0건.
 
     가입일이 날짜(KST)라 **날짜 단위**로 비교한다. 가입 당일 가입 시각 이전의
@@ -546,27 +555,30 @@ def check_before_signup(
     이벤트는 가입일을 모르므로 여기서 세지 않는다(`DQ-03` 이 그것을 본다).
     """
     spec = DQ_INDEX["DQ-05"]
-    if exchange is None:
+    if not exchanges:
         return _not_run(spec)
-    if exchange_scope is None:
-        return _not_scoped(spec)
-    events, note = _within_snapshot(exchange_scope, exchange)
     examined = 0
     samples: list[str] = []
-    for event in events:
-        signup = exchange.signup_dates.get(event.get("customer_id"))  # type: ignore[arg-type]
-        moment = _parse(event.get("timestamp"))
-        if signup is None or moment is None or moment.tzinfo is None:
-            continue
-        examined += 1
-        day = moment.astimezone(KST).date()
-        if day < signup:
-            samples.append(
-                f"{event.get('event_id')}: {day.isoformat()} 이벤트가 가입일 "
-                f"{signup.isoformat()} 보다 앞선다 ({event.get('customer_id')})"
-            )
+    notes: list[str | None] = []
+    for bundle, scope in exchanges:
+        events, note = _within_snapshot(scope, bundle)
+        notes.append(note)
+        for event in events:
+            signup = bundle.signup_dates.get(event.get("customer_id"))  # type: ignore[arg-type]
+            moment = _parse(event.get("timestamp"))
+            if signup is None or moment is None or moment.tzinfo is None:
+                continue
+            examined += 1
+            day = moment.astimezone(KST).date()
+            if day < signup:
+                samples.append(
+                    f"[{_label(bundle)}] {event.get('event_id')}: {day.isoformat()} "
+                    f"이벤트가 가입일 {signup.isoformat()} 보다 앞선다 "
+                    f"({event.get('customer_id')})"
+                )
     return _with_note(
-        _outcome(spec, examined=examined, violations=len(samples), samples=samples), note,
+        _outcome(spec, examined=examined, violations=len(samples), samples=samples),
+        _join_notes(notes),
     )
 
 
@@ -863,8 +875,7 @@ def run_all(
     events: Sequence[Mapping[str, object]],
     *,
     parquet_digests: Sequence[str] | None = None,
-    exchange: CommerceExchange | None = None,
-    exchange_scope: Sequence[Mapping[str, object]] | None = None,
+    exchanges: Sequence[ExchangePair] = (),
 ) -> list[CheckResult]:
     """★ **항상 18종을 낸다.** 실행 못 한 것도 목록에 남는다 (AC-3 · Q-4).
 
@@ -873,15 +884,15 @@ def run_all(
     """
     runners = {
         "DQ-01": lambda: check_event_id_unique(events),
-        "DQ-02": lambda: check_order_id_global_unique(exchange),
-        "DQ-03": lambda: check_roster_references(exchange, exchange_scope),
-        "DQ-05": lambda: check_before_signup(exchange, exchange_scope),
+        "DQ-02": lambda: check_order_id_global_unique(exchanges),
+        "DQ-03": lambda: check_roster_references(exchanges),
+        "DQ-05": lambda: check_before_signup(exchanges),
         "DQ-02b": lambda: check_order_id_single_purchase(events),
         "DQ-04": lambda: check_session_order(events),
         "DQ-06": lambda: check_timezone_single(events),
         "DQ-07": lambda: check_purchase_funnel(events),
         "DQ-08": lambda: check_coupon_funnel(events),
-        "DQ-09": lambda: check_amount_equation(exchange, exchange_scope),
+        "DQ-09": lambda: check_amount_equation(exchanges),
         "DQ-10": lambda: check_no_negative_amounts(events),
         "DQ-11": lambda: check_key_completeness(events),
         "DQ-17": lambda: check_parquet_reproducible(digests=parquet_digests),
@@ -935,8 +946,7 @@ def build_report(
     events: Sequence[Mapping[str, object]],
     *,
     parquet_digests: Sequence[str] | None = None,
-    exchange: CommerceExchange | None = None,
-    exchange_scope: Sequence[Mapping[str, object]] | None = None,
+    exchanges: Sequence[ExchangePair] = (),
 ) -> dict[str, object]:
     """`results/data_quality_report.json` 의 본문 (봉투는 `contracts.envelope`).
 
@@ -944,10 +954,7 @@ def build_report(
     한다. 파이프라인 중단은 호출자(`publish.py`)가 `raise_on_fail()` 로 한다.
     실패 사실을 담은 리포트를 게시하지 못하면 **무엇이 실패했는지 화면이 모른다.**
     """
-    checks = run_all(
-        events, parquet_digests=parquet_digests,
-        exchange=exchange, exchange_scope=exchange_scope,
-    )
+    checks = run_all(events, parquet_digests=parquet_digests, exchanges=exchanges)
     return {
         "gate_result": gate_result(checks),
         "spec_coverage": spec_coverage(checks),

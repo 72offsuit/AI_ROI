@@ -39,13 +39,17 @@ from src.measurement import validate as dq
 from src.measurement.config_loader import yaml_available
 from src.measurement.errors import ExchangeContractError
 from src.measurement.kpi import MetricStatus
-from src.measurement.sink import EventSink
+from src.measurement.sink import EventSink, EventSource
 from tests.test_economics import fixture_config
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 CONTRACT = REPO_ROOT / "docs" / "contracts" / "commerce-exchange" / "v1"
 SAMPLE = Path(__file__).resolve().parent / "fixtures" / "commerce_exchange_v1"
 SCHEMAS = ("customers", "catalog", "orders", "order_items")
+
+def read_commerce(root: Path) -> ex.ExchangeBundle | None:
+    return ex.read_exchange(root, EventSource.COMMERCE)
+
 
 
 def _jsonschema_available() -> bool:
@@ -259,13 +263,17 @@ class TestSchemasRefuseCounterexamples(unittest.TestCase):
 class TestReadExchange(TempDirTest):
     def test_absent_is_none_not_an_empty_bundle(self) -> None:
         """★ 빈 묶음은 "주문 0건"이라는 측정값이 된다. 없는 것과 다르다."""
-        self.assertIsNone(ex.read_exchange(self.tmp / "commerce"))
+        self.assertIsNone(read_commerce(self.tmp / "commerce"))
 
-    def test_default_root_is_the_sibling_of_the_sink(self) -> None:
-        self.assertEqual(Path("data/commerce"), ex.default_root(Path("data/raw")))
+    def test_default_roots_are_siblings_of_the_sink(self) -> None:
+        self.assertEqual(
+            {EventSource.COMMERCE: Path("data/commerce"),
+             EventSource.SIMULATOR: Path("data/simulator_exchange")},
+            ex.default_roots(Path("data/raw")),
+        )
 
     def test_the_real_sample_is_read_and_grouped_by_order(self) -> None:
-        bundle = ex.read_exchange(SAMPLE / "exchange")
+        bundle = read_commerce(SAMPLE / "exchange")
         assert bundle is not None
         self.assertEqual(len(sample_rows("orders")), len(bundle.orders))
         self.assertEqual(
@@ -282,13 +290,13 @@ class TestReadExchange(TempDirTest):
         root = copy_sample(self.tmp / "commerce")
         rewrite(root, "order_items", sample_rows("order_items")[:-1], keep_manifest=True)
         with self.assertRaises(ExchangeContractError):
-            ex.read_exchange(root)
+            read_commerce(root)
 
     def test_missing_manifest_is_refused(self) -> None:
         root = copy_sample(self.tmp / "commerce")
         (root / "manifest.json").unlink()
         with self.assertRaises(ExchangeContractError):
-            ex.read_exchange(root)
+            read_commerce(root)
 
     def test_other_contract_version_is_refused(self) -> None:
         root = copy_sample(self.tmp / "commerce")
@@ -296,7 +304,7 @@ class TestReadExchange(TempDirTest):
         manifest["contract"] = "commerce-exchange/v2"
         (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
         with self.assertRaises(ExchangeContractError):
-            ex.read_exchange(root)
+            read_commerce(root)
 
     def test_zero_filled_cost_key_missing_is_refused(self) -> None:
         root = copy_sample(self.tmp / "commerce")
@@ -304,7 +312,7 @@ class TestReadExchange(TempDirTest):
         del rows[0]["unit_cost"]
         rewrite(root, "order_items", rows)
         with self.assertRaises(ExchangeContractError):
-            ex.read_exchange(root)
+            read_commerce(root)
 
     def test_bool_is_not_an_amount(self) -> None:
         """`True` 는 파이썬에서 `int` 다. 금액 자리에 들어오면 1원으로 읽힌다."""
@@ -313,7 +321,7 @@ class TestReadExchange(TempDirTest):
         rows[0]["discount"] = True
         rewrite(root, "orders", rows)
         with self.assertRaises(ExchangeContractError):
-            ex.read_exchange(root)
+            read_commerce(root)
 
     def test_item_of_an_unknown_order_is_refused(self) -> None:
         root = copy_sample(self.tmp / "commerce")
@@ -321,7 +329,7 @@ class TestReadExchange(TempDirTest):
         rows[0]["order_id"] = "O19990101-000001"
         rewrite(root, "order_items", rows)
         with self.assertRaises(ExchangeContractError):
-            ex.read_exchange(root)
+            read_commerce(root)
 
     def test_order_without_items_is_read_not_refused(self) -> None:
         """품목 없는 주문은 형식 위반이 아니라 `DQ-09` 위반이다 — 판정은 검사가 한다."""
@@ -331,7 +339,7 @@ class TestReadExchange(TempDirTest):
             row for row in sample_rows("order_items")
             if row["order_id"] != orders[0]["order_id"]
         ])
-        bundle = ex.read_exchange(root)
+        bundle = read_commerce(root)
         assert bundle is not None
         self.assertEqual((), bundle.orders[orders[0]["order_id"]].items)
 
@@ -345,12 +353,13 @@ def sample_events() -> list[dict]:
 
 def dq09(
     events: list[dict],
-    exchange: ex.CommerceExchange | None,
+    exchange: ex.ExchangeBundle | None,
     scope: list[dict] | None = None,
 ) -> dict:
     """`scope` 를 생략하면 `events` 전체가 커머스 이벤트라고 본다 — 이 파일의 표본이 그렇다."""
     report = dq.build_report(
-        events, exchange=exchange, exchange_scope=events if scope is None else scope,
+        events,
+        exchanges=() if exchange is None else [(exchange, events if scope is None else scope)],
     )
     found = [c for c in report["checks"] if c["id"] == "DQ-09"]
     assert len(found) == 1, "DQ-09 를 찾지 못했다"
@@ -371,7 +380,7 @@ class TestAmountEquationScope(unittest.TestCase):
     """★★ #116 — 대조할 상대가 없는 것을 위반으로 적지 않는다."""
 
     def setUp(self) -> None:
-        exchange = ex.read_exchange(SAMPLE / "exchange")
+        exchange = read_commerce(SAMPLE / "exchange")
         assert exchange is not None
         self.exchange = exchange
 
@@ -380,7 +389,7 @@ class TestAmountEquationScope(unittest.TestCase):
         events = [simulator_purchase("O20251001-000001", 47_000)]
         split = pub.partition_by_source(events)
         self.assertEqual((), split.commerce)
-        report = dq.build_report(events, exchange=self.exchange, exchange_scope=split.commerce)
+        report = dq.build_report(events, exchanges=[(self.exchange, split.commerce)])
         check = next(c for c in report["checks"] if c["id"] == "DQ-09")
         self.assertEqual("not_run", check["status"], check)
         self.assertIn("커머스", check["reason_detail"])
@@ -422,15 +431,11 @@ class TestAmountEquationScope(unittest.TestCase):
         split = pub.partition_by_source(events)
         check = next(
             c for c in dq.build_report(
-                events, exchange=self.exchange, exchange_scope=split.commerce,
+                events, exchanges=[(self.exchange, split.commerce)],
             )["checks"] if c["id"] == "DQ-09"
         )
         self.assertEqual("pass", check["status"], check)
 
-    def test_missing_scope_is_not_run(self) -> None:
-        report = dq.build_report(sample_events(), exchange=self.exchange)
-        check = next(c for c in report["checks"] if c["id"] == "DQ-09")
-        self.assertEqual("not_run", check["status"])
 
 
 class TestAmountEquation(TempDirTest):
@@ -442,7 +447,7 @@ class TestAmountEquation(TempDirTest):
         self.assertIn("order_items", check["reason_detail"])
 
     def test_the_real_sample_passes(self) -> None:
-        check = dq09(sample_events(), ex.read_exchange(SAMPLE / "exchange"))
+        check = dq09(sample_events(), read_commerce(SAMPLE / "exchange"))
         self.assertEqual("pass", check["status"], check)
         self.assertEqual(len(sample_rows("orders")), check["examined_rows"])
         self.assertEqual(0, check["violations"])
@@ -450,7 +455,7 @@ class TestAmountEquation(TempDirTest):
     def test_pre_discount_event_amount_is_a_violation(self) -> None:
         """★★ #106 의 모양 그대로다. 교환 파일 안에서는 등식이 맞아도 이벤트가
         할인 전 금액을 말하면 위반이어야 한다 — 이것을 못 잡으면 매출이 과대다."""
-        exchange = ex.read_exchange(SAMPLE / "exchange")
+        exchange = read_commerce(SAMPLE / "exchange")
         assert exchange is not None
         discounted = next(o for o in exchange.orders.values() if o.discount > 0)
         events = [
@@ -470,7 +475,7 @@ class TestAmountEquation(TempDirTest):
         rewrite(root, "order_items", [
             row for row in sample_rows("order_items") if row["order_id"] != first
         ])
-        check = dq09(sample_events(), ex.read_exchange(root))
+        check = dq09(sample_events(), read_commerce(root))
         self.assertEqual("fail", check["status"])
         self.assertIn("품목이 없다", check["samples"][0]["detail"])
 
@@ -479,7 +484,7 @@ class TestAmountEquation(TempDirTest):
         orders = sample_rows("orders")
         orders[0]["discount"] += 1
         rewrite(root, "orders", orders)
-        check = dq09(sample_events(), ex.read_exchange(root))
+        check = dq09(sample_events(), read_commerce(root))
         self.assertEqual("fail", check["status"])
 
     def test_order_without_purchase_event_is_a_violation(self) -> None:
@@ -487,7 +492,7 @@ class TestAmountEquation(TempDirTest):
 
         구매 이벤트가 **하나도** 없으면 대조할 상대가 없는 것이라 `not_run` 이다(#116).
         """
-        exchange = ex.read_exchange(SAMPLE / "exchange")
+        exchange = read_commerce(SAMPLE / "exchange")
         missing = sample_rows("orders")[0]["order_id"]
         events = [
             e for e in sample_events()
@@ -499,7 +504,7 @@ class TestAmountEquation(TempDirTest):
         self.assertIn("purchase 이벤트가 없다", check["samples"][0]["detail"])
 
     def test_no_commerce_purchase_at_all_is_not_run(self) -> None:
-        exchange = ex.read_exchange(SAMPLE / "exchange")
+        exchange = read_commerce(SAMPLE / "exchange")
         events = [e for e in sample_events() if e.get("event_type") != "purchase"]
         self.assertEqual("not_run", dq09(events, exchange)["status"])
 
@@ -508,7 +513,7 @@ class TestAmountEquation(TempDirTest):
 
 class TestEconomicsWithTheBundle(unittest.TestCase):
     def setUp(self) -> None:
-        exchange = ex.read_exchange(SAMPLE / "exchange")
+        exchange = read_commerce(SAMPLE / "exchange")
         assert exchange is not None
         self.orders = pub.assemble_orders(sample_events(), exchange)
         self.commerce = json.loads((SAMPLE / "contribution.json").read_text(encoding="utf-8"))

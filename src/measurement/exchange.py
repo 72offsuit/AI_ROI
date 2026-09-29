@@ -1,9 +1,18 @@
-"""커머스 교환 파일 읽기 — `docs/contracts/commerce-exchange/v1/` (이슈 #100).
+"""교환 파일 읽기 — `docs/contracts/commerce-exchange/v1/` (이슈 #100 · #117).
 
 `purchase` 이벤트는 주문 단위 1행이라 품목·원가·할인을 싣지 않는다. 그 셋을
-`data/commerce/` 의 비이벤트 JSONL 묶음이 싣고, 이 모듈이 그것을 주문별로 묶어
-`economics.OrderItem` 으로 돌려준다. 이벤트 계약(`schema.py`, GATE 1 정본)은
-건드리지 않는다.
+비이벤트 JSONL 묶음이 싣고, 이 모듈이 그것을 주문별로 묶어 `economics.OrderItem`
+으로 돌려준다. 이벤트 계약(`schema.py`, GATE 1 정본)은 건드리지 않는다.
+
+## 두 출처, 한 계약 (#117)
+
+| 출처 | 기본 위치 | `manifest.source` |
+|---|---|---|
+| 커머스 | `data/commerce/` | `Ecommerce_Service` |
+| 시뮬레이터 | `data/simulator_exchange/` | `simulator` |
+
+두 출처가 **같은 계약**을 쓴다. 묶음은 자기 출처의 이벤트에만 붙는다 — 어느 이벤트가
+그 출처인지는 `publish.py` 가 정한다. 다른 출처 자리에 놓인 묶음은 거부한다.
 
 ## 읽기 규칙
 
@@ -33,8 +42,15 @@ from src.measurement import economics as ec
 from src.measurement import schema as sc
 from src.measurement import timeparse as tp
 from src.measurement.errors import ExchangeContractError
+from src.measurement.sink import EventSource
 
 CONTRACT_ID = "commerce-exchange/v1"
+
+#: `manifest.source` ↔ 이벤트 출처. 묶음이 어느 출처의 이벤트에 붙는지를 정한다.
+PRODUCERS: Mapping[EventSource, str] = {
+    EventSource.COMMERCE: "Ecommerce_Service",
+    EventSource.SIMULATOR: "simulator",
+}
 FILES = ("customers", "catalog", "orders", "order_items")
 
 _KST = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,6})?\+09:00$"
@@ -114,7 +130,10 @@ class ExchangeOrder:
 
 
 @dataclass(frozen=True, slots=True)
-class CommerceExchange:
+class ExchangeBundle:
+    """한 출처의 교환 묶음. `source` 의 이벤트에만 붙는다."""
+
+    source: EventSource
     root: Path
     manifest: Mapping[str, object]
     generated_at: datetime
@@ -126,14 +145,17 @@ class CommerceExchange:
     """상품 명부 — 판매 중단 상품도 들어 있다."""
 
 
-def default_root(source_root: Path) -> Path:
-    """Sink 루트(`data/raw`)의 형제 `data/commerce` 다."""
-    return source_root.parent / "commerce"
+def default_roots(source_root: Path) -> dict[EventSource, Path]:
+    """Sink 루트(`data/raw`)의 형제 폴더들이다 — `data/commerce` · `data/simulator_exchange`."""
+    return {
+        EventSource.COMMERCE: source_root.parent / "commerce",
+        EventSource.SIMULATOR: source_root.parent / "simulator_exchange",
+    }
 
 
 def _fail(root: Path, detail: str) -> ExchangeContractError:
     return ExchangeContractError(
-        f"커머스 교환 파일 {root} 이 계약 {CONTRACT_ID} 를 어겼다: {detail}. "
+        f"교환 파일 {root} 이 계약 {CONTRACT_ID} 를 어겼다: {detail}. "
         "묶음 전체를 읽지 않는다 — 일부만 읽으면 합계가 전체처럼 보인다"
     )
 
@@ -169,8 +191,12 @@ def _read_rows(root: Path, name: str) -> list[dict[str, object]]:
     return rows
 
 
-def read_exchange(root: Path) -> CommerceExchange | None:
-    """`root` 의 교환 묶음을 읽는다. 디렉터리가 없으면 `None` 이다 — 빈 묶음이 아니다."""
+def read_exchange(root: Path, source: EventSource) -> ExchangeBundle | None:
+    """`root` 의 `source` 교환 묶음을 읽는다. 디렉터리가 없으면 `None` 이다 — 빈 묶음이 아니다.
+
+    `manifest.source` 가 `source` 의 생산자와 다르면 거부한다. 커머스 묶음이
+    시뮬레이터 자리에 놓이면 커머스 품목이 시뮬레이터 주문에 붙는다.
+    """
     if not root.exists() and not root.is_symlink():
         return None
     if root.is_symlink() or not root.is_dir():
@@ -191,6 +217,12 @@ def read_exchange(root: Path) -> CommerceExchange | None:
             "언제까지를 책임지는지 알 수 없다",
         )
     generated_at = tp.parse_datetime(str(manifest["generated_at"]))
+    if manifest.get("source") != PRODUCERS[source]:
+        raise _fail(
+            root,
+            f"manifest.source 가 {manifest.get('source')!r} 인데 이 자리는 "
+            f"{PRODUCERS[source]!r} 의 묶음 자리다 — 다른 출처의 품목이 붙는다",
+        )
 
     rows = {name: _read_rows(root, name) for name in FILES}
     declared = manifest.get("files")
@@ -237,7 +269,8 @@ def read_exchange(root: Path) -> CommerceExchange | None:
             unit_cost=row["unit_cost"],  # type: ignore[arg-type]
         ))
 
-    return CommerceExchange(
+    return ExchangeBundle(
+        source=source,
         root=root,
         manifest=manifest,
         generated_at=generated_at,

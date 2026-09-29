@@ -154,7 +154,7 @@ def partition_by_source(events: Iterable[Mapping[str, object]]) -> SourceSplit:
 
 def assemble_orders(
     events: Sequence[Mapping[str, object]],
-    exchange: ex.CommerceExchange | None = None,
+    exchange: ex.ExchangeBundle | None = None,
 ) -> tuple[ec.OrderView, ...]:
     """`purchase` 이벤트를 `OrderView` 로 조립한다.
 
@@ -163,8 +163,10 @@ def assemble_orders(
     주문의 품목을 `events` 안에서 재구성할 방법이 없다.** 품목·원가·배송비는 커머스
     교환 파일(`exchange`, 이슈 #100)이 싣고, 같은 `order_id` 인 주문에만 붙는다.
 
-    ★ 붙이는 기준은 출처가 아니라 **`order_id` 가 교환 파일에 있는가**다. 교환
-    파일에 없는 주문은 `items=()` 로 남고 `cogs()` 가 `NO_COST_BASIS` 를 낸다.
+    ★ 붙이는 기준은 **`order_id` 가 교환 파일에 있는가**다. 교환 파일에 없는 주문은
+    `items=()` 로 남고 `cogs()` 가 `NO_COST_BASIS` 를 낸다. 호출하는 쪽이 **같은
+    출처의 이벤트와 묶음**을 짝지어 넘긴다(#117) — 두 출처가 같은 `order_id` 를
+    써도 다른 출처의 품목이 붙지 않는다.
 
     ★ 매출은 **이벤트의** `order_amount` 다. 교환 파일의 금액으로 바꾸지 않는다 —
     둘이 같은지는 `DQ-09` 가 본다. 여기서 바꾸면 대조할 두 값이 하나가 된다.
@@ -207,7 +209,7 @@ def assemble_orders(
 
 def assemble_campaign(
     events: Sequence[Mapping[str, object]],
-    exchange: ex.CommerceExchange | None = None,
+    exchange: ex.ExchangeBundle | None = None,
 ) -> ec.CampaignView:
     """`push_sent`·`coupon_use` 에서 캠페인 관측 사실을 조립한다.
 
@@ -996,7 +998,7 @@ def build_kpi_report(
     *,
     index_date: date,
     config: CostAccountingConfig,
-    exchange: ex.CommerceExchange | None = None,
+    bundles: Mapping[str, ex.ExchangeBundle] | None = None,
 ) -> dict[str, object]:
     """V4 — 지표 가용성.
 
@@ -1004,46 +1006,49 @@ def build_kpi_report(
     두 출처를 합산한 값을 기본 표시로 쓰면 커머스 0건이 시뮬레이터 값에 섞여
     출처별 실태가 사라진다.
     """
-    computations = {
-        "churn_rate": lambda e: kpi.churn_rate(e, index_date=index_date),
-        "retention_rate": lambda e: kpi.retention_rate(e, index_date=index_date),
-        "cohort_retention_rate": lambda e: kpi.cohort_retention_rate(
-            e, index_date=index_date, month=1),
-        "repurchase_rate": lambda e: kpi.repurchase_rate(e, index_date=index_date),
-        "winback_rate": lambda e: kpi.winback_rate(e, index_date=index_date),
-        "purchase_frequency": lambda e: kpi.purchase_frequency(
-            e, index_date=index_date),
-        "purchase_interval": lambda e: kpi.purchase_interval(
-            e, index_date=index_date),
-        "average_order_value": lambda e: kpi.average_order_value(
-            e, index_date=index_date),
-        "churn_label": lambda e: kpi.churn_label(e, index_date=index_date),
-        "coupon_usage_count": lambda e: kpi.coupon_usage_count(
-            e, index_date=index_date),
-        "coupon_exposure_count": lambda e: kpi.coupon_exposure_count(
-            e, index_date=index_date),
-        "campaign_response_count": lambda e: kpi.campaign_response_count(
-            e, index_date=index_date),
-        "revenue": lambda e: ec.revenue(assemble_orders(e, exchange)),
-        "cogs": lambda e: _sum_cogs(assemble_orders(e, exchange)),
-        "message_cost": lambda e: ec.message_cost(
-            assemble_campaign(e, exchange), config=config),
-        "coupon_cost": lambda e: ec.coupon_cost(
-            assemble_campaign(e, exchange), config=config),
-        "campaign_fixed_cost": lambda e: ec.campaign_fixed_cost(
-            assemble_campaign(e, exchange), config=config),
-        "shipping_subsidy": lambda e: ec.shipping_subsidy(
-            assemble_orders(e, exchange), config=config),
-        "marketing_cost": lambda e: ec.marketing_cost(
-            assemble_campaign(e, exchange), config=config),
-        "contribution_profit": lambda e: ec.contribution_profit(
-            assemble_orders(e, exchange), assemble_campaign(e, exchange),
-            config=config),
-        "n_targeted": lambda e: ec.n_targeted(assemble_campaign(e, exchange)),
-    }
+    def computations(exchange: ex.ExchangeBundle | None) -> dict[str, object]:
+        """지표 계산표. 출처마다 **그 출처의 묶음**으로 만든다 (#117)."""
+        return {
+            "churn_rate": lambda e: kpi.churn_rate(e, index_date=index_date),
+            "retention_rate": lambda e: kpi.retention_rate(e, index_date=index_date),
+            "cohort_retention_rate": lambda e: kpi.cohort_retention_rate(
+                e, index_date=index_date, month=1),
+            "repurchase_rate": lambda e: kpi.repurchase_rate(e, index_date=index_date),
+            "winback_rate": lambda e: kpi.winback_rate(e, index_date=index_date),
+            "purchase_frequency": lambda e: kpi.purchase_frequency(
+                e, index_date=index_date),
+            "purchase_interval": lambda e: kpi.purchase_interval(
+                e, index_date=index_date),
+            "average_order_value": lambda e: kpi.average_order_value(
+                e, index_date=index_date),
+            "churn_label": lambda e: kpi.churn_label(e, index_date=index_date),
+            "coupon_usage_count": lambda e: kpi.coupon_usage_count(
+                e, index_date=index_date),
+            "coupon_exposure_count": lambda e: kpi.coupon_exposure_count(
+                e, index_date=index_date),
+            "campaign_response_count": lambda e: kpi.campaign_response_count(
+                e, index_date=index_date),
+            "revenue": lambda e: ec.revenue(assemble_orders(e, exchange)),
+            "cogs": lambda e: _sum_cogs(assemble_orders(e, exchange)),
+            "message_cost": lambda e: ec.message_cost(
+                assemble_campaign(e, exchange), config=config),
+            "coupon_cost": lambda e: ec.coupon_cost(
+                assemble_campaign(e, exchange), config=config),
+            "campaign_fixed_cost": lambda e: ec.campaign_fixed_cost(
+                assemble_campaign(e, exchange), config=config),
+            "shipping_subsidy": lambda e: ec.shipping_subsidy(
+                assemble_orders(e, exchange), config=config),
+            "marketing_cost": lambda e: ec.marketing_cost(
+                assemble_campaign(e, exchange), config=config),
+            "contribution_profit": lambda e: ec.contribution_profit(
+                assemble_orders(e, exchange), assemble_campaign(e, exchange),
+                config=config),
+            "n_targeted": lambda e: ec.n_targeted(assemble_campaign(e, exchange)),
+        }
 
+    tables = {source: computations((bundles or {}).get(source)) for source, _ in split.items()}
     metrics: list[dict[str, object]] = []
-    for name, compute in computations.items():
+    for name in computations(None):
         meta = _KPI_META[name]
         metrics.append({
             "name": name,
@@ -1058,7 +1063,12 @@ def build_kpi_report(
             "formula": meta["formula"],
             "definition_ref": meta["definition_ref"],
             "source_events": list(meta["source_events"]),  # type: ignore[arg-type]
-            "value": _split(split, compute),
+            "value": {
+                "by_source": {
+                    source: _metric(tables[source][name](events))  # type: ignore[operator]
+                    for source, events in split.items()
+                }
+            },
         })
 
     for state in (item.value for item in sc.DerivedStateType):
@@ -1347,7 +1357,7 @@ def publish(
     source_root: Path = DEFAULT_SOURCE_ROOT,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     config_path: Path = DEFAULT_ECONOMIC_CONFIG,
-    exchange_root: Path | None = None,
+    exchange_roots: Mapping[EventSource, Path] | None = None,
     index_date: date | None = None,
     now: datetime | None = None,
 ) -> PublishOutcome:
@@ -1357,8 +1367,9 @@ def publish(
     → **`index.json` 을 마지막에** 쓴다. 검증이 실패하면 최종 경로에 아무것도
     남지 않는다.
 
-    `exchange_root` 기본값은 `source_root` 의 형제 `commerce/` 다
-    (`data/raw` → `data/commerce`). 없으면 교환 파일 없이 게시한다.
+    교환 묶음은 출처마다 읽는다(#117). 기본 위치는 `source_root` 의 형제 폴더다 —
+    `data/commerce` · `data/simulator_exchange`. `exchange_roots` 로 출처별로 바꿀
+    수 있다. 없는 묶음은 없는 채로 게시한다.
     """
     run_id = ct.new_run_id(now=now)
     # ★ cost_accounting 만 꺼낸다. product_generation(원가율)은 계산층으로
@@ -1369,8 +1380,16 @@ def publish(
     manifest = _read_manifest(source_root)
     events = list(read_events(source_root)) if (source_root / "events").exists() else []
     rejected = _read_rejected(source_root)
-    exchange = ex.read_exchange(exchange_root or ex.default_root(source_root))
+    roots = {**ex.default_roots(source_root), **(exchange_roots or {})}
+    bundles = {
+        source.value: bundle
+        for source, root in roots.items()
+        if (bundle := ex.read_exchange(root, source)) is not None
+    }
     split = partition_by_source(events)
+    by_source = dict(split.items())
+    # ★ 묶음은 같은 출처의 이벤트와만 짝짓는다 — 출처를 아는 것은 이 층이다 (#110 · #117).
+    exchange_pairs = [(bundle, by_source[source]) for source, bundle in bundles.items()]
     partition_dates = _partition_dates(source_root)
     effective_index_date = index_date or _latest_date(partition_dates, now=now)
 
@@ -1411,9 +1430,7 @@ def publish(
             reference="issue #99",
         ))
 
-    # ★ 교환 파일 명부는 커머스 것이다. 명부 대조(DQ-03·DQ-05)에는 커머스 출처
-    #   이벤트만 넘긴다 — 출처를 아는 것은 이 층이고 validate 는 모른다 (#110).
-    quality = dq.build_report(events, exchange=exchange, exchange_scope=split.commerce)
+    quality = dq.build_report(events, exchanges=exchange_pairs)
     ingestion = build_ingestion_report(manifest, split, partition_dates)
     bodies: dict[str, dict[str, object]] = {
         "ingestion_report": ingestion,
@@ -1421,7 +1438,7 @@ def publish(
         "field_coverage_report": build_field_coverage_report(events, split),
         "kpi_report": build_kpi_report(
             events, split, index_date=effective_index_date, config=config,
-            exchange=exchange,
+            bundles=bundles,
         ),
         "data_quality_report": quality,
         "freeze_status": build_freeze_status(),
@@ -1724,7 +1741,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--config", type=Path, default=DEFAULT_ECONOMIC_CONFIG,
                         help="경제 규칙 config (기본 config/economic_config.yaml)")
     parser.add_argument("--exchange", type=Path, default=None,
-                        help="커머스 교환 파일 루트 (기본: --source 의 형제 commerce/)")
+                        help="커머스 교환 묶음 루트 (기본: --source 의 형제 commerce/)")
+    parser.add_argument("--simulator-exchange", type=Path, default=None,
+                        help="시뮬레이터 교환 묶음 루트 (기본: --source 의 형제 simulator_exchange/)")
     parser.add_argument("--index-date", type=date.fromisoformat, default=None,
                         help="지표 기준일 D (기본: 마지막 파티션 날짜)")
     parser.add_argument("--fail-on-quality", action="store_true",
@@ -1734,7 +1753,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         outcome = publish(
             source_root=args.source, output_root=args.out,
-            config_path=args.config, exchange_root=args.exchange,
+            config_path=args.config,
+            exchange_roots={
+                source: root for source, root in (
+                    (EventSource.COMMERCE, args.exchange),
+                    (EventSource.SIMULATOR, args.simulator_exchange),
+                ) if root is not None
+            },
             index_date=args.index_date,
         )
     except MeasurementError as error:
