@@ -247,6 +247,11 @@
       "why": "커머스 명부 대조 DQ-02·03·05 (#110). 범위(커머스 분할)·스냅샷 이후 제외·날짜 단위 한계를 고정한다"
     },
     {
+      "pattern": "tests/test_exchange_sources.py",
+      "owner": "phillip",
+      "why": "출처별 교환 묶음 (#117). 다른 출처 자리의 묶음 거부 · 같은 order_id 에서도 자기 묶음만 붙음 · 두 출처 종단을 고정한다"
+    },
+    {
       "pattern": "tests/test_treatment_accrual.py",
       "owner": "phillip",
       "why": "발생 시점 선언 ↔ 실제 계상 근거 대조 (#97). 이름이 실재하는지와 그 이름이 맞는 이름인지는 다른 질문이라 둘 다 본다"

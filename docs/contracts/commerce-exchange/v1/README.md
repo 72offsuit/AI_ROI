@@ -1,9 +1,11 @@
-# 커머스 교환 파일 계약 — **v1**
+# 교환 파일 계약 — **v1** (커머스 · 시뮬레이터)
 
-> **합의됨** — 2026-09-28, 이슈 [`#100`](https://github.com/72offsuit/AI_ROI/issues/100) · [`Ecommerce_Service #51`](https://github.com/72offsuit/Ecommerce_Service/issues/51). 금액 기준은 [`#106`](https://github.com/72offsuit/AI_ROI/issues/106)에서 정했다.
+> **합의됨** — 2026-09-28, 이슈 [`#100`](https://github.com/72offsuit/AI_ROI/issues/100) · [`Ecommerce_Service #51`](https://github.com/72offsuit/Ecommerce_Service/issues/51). 금액 기준은 [`#106`](https://github.com/72offsuit/AI_ROI/issues/106)에서 정했다. 시뮬레이터도 같은 계약을 쓴다 — [`#117`](https://github.com/72offsuit/AI_ROI/issues/117) (2026-09-29).
 >
-> 생산자: `Ecommerce_Service` `npm run exchange:export -- <디렉터리>` (커머스 쪽 설명은 그 저장소 `docs/AI_ROI_EXCHANGE.md`).
-> 소비자: `src/measurement/exchange.py` → `publish.assemble_orders()` · `validate.check_amount_equation()`.
+> 생산자: `Ecommerce_Service` `npm run exchange:export -- <디렉터리>` (커머스 쪽 설명은 그 저장소 `docs/AI_ROI_EXCHANGE.md`) · 시뮬레이터(`src/simulator/`, §11).
+> 소비자: `src/measurement/exchange.py` → `publish.assemble_orders()` · `validate` 의 `DQ-02`·`03`·`05`·`09`.
+>
+> 디렉터리 이름(`commerce-exchange`)은 처음 커머스용으로 만들어진 흔적이다. 계약은 두 출처 공용이다.
 
 ---
 
@@ -29,13 +31,16 @@
 ## 2. 배치와 형식
 
 ```
-data/commerce/            ← Sink 루트(data/raw)의 형제. publish --exchange 로 바꿀 수 있다
+data/commerce/            ← 커머스 묶음. Sink 루트(data/raw)의 형제. publish --exchange 로 바꿀 수 있다
+data/simulator_exchange/  ← 시뮬레이터 묶음. 같은 형식. publish --simulator-exchange 로 바꿀 수 있다
   manifest.json           이 묶음이 무엇이고 언제 어디서 왔는가
   customers.jsonl
   catalog.jsonl
   orders.jsonl
   order_items.jsonl
 ```
+
+★ **묶음은 자기 출처의 이벤트에만 붙는다.** 두 출처의 `order_id` 형식이 같으므로(`^O\d{8}-\d{6}$`) 같은 ID 가 양쪽에 있을 수 있다 — 그래도 커머스 묶음의 품목은 커머스 주문에만, 시뮬레이터 묶음의 품목은 시뮬레이터 주문에만 붙는다(#117).
 
 - **JSONL** (한 줄에 객체 하나, UTF-8)
 - 시각은 **KST 오프셋을 명시한 RFC 3339** (`2026-01-01T10:00:00.000+09:00`). 이벤트와 같은 규약이다
@@ -47,7 +52,8 @@ data/commerce/            ← Sink 루트(data/raw)의 형제. publish --exchang
 | 필드 | 뜻 |
 |---|---|
 | `contract` | `"commerce-exchange/v1"`. 다르면 묶음 전체를 거부한다 |
-| `source` · `source_commit` | 생산 저장소와 커밋 |
+| `source` | ★ **필수.** 커머스 `"Ecommerce_Service"` · 시뮬레이터 `"simulator"`. 놓인 자리의 출처와 다르면 묶음 전체를 거부한다 — 다른 출처의 품목이 붙는다 |
+| `source_commit` | 생산 코드의 커밋 (시뮬레이터는 `simulator_commit` 과 같은 값) |
 | `generated_at` | 묶음을 만든 시각 (KST) |
 | `mode` | `"full"` |
 | `files` | 파일별 행 수. **실제 행 수와 다르면 묶음 전체를 거부한다** — 잘린 파일을 읽으면 COGS 가 일부 주문의 합계인데 전체처럼 보인다 |
@@ -109,7 +115,7 @@ customers.customer_id  ↔  이벤트의 customer_id
 
 ★ ③이 이 검사의 값어치다. 한 출처 안에서만 계산하면 그 출처가 스스로 일관되기만 하면 통과한다. 커머스 이벤트가 할인 전 금액을 싣고 있던 것(#106)은 ②로는 안 보이고 ③으로만 보인다.
 
-③의 `purchase` 는 **커머스 출처 이벤트에서만** 찾는다(#116) — `publish` 가 커머스 분할을 넘긴다. 커머스 `purchase` 가 한 건도 없으면(예: 시뮬레이터 전용 데이터 옆에 교환 파일만 있을 때) 대조할 상대가 없으므로 `not_run` 이고 위반이 아니다. 시뮬레이터 주문이 같은 `order_id` 를 써도 그 금액을 대조하지 않는다.
+③의 `purchase` 는 **그 묶음과 같은 출처의 이벤트에서만** 찾는다(#116 · #117) — `publish` 가 출처별로 짝지어 넘긴다. 어떤 묶음에 같은 출처의 `purchase` 가 한 건도 없으면(예: 시뮬레이터 전용 데이터 옆에 커머스 묶음만 있을 때) 그 묶음은 대조할 상대가 없으므로 대조하지 않고 사유에 남긴다 — 위반이 아니다. 모든 묶음이 그렇다면 `not_run` 이다. 두 출처가 같은 `order_id` 를 써도 다른 출처의 금액과 대조하지 않는다. 위반 사례에는 `[커머스]`·`[시뮬레이터]` 로 출처가 붙는다.
 
 ## 8. 없을 때·부족할 때
 
@@ -125,13 +131,13 @@ customers.customer_id  ↔  이벤트의 customer_id
 
 ## 9. 명부 대조 — `DQ-02` · `DQ-03` · `DQ-05` (#110)
 
-`customers.jsonl`·`catalog.jsonl`·`orders.jsonl` 은 **커머스 명부**다. 교환 파일이 있으면 세 검사가 실행되고, 없으면 `not_run` 이다.
+`customers.jsonl`·`catalog.jsonl`·`orders.jsonl` 은 **그 출처의 명부**다. 묶음이 하나라도 있으면 세 검사가 실행되고, 없으면 `not_run` 이다. 각 명부는 **같은 출처의 이벤트와만** 대조한다.
 
 | 검사 | 무엇을 | 범위 |
 |---|---|---|
 | `DQ-02` | `order_id` 전역 유일 | `orders.jsonl` 전 행. 중복이 있으면 로더가 묶음 전체를 거부하므로, 읽힌 묶음은 통과한 것이다 |
-| `DQ-03` | 고아 `customer_id`·`product_id` | **커머스 출처 이벤트만** — 시뮬레이터 이벤트는 대조할 명부가 없다. 출처는 `publish.py` 가 나눠 넘긴다 |
-| `DQ-05` | 가입일 이전 이벤트 | 명부에 있는 고객의 커머스 이벤트. **KST 날짜 단위** — 가입 당일 가입 시각 이전의 이벤트는 잡지 못한다 |
+| `DQ-03` | 고아 `customer_id`·`product_id` | **같은 출처 이벤트만** — 묶음이 없는 출처의 이벤트는 대상이 아니다. 출처는 `publish.py` 가 나눠 넘긴다 |
+| `DQ-05` | 가입일 이전 이벤트 | 명부에 있는 고객의 같은 출처 이벤트. **KST 날짜 단위** — 가입 당일 가입 시각 이전의 이벤트는 잡지 못한다 |
 
 - **명부는 `manifest.generated_at` 까지를 책임진다.** 그 뒤의 이벤트는 대조하지 않고 건수를 `reason_detail` 에 싣는다 — 스냅샷 이후 가입한 고객이 거짓 고아가 되지 않게 한다. 위반도 통과도 아니다
 - 로더는 `customers` 의 중복 `customer_id`, `catalog` 의 중복 `product_id`, `generated_at` 이 없는 매니페스트를 거부한다
@@ -147,3 +153,20 @@ customers.customer_id  ↔  이벤트의 customer_id
 | `DQ-09` | 같은 파일 `TestAmountEquation` |
 | 실제 커머스 산출물 종단 (`EventSink` → `publish()`) | 같은 파일 `TestEndToEndWithTheRealCommerceSample` · 픽스처 `tests/fixtures/commerce_exchange_v1/` |
 | 명부 대조 `DQ-02`·`DQ-03`·`DQ-05` | `tests/test_roster_checks.py` |
+| 출처별 묶음 — 자리 거부 · 짝짓기 · 두 출처 종단 | `tests/test_exchange_sources.py` |
+
+## 11. 시뮬레이터가 지킬 것 (#117 · `docs/decisions/DR-117-simulator-exchange.md`)
+
+| | 규칙 | 왜 |
+|---|---|---|
+| 위치·표지 | `data/simulator_exchange/`, `manifest.source = "simulator"` | 커머스 자리에 놓이면 거부된다 |
+| `order_amount` | 할인 후 · 배송비 제외 — **같은 주문의 `purchase` 이벤트와 같은 값** | `DQ-09` ③이 대조한다 |
+| 카탈로그 | 정본 설정 `config/economic_config.yaml` 의 `product_margin`(카테고리별 원가율 · 중앙가격 · 풀 크기)으로 **생성** | 봉인된 경제 규칙이 이 용도로 정의돼 있다. 원가율은 커머스 카탈로그와 같다 |
+| `order_items.unit_cost` | 주문 시점의 원가 — 카탈로그 원가를 그대로 싣되, 주문 뒤에 원가가 바뀌어도 과거 주문 값은 바꾸지 않는다 | COGS 는 이 값만 쓴다(§3) |
+| `discount` | 쿠폰 처치 단가 그대로 — `T2` 3,000원(30,000원 이상) · `T3` 7,000원(50,000원 이상) | 봉인 기록의 가정 `A-DISCOUNT` 가 이것을 전제한다. 다르게 하려면 먼저 리드와 정한다 |
+| `shipping_fee` · `shipping_charged` | **커머스 정책을 따른다** — 할인 전 상품 합계 40,000원 이상이면 일반 무료배송, `T1` 은 그 미만 주문의 배송비 면제. `shipping_fee` 는 정책 배송비(3,000원), `shipping_charged` 는 실제로 받은 금액 | 커머스와 같은 환경. 측정 계층의 유도 규칙(D-3)은 묶음이 없는 주문의 대체 규칙으로만 남는다 |
+| `customers.signup_date` | 가상 고객의 가입일 (KST 날짜) | `DQ-05`·`DQ-03` 이 시뮬레이터 이벤트에도 돈다 |
+| ID | 이벤트와 같은 값 — `customer_id`·`order_id`·`product_id` | 결합 규칙(§6) |
+| 숨김 정보 | 싣지 않는다 — Hidden Trait·처치 반응·참 CATE 는 묶음 어디에도 없다 | 원가·가격·할인·배송비는 실제 커머스도 아는 **관측 가능한 값**이라 흘러도 된다. 숨김 정보는 `data/hidden/`·`data/ground_truth/` 에만 |
+
+묶음 생성 시점·주기(창마다 전량인가)는 시뮬레이터 팀이 `S1`(#75)·`S4`(#78)에서 정한다 — 계약은 `mode: "full"` 전량 스냅샷을 전제한다.

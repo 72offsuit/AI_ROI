@@ -26,8 +26,13 @@ from pathlib import Path
 from src.measurement import exchange as ex
 from src.measurement import publish as pub
 from src.measurement import validate as dq
+from src.measurement.sink import EventSource
 
 SAMPLE = Path(__file__).resolve().parent / "fixtures" / "commerce_exchange_v1"
+
+def read_commerce(root: Path) -> ex.ExchangeBundle | None:
+    return ex.read_exchange(root, EventSource.COMMERCE)
+
 
 
 def sample_events() -> list[dict]:
@@ -45,15 +50,14 @@ def check(report: dict, check_id: str) -> dict:
 
 class RosterTest(unittest.TestCase):
     def setUp(self) -> None:
-        exchange = ex.read_exchange(SAMPLE / "exchange")
+        exchange = read_commerce(SAMPLE / "exchange")
         assert exchange is not None
         self.exchange = exchange
         self.events = sample_events()
 
     def report(self, events: list[dict], scope: list[dict] | None = None) -> dict:
         return dq.build_report(
-            events, exchange=self.exchange,
-            exchange_scope=events if scope is None else scope,
+            events, exchanges=[(self.exchange, events if scope is None else scope)],
         )
 
 
@@ -69,13 +73,6 @@ class TestWithoutTheRoster(unittest.TestCase):
                 self.assertIn("교환 파일", row["reason_detail"])
                 self.assertNotIn("미구현", row["reason_detail"])
 
-    def test_bundle_without_scope_is_not_run_not_all_orphans(self) -> None:
-        """범위를 모르면 대조하지 않는다. 전체와 대조하면 다른 출처가 전부 고아다."""
-        exchange = ex.read_exchange(SAMPLE / "exchange")
-        report = dq.build_report(sample_events(), exchange=exchange)
-        for check_id in ("DQ-03", "DQ-05"):
-            with self.subTest(check=check_id):
-                self.assertEqual("not_run", check(report, check_id)["status"])
 
 
 class TestTheRealSample(RosterTest):
@@ -100,7 +97,7 @@ class TestTheRealSample(RosterTest):
         events = [*self.events, simulator]
         split = pub.partition_by_source(events)
         self.assertIn(simulator, split.simulator)
-        report = dq.build_report(events, exchange=self.exchange, exchange_scope=split.commerce)
+        report = dq.build_report(events, exchanges=[(self.exchange, split.commerce)])
         self.assertEqual("pass", check(report, "DQ-03")["status"])
 
 
@@ -214,7 +211,7 @@ class TestRosterIntegrity(unittest.TestCase):
             rows = self._rows("customers")
             self._rewrite(root, "customers", [*rows, rows[0]])
             with self.assertRaises(ex.ExchangeContractError):
-                ex.read_exchange(root)
+                read_commerce(root)
 
     def test_duplicate_product_is_refused(self) -> None:
         import tempfile
@@ -223,7 +220,7 @@ class TestRosterIntegrity(unittest.TestCase):
             rows = self._rows("catalog")
             self._rewrite(root, "catalog", [*rows, rows[0]])
             with self.assertRaises(ex.ExchangeContractError):
-                ex.read_exchange(root)
+                read_commerce(root)
 
     def test_missing_generated_at_is_refused(self) -> None:
         """명부가 언제까지를 책임지는지 모르면 스냅샷 이후를 가를 수 없다."""
@@ -234,4 +231,4 @@ class TestRosterIntegrity(unittest.TestCase):
             del manifest["generated_at"]
             (root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
             with self.assertRaises(ex.ExchangeContractError):
-                ex.read_exchange(root)
+                read_commerce(root)
