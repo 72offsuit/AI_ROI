@@ -343,11 +343,94 @@ def sample_events() -> list[dict]:
     return [json.loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
 
 
-def dq09(events: list[dict], exchange: ex.CommerceExchange | None) -> dict:
-    report = dq.build_report(events, exchange=exchange)
+def dq09(
+    events: list[dict],
+    exchange: ex.CommerceExchange | None,
+    scope: list[dict] | None = None,
+) -> dict:
+    """`scope` 를 생략하면 `events` 전체가 커머스 이벤트라고 본다 — 이 파일의 표본이 그렇다."""
+    report = dq.build_report(
+        events, exchange=exchange, exchange_scope=events if scope is None else scope,
+    )
     found = [c for c in report["checks"] if c["id"] == "DQ-09"]
     assert len(found) == 1, "DQ-09 를 찾지 못했다"
     return found[0]
+
+
+def simulator_purchase(order_id: str, order_amount: int) -> dict:
+    return {
+        "event_id": "00000000-0000-4000-8000-0000000000aa",
+        "customer_id": "C99999999", "session_id": "S-C99999999-1790581397887",
+        "timestamp": "2026-09-28T16:43:17.890+09:00", "event_type": "purchase",
+        "page_type": "complete", "order_id": order_id, "order_amount": order_amount,
+        "simulator_version": "sim-1.0", "random_seed": 42,
+    }
+
+
+class TestAmountEquationScope(unittest.TestCase):
+    """★★ #116 — 대조할 상대가 없는 것을 위반으로 적지 않는다."""
+
+    def setUp(self) -> None:
+        exchange = ex.read_exchange(SAMPLE / "exchange")
+        assert exchange is not None
+        self.exchange = exchange
+
+    def test_simulator_only_data_is_not_run_not_a_violation(self) -> None:
+        """수정 전에는 교환 파일 주문 전부가 "purchase 이벤트가 없다" 로 fail 이었다."""
+        events = [simulator_purchase("O20251001-000001", 47_000)]
+        split = pub.partition_by_source(events)
+        self.assertEqual((), split.commerce)
+        report = dq.build_report(events, exchange=self.exchange, exchange_scope=split.commerce)
+        check = next(c for c in report["checks"] if c["id"] == "DQ-09")
+        self.assertEqual("not_run", check["status"], check)
+        self.assertIn("커머스", check["reason_detail"])
+
+    @unittest.skipUnless(yaml_available(), NEEDS_YAML)
+    def test_simulator_only_publish_does_not_fail_the_gate(self) -> None:
+        """#116 재현 그대로 — 시뮬레이터 이벤트만 쓰고 옆에 교환 파일을 둔다."""
+        from tests.test_publish_pipeline import simulator_event
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            shutil.copytree(SAMPLE / "exchange", root / "commerce")
+            with EventSink(root / "raw") as sink:
+                sink.write_events([
+                    simulator_event(sc.EventType.SESSION_START, day=1),
+                    simulator_event(sc.EventType.CHECKOUT_START, day=1,
+                                    order_id="O20251001-000001"),
+                    simulator_event(sc.EventType.PURCHASE, day=1,
+                                    order_id="O20251001-000001"),
+                ])
+            pub.publish(
+                source_root=root / "raw", output_root=root / "results",
+                config_path=REPO_ROOT / "config/economic_config.yaml",
+                index_date=date(2025, 10, 1),
+            )
+            quality = json.loads(
+                (root / "results" / pub.artifact_relative("data_quality_report"))
+                .read_text(encoding="utf-8")
+            )
+        check = next(c for c in quality["checks"] if c["id"] == "DQ-09")
+        self.assertEqual("not_run", check["status"], check)
+        self.assertNotEqual("fail", quality["gate_result"], quality["checks"])
+
+    def test_colliding_simulator_order_id_is_not_compared(self) -> None:
+        """시뮬레이터 주문이 커머스와 같은 order_id 를 써도 그 금액을 대조하지 않는다."""
+        commerce = sample_events()
+        order_id = sample_rows("orders")[0]["order_id"]
+        events = [*commerce, simulator_purchase(order_id, 1)]
+        split = pub.partition_by_source(events)
+        check = next(
+            c for c in dq.build_report(
+                events, exchange=self.exchange, exchange_scope=split.commerce,
+            )["checks"] if c["id"] == "DQ-09"
+        )
+        self.assertEqual("pass", check["status"], check)
+
+    def test_missing_scope_is_not_run(self) -> None:
+        report = dq.build_report(sample_events(), exchange=self.exchange)
+        check = next(c for c in report["checks"] if c["id"] == "DQ-09")
+        self.assertEqual("not_run", check["status"])
 
 
 class TestAmountEquation(TempDirTest):
@@ -400,11 +483,25 @@ class TestAmountEquation(TempDirTest):
         self.assertEqual("fail", check["status"])
 
     def test_order_without_purchase_event_is_a_violation(self) -> None:
+        """커머스 구매 이벤트가 있는데 **한 주문의 것만** 빠졌다 — 두 출처가 어긋난다.
+
+        구매 이벤트가 **하나도** 없으면 대조할 상대가 없는 것이라 `not_run` 이다(#116).
+        """
         exchange = ex.read_exchange(SAMPLE / "exchange")
-        events = [e for e in sample_events() if e.get("event_type") != "purchase"]
+        missing = sample_rows("orders")[0]["order_id"]
+        events = [
+            e for e in sample_events()
+            if not (e.get("event_type") == "purchase" and e.get("order_id") == missing)
+        ]
         check = dq09(events, exchange)
         self.assertEqual("fail", check["status"])
-        self.assertEqual(len(sample_rows("orders")), check["violations"])
+        self.assertEqual(1, check["violations"])
+        self.assertIn("purchase 이벤트가 없다", check["samples"][0]["detail"])
+
+    def test_no_commerce_purchase_at_all_is_not_run(self) -> None:
+        exchange = ex.read_exchange(SAMPLE / "exchange")
+        events = [e for e in sample_events() if e.get("event_type") != "purchase"]
+        self.assertEqual("not_run", dq09(events, exchange)["status"])
 
 
 # ── 경제 계산 ───────────────────────────────────────────────────────────────

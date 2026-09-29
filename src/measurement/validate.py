@@ -143,7 +143,8 @@ DQ_ALL: tuple[CheckSpec, ...] = (
     ),
     CheckSpec(
         "DQ-09", "금액 정합성", "order_amount = Σ(unit_price×quantity) − discount",
-        "커머스 교환 파일의 주문 — purchase 이벤트 금액과 품목 합계·할인의 대조",
+        "커머스 교환 파일의 주문 — 커머스 출처 purchase 이벤트 금액과 품목 합계·할인의 "
+        "대조. 시뮬레이터 이벤트는 대조하지 않는다 (#116)",
         "precondition_missing",
         # 이벤트만으로는 두 겹으로 막힌다: discount 가 DATA-003 22컬럼에 없고,
         # purchase 는 주문 단위 1행이라 품목 합계를 재구성할 수 없다. 둘 다
@@ -366,8 +367,8 @@ def check_order_id_single_purchase(
 
 
 def check_amount_equation(
-    events: Sequence[Mapping[str, object]],
     exchange: CommerceExchange | None,
+    exchange_scope: Sequence[Mapping[str, object]] | None,
 ) -> CheckResult:
     """`DQ-09` — 이벤트와 교환 파일이 **같은 주문을 같게 말하는가.**
 
@@ -381,16 +382,41 @@ def check_amount_equation(
     일관되기만 하면 통과한다. 이벤트의 금액 기준이 어긋났던 것(#106)은 ②로는
     안 보이고 ③으로만 보인다.
 
-    교환 파일이 없으면 `not_run` 이다 — 대조하지 않은 것이지 위반이 아니다.
+    ★ ③의 `purchase` 는 **교환 파일이 책임지는 이벤트(`exchange_scope`)에서만**
+      찾는다(#116). 전체 이벤트에서 찾으면 두 가지가 틀어진다 — 커머스 이벤트가
+      하나도 없는 데이터에서 교환 파일 주문이 전부 위반이 되고, 시뮬레이터 주문이
+      같은 `order_id` 를 쓰면 시뮬레이터 금액을 커머스 교환 파일과 대조한다.
+      어느 이벤트가 그 범위인지는 출처를 아는 `publish.py` 가 정한다.
+
+    교환 파일이 없거나, 범위가 없거나, 범위에 `purchase` 가 한 건도 없으면
+    `not_run` 이다 — 대조할 상대가 없는 것이지 위반이 아니다.
     """
     spec = DQ_INDEX["DQ-09"]
     if exchange is None:
         return _not_run(spec)
+    if exchange_scope is None:
+        return _not_scoped(
+            spec,
+            "교환 파일은 있지만 대조할 이벤트 범위(exchange_scope)가 주어지지 않았다 — "
+            "전체 이벤트와 대조하면 다른 출처의 주문과 섞인다",
+        )
     purchases: dict[object, object] = {
         e.get("order_id"): e.get("order_amount")
-        for e in events
+        for e in exchange_scope
         if e.get("event_type") == sc.EventType.PURCHASE.value
     }
+    if not purchases:
+        return CheckResult(
+            id=spec.id, spec_ref=spec.spec_item, title=spec.title,
+            status="not_run", scope=spec.scope, examined_rows=0, violations=None,
+            reason_code=sc.ReasonCode.PRECONDITION_MISSING.value,
+            reason_detail=(
+                f"교환 파일에 주문 {len(exchange.orders)}건이 있지만 대조할 커머스 "
+                "purchase 이벤트가 한 건도 없다 — 대조할 상대가 없는 것이지 위반이 "
+                "아니다. 커머스 이벤트를 수집하지 않은 데이터(예: 시뮬레이터 전용 "
+                "실행)라면 정상이다"
+            ),
+        )
     samples: list[str] = []
     for order_id, order in sorted(exchange.orders.items()):
         if not order.items:
@@ -413,12 +439,12 @@ def check_amount_equation(
     )
 
 
-def _not_scoped(spec: CheckSpec) -> CheckResult:
+def _not_scoped(spec: CheckSpec, detail: str | None = None) -> CheckResult:
     return CheckResult(
         id=spec.id, spec_ref=spec.spec_item, title=spec.title,
         status="not_run", scope=spec.scope, examined_rows=0, violations=None,
         reason_code=sc.ReasonCode.PRECONDITION_MISSING.value,
-        reason_detail=(
+        reason_detail=detail or (
             "교환 파일은 있지만 명부가 책임지는 이벤트 범위(exchange_scope)가 "
             "주어지지 않았다 — 전체 이벤트와 대조하면 다른 출처가 전부 고아가 된다"
         ),
@@ -855,7 +881,7 @@ def run_all(
         "DQ-06": lambda: check_timezone_single(events),
         "DQ-07": lambda: check_purchase_funnel(events),
         "DQ-08": lambda: check_coupon_funnel(events),
-        "DQ-09": lambda: check_amount_equation(events, exchange),
+        "DQ-09": lambda: check_amount_equation(exchange, exchange_scope),
         "DQ-10": lambda: check_no_negative_amounts(events),
         "DQ-11": lambda: check_key_completeness(events),
         "DQ-17": lambda: check_parquet_reproducible(digests=parquet_digests),
