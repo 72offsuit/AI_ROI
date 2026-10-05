@@ -252,6 +252,16 @@
       "why": "출처별 교환 묶음 (#117). 다른 출처 자리의 묶음 거부 · 같은 order_id 에서도 자기 묶음만 붙음 · 두 출처 종단을 고정한다"
     },
     {
+      "pattern": "tests/test_simulator*.py",
+      "owner": "phillip",
+      "why": "S1 (#75). 같은 seed·분할·snapshot/restore·save/load 가 연속 실행과 바이트 단위로 같고 그 결과가 3.10~3.14 에서 골든 해시로 고정됨을 실행으로 증명한다"
+    },
+    {
+      "pattern": "docs/simulator_api.md",
+      "owner": "phillip",
+      "why": "S1 (#75). 시스템 팀이 읽는 시뮬레이터 공개 계약 — tests/test_simulator_api.py 가 api.py 와 대조한다"
+    },
+    {
       "pattern": "tests/test_treatment_accrual.py",
       "owner": "phillip",
       "why": "발생 시점 선언 ↔ 실제 계상 근거 대조 (#97). 이름이 실재하는지와 그 이름이 맞는 이름인지는 다른 질문이라 둘 다 본다"
