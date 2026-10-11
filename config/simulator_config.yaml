@@ -1,0 +1,269 @@
+{
+  "config_version": "sim-gen-v1",
+  "notes": [
+    "S2(#76) 생성 config. 내용은 JSON 문법만 쓴다 — 표준 json 으로 읽어 의존성 없는 Python 3.10 에서도 생성이 돈다(사용자 확정 U2).",
+    "값은 모두 정수다. ratio_bp 는 1/10000, mu_ppm 은 1/1000000, kappa_milli·shape_milli 는 1/1000, sigma_ppm 은 1/1000000 단위다. 금액은 원, 구매 주기는 밀리일, 방문 빈도는 밀리회/주다.",
+    "personas 배열 순서가 곧 추첨 순서다. 순서를 바꾸면 같은 seed 의 페르소나 배정이 바뀐다.",
+    "구성비(ratio_bp)와 페르소나별 모수는 docs/data_spec.html §3.2·§3.3 초안이고 외부 근거가 없다. repurchase_propensity 는 잠정값이다. 근거와 민감도: docs/decisions/DR-S2-persona-mix.md · DR-S2-hidden-trait-dist.md.",
+    "생성 부분(config_version·personas·hidden_traits)을 바꾸면 config_version 을 올리고 tests/test_simulator_persona.py 의 CONFIG_PINS 에 새 다이제스트를 추가한다. 옛 상태·계보는 거부된다.",
+    "GATE 1 이후에는 AI 성능을 이유로 바꾸지 않는다(SRS FREEZE-002·003). 바꿔야 하면 Issue → 수정 → 판 상향 → Baseline 부터 재실행한다."
+  ],
+  "personas": [
+    {
+      "id": "vip_loyal",
+      "alias": "P1",
+      "ratio_bp": 800
+    },
+    {
+      "id": "loyal",
+      "alias": "P2",
+      "ratio_bp": 2700
+    },
+    {
+      "id": "price_sensitive",
+      "alias": "P3",
+      "ratio_bp": 2200
+    },
+    {
+      "id": "explorer",
+      "alias": "P4",
+      "ratio_bp": 1800
+    },
+    {
+      "id": "churn_progressing",
+      "alias": "P5",
+      "ratio_bp": 1500
+    },
+    {
+      "id": "new_customer",
+      "alias": "P6",
+      "ratio_bp": 1000
+    }
+  ],
+  "hidden_traits": [
+    {
+      "name": "base_visit_frequency",
+      "family": "gamma",
+      "unit": "milli_per_week",
+      "shape_milli": 4000,
+      "mean": {
+        "vip_loyal": 4500,
+        "loyal": 2800,
+        "price_sensitive": 2000,
+        "explorer": 3500,
+        "churn_progressing": 1400,
+        "new_customer": 2200
+      }
+    },
+    {
+      "name": "base_purchase_probability",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 420000,
+        "loyal": 300000,
+        "price_sensitive": 180000,
+        "explorer": 100000,
+        "churn_progressing": 120000,
+        "new_customer": 200000
+      }
+    },
+    {
+      "name": "base_order_value",
+      "family": "lognormal",
+      "unit": "krw",
+      "sigma_ppm": 450000,
+      "median": {
+        "vip_loyal": 72000,
+        "loyal": 48000,
+        "price_sensitive": 34000,
+        "explorer": 39000,
+        "churn_progressing": 31000,
+        "new_customer": 36000
+      }
+    },
+    {
+      "name": "purchase_cycle",
+      "family": "lognormal",
+      "unit": "milli_day",
+      "sigma_ppm": 450000,
+      "median": {
+        "vip_loyal": 6000,
+        "loyal": 10000,
+        "price_sensitive": 16000,
+        "explorer": 21000,
+        "churn_progressing": 30000,
+        "new_customer": 14000
+      }
+    },
+    {
+      "name": "price_sensitivity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 200000,
+        "loyal": 350000,
+        "price_sensitive": 800000,
+        "explorer": 500000,
+        "churn_progressing": 450000,
+        "new_customer": 450000
+      }
+    },
+    {
+      "name": "coupon_sensitivity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 250000,
+        "loyal": 400000,
+        "price_sensitive": 850000,
+        "explorer": 450000,
+        "churn_progressing": 500000,
+        "new_customer": 600000
+      }
+    },
+    {
+      "name": "shipping_fee_sensitivity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 150000,
+        "loyal": 400000,
+        "price_sensitive": 700000,
+        "explorer": 500000,
+        "churn_progressing": 450000,
+        "new_customer": 550000
+      }
+    },
+    {
+      "name": "brand_loyalty",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 850000,
+        "loyal": 700000,
+        "price_sensitive": 250000,
+        "explorer": 300000,
+        "churn_progressing": 300000,
+        "new_customer": 400000
+      }
+    },
+    {
+      "name": "repurchase_propensity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 850000,
+        "loyal": 750000,
+        "price_sensitive": 600000,
+        "explorer": 500000,
+        "churn_progressing": 400000,
+        "new_customer": 550000
+      }
+    },
+    {
+      "name": "base_churn_propensity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 40000,
+        "loyal": 100000,
+        "price_sensitive": 220000,
+        "explorer": 280000,
+        "churn_progressing": 550000,
+        "new_customer": 300000
+      }
+    },
+    {
+      "name": "marketing_responsiveness",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 350000,
+        "loyal": 450000,
+        "price_sensitive": 750000,
+        "explorer": 400000,
+        "churn_progressing": 300000,
+        "new_customer": 650000
+      }
+    },
+    {
+      "name": "marketing_fatigue",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 300000,
+        "loyal": 250000,
+        "price_sensitive": 150000,
+        "explorer": 300000,
+        "churn_progressing": 550000,
+        "new_customer": 100000
+      }
+    },
+    {
+      "name": "search_propensity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 300000,
+        "loyal": 350000,
+        "price_sensitive": 550000,
+        "explorer": 850000,
+        "churn_progressing": 250000,
+        "new_customer": 600000
+      }
+    },
+    {
+      "name": "cart_abandonment_propensity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 150000,
+        "loyal": 250000,
+        "price_sensitive": 450000,
+        "explorer": 650000,
+        "churn_progressing": 400000,
+        "new_customer": 400000
+      }
+    },
+    {
+      "name": "cs_contact_propensity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 100000,
+        "loyal": 100000,
+        "price_sensitive": 180000,
+        "explorer": 120000,
+        "churn_progressing": 220000,
+        "new_customer": 200000
+      }
+    },
+    {
+      "name": "review_propensity",
+      "family": "beta",
+      "unit": "ppm",
+      "kappa_milli": 12000,
+      "mu_ppm": {
+        "vip_loyal": 300000,
+        "loyal": 200000,
+        "price_sensitive": 150000,
+        "explorer": 200000,
+        "churn_progressing": 100000,
+        "new_customer": 250000
+      }
+    }
+  ]
+}
