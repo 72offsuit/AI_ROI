@@ -4,13 +4,15 @@ import hashlib
 import json
 import re
 
-from src.simulator._internal import behavior, clock, profiles
+from src.simulator._internal import behavior, clock, genconfig, persona, profiles, traits
 from src.simulator._internal.cart import MAX_QUANTITY
 from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 
-FORMAT_VERSION = "sim-state-v1"
-SIMULATOR_VERSION = "sim-0.1"
-WORLD_ID_SCHEME = "sim-world-v1"
+# S2: 고객 항목에 persona·hidden_traits 가 생기고 world_id 열쇠에 생성 config 다이제스트가 들어간다
+# (DR-S2-trait-sampling 6절). RNG_SCHEME 은 열쇠 형식이 그대로라 올리지 않는다.
+FORMAT_VERSION = "sim-state-v2"
+SIMULATOR_VERSION = "sim-0.2"
+WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999
 # session_id 는 13자리 epoch ms 다(schema.IDENTIFIER_PATTERNS). 이 시각을 넘는 창은 만들지 않는다.
@@ -32,12 +34,15 @@ _VERSIONED = (
 _TOP_KEYS = frozenset({
     "format_version", "simulator_version", "rng_scheme", "world_id", "seed",
     "num_customers", "profile", "calendar_start_ms", "cart_lifetime_ms", "now_ms",
-    "queue", "catalog", "orders", "customers",
+    "queue", "catalog", "orders", "customers", "generation",
 })
 _CUSTOMER_KEYS = frozenset({
-    "customer_id", "signup_ms", "lifecycle", "hidden_traits", "cart", "recent_views",
+    "customer_id", "signup_ms", "lifecycle", "persona", "hidden_traits", "cart", "recent_views",
     "session", "rfm", "assignments", "next_seq",
 })
+# 공개 오류 메시지 정책: 숨은 필드의 이름·페르소나 id·Trait 값을 싣지 않는다(docs/persona_spec.md 5.3).
+# 메시지는 load_state 의 StateFormatError 로 시스템 팀까지 간다. 키 목록에서는 이 둘을 가린다.
+_HIDDEN_KEYS = frozenset({"persona", "hidden_traits"})
 _CART_KEYS = frozenset({"quantity", "last_change_ms", "unit_price"})
 _SESSION_KEYS = frozenset({"session_id", "start_ms", "last_activity_ms", "actions", "open"})
 _RFM_KEYS = frozenset({"order_count", "monetary", "last_purchase_ms", "last_visit_ms"})
@@ -58,9 +63,23 @@ def customer_index(cid: str) -> int:
     return int(cid[1:]) - 1
 
 
-def world_id(seed: int, num_customers: int, profile: str, calendar_start_ms: int) -> str:
-    key = canonical_json([WORLD_ID_SCHEME, seed, num_customers, profile, calendar_start_ms])
+def world_id(
+    seed: int, num_customers: int, profile: str, calendar_start_ms: int, config_digest: str
+) -> str:
+    key = canonical_json(
+        [WORLD_ID_SCHEME, seed, num_customers, profile, calendar_start_ms, config_digest]
+    )
     return "W-" + hashlib.sha256(key).hexdigest()[:16]
+
+
+def current_world_id(seed: int, num_customers: int, profile: str) -> str:
+    """현재 생성 config 로 이 세 값의 세계를 만들면 받을 world_id. 계보가 config 변경을 가려내는 데 쓴다."""
+    start_ms, _ = _profile_settings(profile)
+    return world_id(seed, num_customers, profile, start_ms, genconfig.active().digest)
+
+
+def _generation(config: genconfig.GenerationConfig) -> dict[str, str]:
+    return {"config_version": config.version, "config_digest": config.digest}
 
 
 def _profile_settings(profile: str) -> tuple[int, int]:
@@ -76,12 +95,15 @@ def _catalog() -> list[dict[str, object]]:
     ]
 
 
-def _new_customer(cid: str, signup_ms: int) -> dict[str, object]:
+def _new_customer(
+    cid: str, signup_ms: int, persona_id: str, hidden_traits: dict[str, int]
+) -> dict[str, object]:
     return {
         "customer_id": cid,
         "signup_ms": signup_ms,
         "lifecycle": "active",
-        "hidden_traits": {},
+        "persona": persona_id,
+        "hidden_traits": hidden_traits,
         "cart": {},
         "recent_views": [],
         "session": None,
@@ -97,12 +119,24 @@ def _new_customer(cid: str, signup_ms: int) -> dict[str, object]:
 
 
 def new_world(seed: int, num_customers: int, profile: str) -> dict[str, object]:
+    """새 세계. 생성 config 를 처음 쓰는 프로세스라면 매듭표를 만들고(`traits.tables`) 캐시한다.
+
+    Raises:
+        genconfig.ConfigError: 생성 config 를 읽을 수 없거나 계약을 어겼다.
+    """
+    config = genconfig.active()
     start_ms, lifetime_ms = _profile_settings(profile)
+    customers = []
+    for index in range(num_customers):
+        cid = customer_id(index)
+        # S2 는 전원 Day 0 가입이다. P6 의 중도 가입 일정은 S3 가 맡는다(DR-S2-persona-mix 4).
+        customers.append(_new_customer(cid, start_ms, *persona.generate(seed, cid, config)))
     return {
         "format_version": FORMAT_VERSION,
         "simulator_version": SIMULATOR_VERSION,
         "rng_scheme": RNG_SCHEME,
-        "world_id": world_id(seed, num_customers, profile, start_ms),
+        "generation": _generation(config),
+        "world_id": world_id(seed, num_customers, profile, start_ms, config.digest),
         "seed": seed,
         "num_customers": num_customers,
         "profile": profile,
@@ -112,15 +146,16 @@ def new_world(seed: int, num_customers: int, profile: str) -> dict[str, object]:
         "queue": [],
         "catalog": _catalog(),
         "orders": [],
-        "customers": [_new_customer(customer_id(i), start_ms) for i in range(num_customers)],
+        "customers": customers,
     }
 
 
-_INITIAL_DIGESTS: dict[tuple[int, int, str], str] = {}
+# 열쇠에 config 다이제스트가 있어야 config 를 바꾼 같은 프로세스가 옛 기준값을 돌려주지 않는다.
+_INITIAL_DIGESTS: dict[tuple[int, int, str, str], str] = {}
 
 
 def initial_digest(seed: int, num_customers: int, profile: str) -> str:
-    key = (seed, num_customers, profile)
+    key = (seed, num_customers, profile, genconfig.active().digest)
     found = _INITIAL_DIGESTS.get(key)
     if found is None:
         found = _INITIAL_DIGESTS[key] = digest(encode(new_world(seed, num_customers, profile)))
@@ -155,9 +190,25 @@ def decode(data: bytes) -> dict[str, object]:
             raise IncompatibleState(
                 f"{field} 가 다르다 — 기대 {expected!r}, 발견 {world.get(field)!r}"
             )
-    _validate(world)
+    config = genconfig.active()
+    expected_generation = _generation(config)
+    if world.get("generation") != expected_generation:
+        # 판 이름이 같고 내용만 다른 경우도 가려지게 다이제스트 앞 12자를 함께 싣는다.
+        raise IncompatibleState(
+            f"generation 이 다르다 — 이 상태를 만든 생성 config 와 현재 config 가 다르다 "
+            f"(기대 {_label(expected_generation)}, 발견 {_label(world.get('generation'))})"
+        )
+    _validate(world, config)
     world["queue"] = [tuple(item) for item in world["queue"]]
     return world
+
+
+def _label(generation: object) -> str:
+    if not isinstance(generation, dict):
+        return repr(generation)[:40]
+    digest_text = generation.get("config_digest")
+    prefix = digest_text[:12] if isinstance(digest_text, str) else repr(digest_text)[:12]
+    return f"{str(generation.get('config_version'))[:40]}·{prefix}"
 
 
 def digest(data: bytes) -> str:
@@ -178,9 +229,13 @@ def _keys(where: str, value: object, expected: frozenset[str]) -> dict[str, obje
     if set(value) != expected:
         raise _fail(
             where,
-            f"모르는 키 {sorted(set(value) - expected)} · 없는 키 {sorted(expected - set(value))}",
+            f"모르는 키 {_shown(set(value) - expected)} · 없는 키 {_shown(expected - set(value))}",
         )
     return value
+
+
+def _shown(keys: set[str]) -> list[str]:
+    return sorted("<숨은 필드>" if key in _HIDDEN_KEYS else key for key in keys)
 
 
 def _int(where: str, value: object, lo: int | None = None, hi: int | None = None) -> int:
@@ -202,7 +257,7 @@ def _list(where: str, value: object) -> list[object]:
     return value
 
 
-def _validate(world: dict[str, object]) -> None:
+def _validate(world: dict[str, object], config: genconfig.GenerationConfig) -> None:
     _keys("최상위", world, _TOP_KEYS)
     seed = _int("seed", world["seed"], 0, SEED_LIMIT - 1)
     count = _int("num_customers", world["num_customers"], 1, MAX_CUSTOMERS)
@@ -214,8 +269,8 @@ def _validate(world: dict[str, object]) -> None:
         raise _fail("calendar_start_ms", "profile 의 시작일과 다르다")
     if world["cart_lifetime_ms"] != lifetime_ms or isinstance(world["cart_lifetime_ms"], bool):
         raise _fail("cart_lifetime_ms", "profile 의 설정과 다르다")
-    if world["world_id"] != world_id(seed, count, profile, start_ms):
-        raise _fail("world_id", "seed·num_customers·profile 에서 유도한 값과 다르다")
+    if world["world_id"] != world_id(seed, count, profile, start_ms, config.digest):
+        raise _fail("world_id", "seed·num_customers·profile·생성 config 에서 유도한 값과 다르다")
     now = _int("now_ms", world["now_ms"], start_ms, MAX_TIME_MS)
     if (now - start_ms) % clock.DAY_MS:
         raise _fail("now_ms", "KST 자정이 아니다")
@@ -226,7 +281,10 @@ def _validate(world: dict[str, object]) -> None:
     customers = _list("customers", world["customers"])
     if len(customers) != count:
         raise _fail("customers", f"{len(customers)}명인데 num_customers 는 {count}")
-    next_seqs = [_validate_customer(index, item, now) for index, item in enumerate(customers)]
+    identity = _Identity(config)
+    next_seqs = [
+        _validate_customer(index, item, now, identity) for index, item in enumerate(customers)
+    ]
     for position, item in enumerate(_list("queue", world["queue"])):
         where = f"queue[{position}]"
         if not isinstance(item, list) or len(item) != 4:
@@ -243,7 +301,37 @@ def _validate(world: dict[str, object]) -> None:
             raise _fail(where, f"모르는 사건 종류: {kind!r}")
 
 
-def _validate_customer(index: int, value: object, now: int) -> int:
+class _Identity:
+    """페르소나·Trait 검사 기준. Trait 은 다시 생성하지 않는다 — `advance` 마다 도는 검사라서다.
+
+    값이 그 페르소나 매듭표의 [Q[0], Q[K]] 안인지만 본다. 범위 안의 위조는 계보(초기 다이제스트)가 잡는다.
+    """
+
+    def __init__(self, config: genconfig.GenerationConfig) -> None:
+        self.personas = frozenset(config.persona_ids)
+        self.trait_names = frozenset(config.trait_names)
+        # 오류 메시지는 Trait 을 이름 대신 config 순번(docs/persona_spec.md 3절 번호)으로 가리킨다.
+        self.ordered = tuple(enumerate(config.trait_names, start=1))
+        self.tables = traits.tables(config)
+
+    def check(self, where: str, persona_id: object, values: object) -> None:
+        # 위치와 사유만 남긴다 — 숨은 필드 이름·페르소나 id·Trait 값은 싣지 않는다.
+        if not isinstance(persona_id, str) or persona_id not in self.personas:
+            raise _fail(where, "페르소나가 생성 config 에 없는 값이다")
+        if not isinstance(values, dict):
+            raise _fail(where, "Trait 묶음이 객체가 아니다")
+        if set(values) != self.trait_names:
+            raise _fail(where, "Trait 이름 집합이 생성 config 와 다르다")
+        for number, name in self.ordered:
+            value = values[name]
+            table = self.tables[name][persona_id]
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise _fail(where, f"Trait #{number} 값이 정수가 아니다")
+            if not table.lo <= value <= table.hi:
+                raise _fail(where, f"Trait #{number} 값이 그 페르소나가 낼 수 있는 범위 밖이다")
+
+
+def _validate_customer(index: int, value: object, now: int, identity: _Identity) -> int:
     where = f"customers[{index}]"
     customer = _keys(where, value, _CUSTOMER_KEYS)
     if customer["customer_id"] != customer_id(index):
@@ -251,8 +339,7 @@ def _validate_customer(index: int, value: object, now: int) -> int:
     _int(f"{where}.signup_ms", customer["signup_ms"], 0, MAX_TIME_MS)
     if customer["lifecycle"] != "active":
         raise _fail(where, f"모르는 lifecycle: {customer['lifecycle']!r}")
-    if customer["hidden_traits"] != {}:
-        raise _fail(where, "이 판은 Hidden Trait 을 두지 않는다")
+    identity.check(where, customer["persona"], customer["hidden_traits"])
     cart = customer["cart"]
     if not isinstance(cart, dict):
         raise _fail(f"{where}.cart", "객체가 아니다")

@@ -8,18 +8,30 @@ from unittest import mock
 from src.measurement import sink as sk
 from src.simulator import api
 from src.simulator._internal import behavior, rng
+from src.simulator._internal import world as world_state
 from tests.test_simulator_support import SimulatorCase, event_digest, root_digest
 
 GOLDEN_SEED = 42
 GOLDEN_CUSTOMERS = 50
 GOLDEN_DAYS = 14
+# 판마다 (이벤트 다이제스트, 상태 sha256, 이벤트 수). 지난 판은 기록으로 남긴다 — BEHAVIOR_BASELINE 이 대조한다.
 GOLDEN: dict[str, tuple[str, str, int]] = {
     "sim-0.1": (
         "fdfbc1e43a07ce603ab92a06b9fc4c0287e45d8be04f6d81f18adf7b7576cda1",
         "90cec765cabb841434760eb98b6a7881123061ac25765bab225edc9677ea7ed6",
         716,
     ),
+    "sim-0.2": (
+        "77d67f87b899980fdd8b85921b5896ec201641e3ecd23f7cdd159ddee70fb958",
+        "047c9d783cc91c1465a93d229c0916aad1e727c3f2a444ae1032135d68e79e72",
+        716,
+    ),
 }
+# 행동은 그대로이고 판 라벨만 바뀐 판 → 행동 기준 판. S2 는 생성(페르소나·Trait)만 더하고 이벤트 규칙을
+# 건드리지 않는다(사용자 확정 U1·U4). Trait 이 행동에 연결되는 S4 에서 이 항목을 지운다.
+BEHAVIOR_BASELINE: dict[str, str] = {"sim-0.2": "sim-0.1"}
+# seed 42 · 50명의 [customer_id, persona, hidden_traits] 정준 JSON sha256. 이벤트와 무관한 생성 결과의 고정점이다.
+GENERATION_GOLDEN = "c9c991a24689051c08a739b06fe5701a0dd435a44f25ce45d1c390b572dae762"
 
 
 def _by_customer(records) -> dict[str, str]:
@@ -183,6 +195,27 @@ class TestGoldenHash(SimulatorCase):
         self.assertEqual(event_sha, root_digest(root))
         self.assertEqual(state_sha, hashlib.sha256(self.state_bytes(state_id)).hexdigest())
         self.assertEqual("state-" + state_sha[:16], state_id)
+
+
+class TestBehaviorUnchangedSinceBaseline(SimulatorCase):
+    def test_relabeled_events_match_the_baseline_golden(self) -> None:
+        version = world_state.SIMULATOR_VERSION
+        if version not in BEHAVIOR_BASELINE:
+            self.skipTest(f"{version} 은 행동 기준 판이 없다 — 행동을 바꾼 판이다")
+        baseline = BEHAVIOR_BASELINE[version]
+        root = self.start(seed=GOLDEN_SEED, customers=GOLDEN_CUSTOMERS, profile="smoke")
+        api.advance(GOLDEN_DAYS)
+        relabeled = [{**r, "simulator_version": baseline} for r in sk.read_events(root)]
+        event_sha, _, count = GOLDEN[baseline]
+        self.assertEqual(count, len(relabeled))
+        self.assertEqual(event_sha, event_digest(relabeled))
+
+
+class TestGenerationGolden(unittest.TestCase):
+    def test_identity_of_the_canonical_population_is_pinned(self) -> None:
+        world = world_state.new_world(GOLDEN_SEED, GOLDEN_CUSTOMERS, "smoke")
+        rows = [[c["customer_id"], c["persona"], c["hidden_traits"]] for c in world["customers"]]
+        self.assertEqual(GENERATION_GOLDEN, hashlib.sha256(rng.canonical_json(rows)).hexdigest())
 
 
 class TestCounterDraws(unittest.TestCase):

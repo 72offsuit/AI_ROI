@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 
 from src.measurement import sink as sk
 from src.simulator import api
-from src.simulator._internal import cart, engine
+from src.simulator._internal import cart, engine, genconfig, traits
 from src.simulator._internal import world as world_state
 from tests.test_simulator_support import SimulatorCase
 
@@ -70,7 +70,7 @@ class TestStateVersionGate(SimulatorCase):
             "seed_as_bool": lambda d: d.__setitem__("seed", True),
             "seed_changed": lambda d: d.__setitem__("seed", d["seed"] + 1),
             "now_not_midnight": lambda d: d.__setitem__("now_ms", d["now_ms"] + 1),
-            "customer_unknown_key": customer(lambda c: c.__setitem__("persona", "x")),
+            "customer_unknown_key": customer(lambda c: c.__setitem__("segment", "x")),
             "customer_missing_key": customer(lambda c: c.pop("next_seq")),
             "next_seq_bool": customer(lambda c: c.__setitem__("next_seq", True)),
             "cart_quantity_zero": customer(lambda c: c.__setitem__(
@@ -91,6 +91,65 @@ class TestStateVersionGate(SimulatorCase):
                 forged = self.plant(document)
                 with self.assertRaises(api.StateFormatError):
                     api.load_state(forged, self.fresh_root("load"), hidden_root=self.hidden)
+
+    def test_forged_identity_with_recomputed_digest_is_rejected(self) -> None:
+        config = genconfig.active()
+        target = self.document["customers"][0]
+        name = config.trait_names[0]
+        table = traits.tables(config)[name][target["persona"]]
+
+        def trait(edit):
+            def apply(document):
+                edit(document["customers"][0]["hidden_traits"])
+            return apply
+
+        forgeries = {
+            "persona_unknown": lambda d: d["customers"][0].__setitem__("persona", "ghost"),
+            "persona_alias_instead_of_id": lambda d: d["customers"][0].__setitem__("persona", "P1"),
+            "persona_not_a_string": lambda d: d["customers"][0].__setitem__("persona", 1),
+            "trait_missing": trait(lambda t: t.pop(name)),
+            "trait_extra": trait(lambda t: t.__setitem__("tau", 1)),
+            "trait_bool": trait(lambda t: t.__setitem__(name, True)),
+            "trait_float": trait(lambda t: t.__setitem__(name, 0.5)),
+            "trait_string": trait(lambda t: t.__setitem__(name, "1")),
+            "trait_below_range": trait(lambda t: t.__setitem__(name, table.lo - 1)),
+            "trait_above_range": trait(lambda t: t.__setitem__(name, table.hi + 1)),
+            "traits_not_an_object": lambda d: d["customers"][0].__setitem__("hidden_traits", []),
+            "generation_missing": lambda d: d.pop("generation"),
+            "generation_other_digest": lambda d: d["generation"].__setitem__("config_digest", "0" * 64),
+            "generation_other_version": lambda d: d["generation"].__setitem__("config_version", "x"),
+            "generation_extra_key": lambda d: d["generation"].__setitem__("extra", 1),
+        }
+        for label, edit in forgeries.items():
+            with self.subTest(forgery=label):
+                document = json.loads(self.state_bytes(self.state_id))
+                edit(document)
+                forged = self.plant(document)
+                with self.assertRaises(api.StateFormatError) as caught:
+                    api.load_state(forged, self.fresh_root("load"), hidden_root=self.hidden)
+                # 오류 메시지는 위치와 사유만 말한다 — 숨은 값(페르소나 id·Trait 값)을 싣지 않는다.
+                message = str(caught.exception)
+                self.assertNotIn(f"'{target['persona']}'", message)
+                self.assertNotIn(str(target["hidden_traits"][name]), message)
+        with self.subTest(forgery="generation"):
+            document = json.loads(self.state_bytes(self.state_id))
+            document["generation"]["config_digest"] = "0" * 64
+            with self.assertRaisesRegex(api.StateFormatError, "generation"):
+                api.load_state(self.plant(document), self.fresh_root("load"), hidden_root=self.hidden)
+
+    def test_in_range_trait_change_is_caught_by_the_lineage(self) -> None:
+        # 구조 검사는 Trait 을 다시 생성하지 않으므로 범위 안의 위조는 통과한다. 이어받을 계보의
+        # 다이제스트 사슬(초기 상태 = 같은 seed 로 새로 만든 세계)이 그 위조를 잡는다.
+        config = genconfig.active()
+        document = json.loads(self.state_bytes(self.state_id))
+        customer = document["customers"][0]
+        name = config.trait_names[-1]
+        table = traits.tables(config)[name][customer["persona"]]
+        value = customer["hidden_traits"][name]
+        customer["hidden_traits"][name] = value + 1 if value < table.hi else value - 1
+        forged = self.plant(document)
+        with self.assertRaises(api.OutputRootError):
+            api.load_state(forged, self.fresh_root("load"), hidden_root=self.hidden)
 
     def test_unchanged_state_loads(self) -> None:
         api.load_state(self.state_id, self.fresh_root("load"), hidden_root=self.hidden)

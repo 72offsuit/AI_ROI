@@ -22,6 +22,7 @@ from src.measurement import sink as _sk
 from src.simulator._internal import behavior as _behavior
 from src.simulator._internal import clock as _clock
 from src.simulator._internal import engine as _engine
+from src.simulator._internal import genconfig as _genconfig
 from src.simulator._internal import lineage as _lineage
 from src.simulator._internal import profiles as _profiles
 from src.simulator._internal import runtime as _runtime
@@ -78,7 +79,7 @@ class SnapshotError(SimulatorError):
 
 
 class StateFormatError(SimulatorError):
-    """저장 상태를 읽을 수 없거나 구조가 틀렸거나 판(`format_version`·`rng_scheme`·`simulator_version`)이 다르다."""
+    """저장 상태를 읽을 수 없거나 구조가 틀렸거나 판(`format_version`·`rng_scheme`·`simulator_version`·생성 설정)이 다르다."""
 
 
 class AssignmentError(SimulatorError):
@@ -120,6 +121,7 @@ def init(
         TypeError: 인자 타입이 틀렸다(`bool` 포함).
         ValueError: 범위 밖이거나 모르는 profile.
         OutputRootError: `output_root` 가 비어 있지 않다.
+        SimulatorError: 생성 설정을 읽을 수 없거나 형식이 틀렸다.
     """
     _check_int("seed", seed, 0, _wd.SEED_LIMIT - 1)
     _check_int("num_customers", num_customers, 1, _wd.MAX_CUSTOMERS)
@@ -130,9 +132,12 @@ def init(
     root = _root("output_root", output_root)
     hidden = _hidden_root(hidden_root)
     _require_empty(root)
+    try:
+        world = _wd.new_world(seed, num_customers, profile)
+    except _genconfig.ConfigError as error:
+        raise SimulatorError(_CONFIG_UNUSABLE) from error
     _runtime.activate(
-        _runtime.Session(_wd.new_world(seed, num_customers, profile), hidden, root, None, None),
-        drop_snapshots=True,
+        _runtime.Session(world, hidden, root, None, None), drop_snapshots=True
     )
 
 
@@ -179,7 +184,7 @@ def advance(days: int) -> RunSummary:
             )
         fmt = _lineage.write_format(root)
     start_bytes = _wd.encode(world)
-    working = _wd.decode(start_bytes)
+    working = _decode_own(start_bytes)
     try:
         sink = _sk.EventSink(root, fmt=fmt)
         written = sink.write_events(_engine.run(working, end_ms))
@@ -261,6 +266,7 @@ def restore(snap: str, *, output_root: str | os.PathLike[str]) -> None:
         SnapshotError: 모르는 토큰이거나 활성 세계의 토큰이 아니다.
         OutputRootError: `output_root` 가 비어 있지 않거나 계보 기록이 사라졌다.
         SinkFormatError: 이어받을 계보의 저장 형식을 이 런타임이 읽을 수 없다. 아무것도 바꾸지 않는다.
+        SimulatorError: 생성 설정이 같은 프로세스 안에서 바뀌어 토큰의 상태를 다시 읽을 수 없다.
     """
     if not isinstance(snap, str):
         raise TypeError(f"snap 은 str 이어야 한다 (받음: {type(snap).__name__})")
@@ -275,7 +281,7 @@ def restore(snap: str, *, output_root: str | os.PathLike[str]) -> None:
     _require_lineage_readable(session.hidden_root, entry.lineage_head)
     _runtime.activate(
         _runtime.Session(
-            _wd.decode(entry.data), session.hidden_root, root, None, entry.lineage_head,
+            _decode_own(entry.data), session.hidden_root, root, None, entry.lineage_head,
             [dict(mutation) for mutation in entry.pending],
         ),
         drop_snapshots=False,
@@ -478,6 +484,8 @@ def load_state(
         canonical = _wd.encode(world)
     except _wd.IncompatibleState as error:
         raise StateFormatError(f"상태 {state_id} 의 판을 읽지 않는다: {error}") from error
+    except _genconfig.ConfigError as error:
+        raise StateFormatError(f"상태 {state_id} 를 검증하지 못했다 — {_CONFIG_UNUSABLE}") from error
     except ValueError as error:
         raise StateFormatError(f"상태 {state_id} 가 손상됐다: {error}") from error
     state_digest = _wd.digest(data)
@@ -519,6 +527,25 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
         "detail": "S4(#78) 전까지 주문을 생성하지 않는다",
         "path": None,
     }
+
+
+# config 오류의 자세한 사유(키·모수 값·페르소나 id)는 __cause__ 에만 둔다. 공개 메시지에는 숨은 필드의
+# 이름과 값을 싣지 않는다(docs/persona_spec.md 5.3).
+_CONFIG_UNUSABLE = (
+    f"생성 설정 {_genconfig.CONFIG_NAME} 을 쓸 수 없다 — 읽을 수 없거나 계약을 어겼다. "
+    "자세한 사유는 원인 예외(__cause__)에 있다"
+)
+
+
+def _decode_own(data: bytes) -> dict[str, object]:
+    """이 프로세스가 만든 상태를 다시 읽는다. config 는 프로세스 수명 동안 불변이 계약이라 실패는
+    그 계약이 깨졌다는 뜻이다. 내부 예외 대신 공개 예외로 알린다."""
+    try:
+        return _wd.decode(data)
+    except (_wd.IncompatibleState, _genconfig.ConfigError) as error:
+        raise SimulatorError(
+            "활성 세계를 만든 생성 설정이 지금 설정과 다르다 — 생성 설정은 프로세스 수명 동안 바꾸지 않는다"
+        ) from error
 
 
 @_contextlib.contextmanager
