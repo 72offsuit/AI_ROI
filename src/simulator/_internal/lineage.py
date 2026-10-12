@@ -174,6 +174,7 @@ class Verifier:
         by_root: dict[str, list[dict[str, object]]] = {}
         for record in records:
             by_root.setdefault(str(record["output_root"]), []).append(record)
+            _require_current_generation(record)
             base = previous_end if record["parent_run_id"] is not None else wd.initial_digest(
                 record["seed"], record["num_customers"], str(record["profile"])
             )
@@ -186,9 +187,22 @@ class Verifier:
     def derivation_base(self, record: dict[str, object], world: dict[str, object]) -> object:
         parent = record.get("parent_run_id")
         if parent is None:
+            if record.get("world_id") != world["world_id"]:
+                raise LineageBroken(_GENERATION_CHANGED)
             return wd.initial_digest(world["seed"], world["num_customers"], str(world["profile"]))
         chain = self.chain(str(parent))
         return chain[-1]["end_state_digest"]
+
+
+_GENERATION_CHANGED = "생성 설정이 이 계보를 만든 설정과 다르다"
+
+
+def _require_current_generation(record: dict[str, object]) -> None:
+    # world_id 는 생성 config 다이제스트를 담는다. 기준 상태를 다시 만들기 전에 대조해야
+    # config 변경을 "변조"(다이제스트 사슬 불일치)로 오진하지 않는다.
+    expected = wd.current_world_id(record["seed"], record["num_customers"], str(record["profile"]))
+    if record.get("world_id") != expected:
+        raise LineageBroken(_GENERATION_CHANGED)
 
 
 def _member_files(root: Path, members: list[dict[str, object]]) -> dict[str, list[Path]]:
