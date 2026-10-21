@@ -127,6 +127,24 @@ SD·Q 선택은 유지한다. #126 공유 시간 계약·final_refit·실제 입
 
 독립 검토 원시 로그 30_probe_full.log(SHA-256 94485896fcb9877d20fbc0e72bdfa18d8c3c41671bddbc0e442ca9a62d690585)를 재집계했다. HL01/02/03/04의 PASS는 52/91/56/52로 합 251이고, 별도 RESIDUAL 1 PASS를 합친 값이 252다. 별도 SIDE-TS 2 PASS·4 FAIL까지 포함한 원시 로그 전체를 252/252 PASS로 표시하지 않는다. 과거 로그 재집계이며 이번 시험 실행 수가 아니다. 현재 정상 fixture의 R=eb256f17f08acbd09e4f257d2cbe397e5f1117a0c5ec2a140df34494d4e82724, V=f0817f8f5c6f4450139469273f5be15446cab42b42e9586cd85d8138bb62f38c는 이번 시간 정규화 추가 수정에서도 유지됨을 실제 로더로 확인했다.
 
+### 2026-10-22 · #133 X-1 — instant의 UTC 범위 오류
+
+착수 HEAD는 0426b95cce098c04651a5712f561eac7d3457582다. 이전 HL·#131 F-1–F-3의 9개 파일은 이 커밋에 포함됐으며, 위 과거 “미커밋” 설명은 작성 당시 기록이다. 현재 #133·#134 본문/댓글과 독립 재검토 X-1/X-2를 대조했다. 수정 전 3.12.13·3.14.6에서 범위 초과 문자열과 aware datetime 각 2개가 instant에서는 OverflowError, timestamp에서는 원인 OverflowError를 가진 D1ContractError가 됨을 확인했다. 입력 자체는 두 경우 모두 거부된다.
+
+| 대안 | 판단·근거 | 반증 조건 |
+|---|---|---|
+| instant의 UTC 변환 한 호출에서 OverflowError만 D1ContractError로 연결 | 선택. 실제 UTC 범위 초과만 명시적 계약 오류로 보고하고 원인 예외를 유지 | 범위 초과가 OverflowError로 유출되거나 원인 사슬이 사라짐 |
+| 전체 함수에서 Exception/ValueError까지 포괄 변환 | 기각. 달력 오류·다른 실제 결함까지 UTC 범위 문제로 숨길 수 있음 | 무효 달력과 UTC 변환 초과가 구분되지 않거나 RuntimeError가 계약 오류로 바뀜 |
+| timestamp에 위임하거나 날짜/순간을 유효 범위로 보정 | 기각. 기존 datetime subclass 정책을 바꾸거나 다른 값을 만들어 수용 | 기존 타입 처리 차이·정상 순간·TLV가 달라짐 |
+
+instant의 마지막 astimezone 호출만 try/except OverflowError로 감싸고 `raise D1ContractError("timestamp outside supported UTC range") from exc`로 원인을 잇는다. 문자열 파서·형식·정밀도·datetime 허용 판단은 그대로다. timestamp·측정 파서·공개 계약은 수정하지 않는다. #134 날짜 문자열 입력은 별도 제안/선택 전까지 현행 동작을 유지한다.
+
+반례는 문자열/aware datetime의 하한·상한 UTC 초과, evidence_body의 claim·gap·as_of·발행 시각 경로를 포함한다. 정상 UTC 최솟값/최댓값과 ±23:59 오프셋, 독립 epoch microseconds/TLV, 달력 자체의 오류, 비관련 예외 전파를 대조한다. 기존 정상 fixture R/S/V와 의미 hash·기존 HL 회귀를 유지한다. 이번 수정은 오류 타입과 원인 사슬만 바꾸므로 TLV/hash/계약 버전은 바꾸지 않는다.
+
+실행 기록은 새 plans/D1-utc-range-date-policy-review-20261022.md 및 대응 verification 로그에 남긴다. 기존 보고서·로그·SD/Q 선택은 보존한다. 검증 후 #133 코드·시험·이 기록과 #134 제안 문서를 현재 브랜치의 별도 커밋으로 나누며 plans·사용자 변경은 제외한다. 커밋은 독립 재검토·이슈 종료·출하 승인이 아니고 푸시는 금지다. #126·실제 입력·final_refit·모델·Store·CURRENT·소유 등록·3.10 실제 검증은 별도다.
+
+실제 검증: 3.12.13·3.14.6의 신규 5개 시험은 수정 전 ERROR 12건(하위 사례 포함)으로 UTC 예외 유출을 확인했고 수정 후 5 PASS다. 최종 3.12 의존성 hash/로더 84 PASS, 계산·세션·시퀀스·품질 81 PASS, 전체 960개 중 957 PASS·3 SKIP·FAIL/ERROR 0이다. 무의존 3.12 전체는 798 PASS·162 SKIP·FAIL/ERROR 0, 무의존 3.14 D1 7모듈은 105 PASS·60 SKIP·FAIL/ERROR 0이다. 정상 fixture R/S/V와 세 테이블 의미 hash는 시작 기준과 같다. 소유 검사 미등록 10건 FAIL과 3.10 실행기 부재 BLOCKED는 남는다. calendar_date 소스와 ASCII·아랍·전각·혼합 날짜의 기존 동작은 바꾸지 않았다. #134 제안은 별도 DR-D1-date-input-policy.md에 기록하며 선택 대기다.
+
 ## 기각한 안과 기각 사유
 
 | 안 | 사유 |

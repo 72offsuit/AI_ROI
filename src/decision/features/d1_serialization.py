@@ -61,7 +61,10 @@ def instant(value: str | datetime) -> datetime:
             raise D1ContractError("invalid timestamp") from exc
     require(isinstance(value, datetime) and value.utcoffset() is not None,
             "timestamp must be offset-aware")
-    return value.astimezone(timezone.utc)
+    try:
+        return value.astimezone(timezone.utc)
+    except OverflowError as exc:
+        raise D1ContractError("timestamp outside supported UTC range") from exc
 
 
 def calendar_date(value: str | date) -> date:

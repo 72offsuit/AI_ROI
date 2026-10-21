@@ -1,5 +1,6 @@
 import hashlib
 import unittest
+from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 from unittest.mock import patch
 
@@ -10,6 +11,80 @@ from src.decision.features.d1_serialization import (
 
 
 class SerializationTests(unittest.TestCase):
+    def test_133_UTC_overflow_strings_and_datetimes_preserve_cause(self):
+        from src.decision.features.d1_feature_inputs import timestamp
+
+        values = ("0001-01-01T00:00:00+09:00", "9999-12-31T23:59:59-01:00",
+                  datetime(1, 1, 1, tzinfo=timezone(timedelta(hours=9))),
+                  datetime(9999, 12, 31, 23, 59, 59, tzinfo=timezone(timedelta(hours=-1))))
+        for fn in (instant, timestamp):
+            for value in values:
+                with self.subTest(fn=fn.__name__, value=value):
+                    with self.assertRaisesRegex(D1ContractError, "timestamp outside supported UTC range") as cm:
+                        fn(value)
+                    self.assertIsInstance(cm.exception.__cause__, OverflowError)
+
+    def test_133_valid_UTC_limits_and_offset_limits_keep_literal_TLV(self):
+        from src.decision.features.d1_feature_inputs import timestamp
+
+        # Independent Gregorian epoch limits, not computed by the function under test.
+        cases = (("0001-01-01T00:00:00Z", -62135596800000000),
+                 ("0001-01-01T23:59:00+23:59", -62135596800000000),
+                 ("9999-12-31T23:59:59.999999Z", 253402300799999999),
+                 ("9999-12-31T00:00:59.999999-23:59", 253402300799999999))
+        for fn in (instant, timestamp):
+            for value, micros in cases:
+                with self.subTest(fn=fn.__name__, value=value):
+                    expected = bytes.fromhex("070000000000000008") + micros.to_bytes(8, "big", signed=True)
+                    self.assertEqual(tlv(fn(value)), expected)
+            self.assertEqual(semantic_hash("utc-limit", fn(cases[0][0])),
+                             semantic_hash("utc-limit", fn(cases[1][0])))
+            self.assertEqual(semantic_hash("utc-limit", fn(cases[2][0])),
+                             semantic_hash("utc-limit", fn(cases[3][0])))
+
+    def test_133_invalid_calendar_is_not_reported_as_UTC_overflow(self):
+        for value in ("0000-01-01T00:00:00Z", "2026-02-29T00:00:00Z", "9999-12-32T00:00:00Z"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(D1ContractError, "^invalid timestamp$") as cm:
+                    instant(value)
+                self.assertIsInstance(cm.exception.__cause__, ValueError)
+                self.assertNotIsInstance(cm.exception.__cause__, OverflowError)
+
+    def test_133_evidence_paths_report_UTC_contract_error(self):
+        from src.decision.features.d1_semantics import evidence_body
+
+        low, high = "0001-01-01T00:00:00+09:00", "9999-12-31T23:59:59-01:00"
+        base = dict(provider="fixture", provider_role="fixture", contract_version="fixture/1",
+            source="synthetic", entity_namespace="fixture", entities=[dict(entity_namespace="fixture",
+                source="synthetic", customer_id="a")], claims=[dict(event_types=["VIEW"], capability="fixture",
+                start="2026-09-01T00:00:00Z", end="2026-10-20T00:00:00Z", state="complete", gaps=[],
+                availability_basis=dict(as_of="2026-10-19T15:00:00Z", rule="fixture-available"),
+                ordering="explicit", session_completion="explicit")])
+        for path, value in (("start", low), ("end", high), ("as_of", low), ("as_of", high),
+                            ("gap_start", low), ("gap_end", high),
+                            ("asserted_at", low), ("assessed_at", high)):
+            with self.subTest(path=path, value=value):
+                evidence = deepcopy(base)
+                claim = evidence["claims"][0]
+                if path in ("start", "end"): claim[path] = value
+                elif path == "as_of": claim["availability_basis"][path] = value
+                elif path == "gap_start": claim["gaps"] = [dict(start=value, end=claim["end"])]
+                elif path == "gap_end": claim["gaps"] = [dict(start=claim["start"], end=value)]
+                else:
+                    field = "ordering" if path == "asserted_at" else "session_completion"
+                    claim[field] = dict(rule="explicit", **{path: value})
+                with self.assertRaisesRegex(D1ContractError, "timestamp outside supported UTC range") as cm:
+                    evidence_body(evidence)
+                self.assertIsInstance(cm.exception.__cause__, OverflowError)
+
+    def test_133_non_overflow_exceptions_are_not_hidden(self):
+        class BrokenDatetime(datetime):
+            def astimezone(self, tz=None):
+                raise RuntimeError("fixture unrelated defect")
+
+        with self.assertRaisesRegex(RuntimeError, "fixture unrelated defect"):
+            instant(BrokenDatetime(2026, 10, 20, tzinfo=timezone.utc))
+
     def test_131_F1_both_parsers_receive_exact_six_digit_fraction(self):
         from src.decision.features.d1_feature_inputs import timestamp
         from src.measurement.timeparse import parse_datetime
