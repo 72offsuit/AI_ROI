@@ -1,4 +1,5 @@
 from copy import deepcopy
+from datetime import date
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
@@ -10,6 +11,40 @@ from tests.test_feature_d1_fixtures import Fixture, PARQUET_AVAILABLE
 
 
 class PureScopeTests(unittest.TestCase):
+    def test_134_key_checks_text_dates_and_preserves_ASCII_date_equivalence(self):
+        row = dict(entity_namespace="fixture", source="synthetic", customer_id="a", index_date="2026-10-20")
+        expected = dict(row, index_date=date(2026, 10, 20))
+        self.assertEqual(s.key(row), expected)
+        self.assertEqual(s.key(expected), expected)
+        for value in ("٢٠٢٦-١٠-٢٠", "２０２６-１０-２０",
+                      "".join(chr(0x10D40 + digit) for digit in (2, 0, 2, 6)) + "-10-20"):
+            with self.subTest(value=ascii(value)), self.assertRaisesRegex(D1ContractError, "^invalid date syntax$"):
+                s.key(dict(row, index_date=value))
+
+    def test_134_split_row_assignments_validate_dates_before_scope_selection(self):
+        row = dict(entity_namespace="fixture", source="synthetic", customer_id="a", index_date="2026-10-20")
+        split = dict(split_contract_version="fixture-split/1", role_definition_version="fixture-roles/1",
+            split_policy=dict(version="fixture", method="fixture", seed=7, parameters={}),
+            entity_assignments=[dict(**s.entity(row), role="Train")],
+            row_assignments=[dict(**row, consumer="D2", fit_phase="cv", fold_id="fold-1", role="Train",
+                                  excluded=False, reason=None)])
+        baseline = s.split_body(split)
+        self.assertEqual(baseline["row_assignments"][0]["index_date"], date(2026, 10, 20))
+        object_dates = deepcopy(split)
+        object_dates["row_assignments"][0]["index_date"] = date(2026, 10, 20)
+        self.assertEqual(semantic_hash("split-assignments", baseline),
+                         semantic_hash("split-assignments", s.split_body(object_dates)))
+        for value in ("٢٠٢٦-١٠-٢٠", "２０２６-１０-２０",
+                      "".join(chr(0x10D40 + digit) for digit in (2, 0, 2, 6)) + "-10-20"):
+            altered = deepcopy(split)
+            altered["row_assignments"][0]["index_date"] = value
+            with self.subTest(value=ascii(value)):
+                with self.assertRaisesRegex(D1ContractError, "^invalid date syntax$"):
+                    s.split_body(altered)
+                with self.assertRaisesRegex(D1ContractError, "^invalid date syntax$"):
+                    s.scopes(altered, "D2", "cv", "fold-1",
+                             dict(input_definition="all_train_rows", target_definition=None))
+
     def test_scope_selection_runs_without_parquet(self):
         keys = [dict(entity_namespace="fixture", source="synthetic", customer_id=cid,
                      index_date="2026-10-20") for cid in ("a", "c")]

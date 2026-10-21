@@ -11,6 +11,68 @@ from src.decision.features.d1_serialization import (
 
 
 class SerializationTests(unittest.TestCase):
+    def test_134_ASCII_calendar_limits_keep_independent_TLV_and_hash(self):
+        def frame(tag, payload):
+            return bytes([tag]) + len(payload).to_bytes(8, "big") + payload
+
+        def string(value):
+            return frame(5, value.encode("ascii"))
+
+        for value, expected in (("2026-10-20", date(2026, 10, 20)),
+                                ("2024-02-29", date(2024, 2, 29)),
+                                ("2000-02-29", date(2000, 2, 29)),
+                                ("0001-01-01", date.min), ("9999-12-31", date.max)):
+            with self.subTest(value=value):
+                result = calendar_date(value)
+                payload = frame(6, value.encode("ascii"))
+                envelope = frame(9, string("body") + payload + string("domain") + string("date-golden") +
+                                 string("serialization") + string("d1-semantic/2-proposed"))
+                self.assertEqual(result, expected)
+                self.assertEqual(tlv(result), payload)
+                self.assertEqual(semantic_hash("date-golden", result), hashlib.sha256(envelope).hexdigest())
+                self.assertEqual(tlv(result), tlv(expected))
+
+    def test_134_non_ASCII_digits_rejected_before_integer_conversion(self):
+        variants = ["٢٠٢٦-١٠-٢٠", "２０２６-１０-２０", "२०२६-१०-२०", "٢٠2６-1٠-２０"]
+        garay = "".join(chr(0x10D40 + digit) for digit in (2, 0, 2, 6))
+        variants += [garay + "-10-20", "2026-1٠-20", "2026-10-2０"]
+        for value in variants:
+            with self.subTest(value=ascii(value)), patch(
+                    "src.decision.features.d1_serialization.int", wraps=int, create=True) as convert:
+                with self.assertRaisesRegex(D1ContractError, "^invalid date syntax$"):
+                    calendar_date(value)
+                convert.assert_not_called()
+
+    def test_134_whitespace_separators_width_and_time_are_not_normalized(self):
+        variants = (" 2026-10-20", "2026-10-20 ", "\t2026-10-20", "2026-10-20\t",
+                    "\n2026-10-20", "2026-10-20\n", "2026/10/20", "2026－10－20", "2026–10–20",
+                    "2026-1-20", "2026-10-2", "2026-010-20", "02026-10-20", "202-10-20",
+                    "2026-10-20T00:00:00Z", "2026-10-20 00:00:00", "")
+        for value in variants:
+            with self.subTest(value=ascii(value)), self.assertRaisesRegex(D1ContractError, "^invalid date syntax$"):
+                calendar_date(value)
+
+    def test_134_invalid_calendar_keeps_ValueError_cause(self):
+        for value in ("2026-02-29", "1900-02-29", "2024-02-30", "2026-00-01", "2026-13-01",
+                      "2026-01-00", "2026-01-32", "2026-04-31", "0000-01-01"):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(D1ContractError, "^invalid calendar date$") as cm:
+                    calendar_date(value)
+                self.assertIsInstance(cm.exception.__cause__, ValueError)
+
+    def test_134_exact_date_and_existing_type_boundary(self):
+        class DerivedDate(date):
+            pass
+
+        for value in (date.min, date(2024, 2, 29), date.max):
+            self.assertIs(calendar_date(value), value)
+        for value in (datetime(2026, 10, 20), datetime(2026, 10, 20, tzinfo=timezone.utc),
+                      DerivedDate(2026, 10, 20), 20261020, 1.0, True, None, b"2026-10-20", [], {}):
+            with self.subTest(value=value):
+                with self.assertRaisesRegex(D1ContractError,
+                        "^date requires YYYY-MM-DD text or an exact date object$"):
+                    calendar_date(value)
+
     def test_133_UTC_overflow_strings_and_datetimes_preserve_cause(self):
         from src.decision.features.d1_feature_inputs import timestamp
 

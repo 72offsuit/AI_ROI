@@ -145,6 +145,10 @@ instant의 마지막 astimezone 호출만 try/except OverflowError로 감싸고 
 
 실제 검증: 3.12.13·3.14.6의 신규 5개 시험은 수정 전 ERROR 12건(하위 사례 포함)으로 UTC 예외 유출을 확인했고 수정 후 5 PASS다. 최종 3.12 의존성 hash/로더 84 PASS, 계산·세션·시퀀스·품질 81 PASS, 전체 960개 중 957 PASS·3 SKIP·FAIL/ERROR 0이다. 무의존 3.12 전체는 798 PASS·162 SKIP·FAIL/ERROR 0, 무의존 3.14 D1 7모듈은 105 PASS·60 SKIP·FAIL/ERROR 0이다. 정상 fixture R/S/V와 세 테이블 의미 hash는 시작 기준과 같다. 소유 검사 미등록 10건 FAIL과 3.10 실행기 부재 BLOCKED는 남는다. calendar_date 소스와 ASCII·아랍·전각·혼합 날짜의 기존 동작은 바꾸지 않았다. #134 제안은 별도 DR-D1-date-input-policy.md에 기록하며 선택 대기다.
 
+### 2026-10-22 · #134 — A안 승인 후 날짜 입력 guard
+
+위 #133 절의 calendar_date 미변경·#134 선택 대기는 당시 기록이다. 이후 광진이 A안을 명시적으로 승인해 날짜 문자열을 ASCII YYYY-MM-DD로 제한한다. 선택·B-1 Unicode DB 의존성·호환성·실행 기록의 정본은 [DR-D1-date-input-policy.md](DR-D1-date-input-policy.md)다. 로컬 입력 정책은 d1-date-input/1-ascii이며 새 manifest 필드를 추가하지 않는다. 정상 date/tag 06·의미 투영이 같으므로 d1-semantic/2-proposed와 정상 R/S/V를 유지하고, 정확한 파일·부모·split·객체 pin은 완화하지 않는다. #133 UTC 범위 처리와 #131 시간 정규화는 변경하지 않는다. 공유 계약 수락·실제 입력 인수·#126·소유 등록·3.10 검증 완료를 뜻하지 않는다.
+
 ## 기각한 안과 기각 사유
 
 | 안 | 사유 |

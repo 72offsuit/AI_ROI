@@ -31,6 +31,42 @@ class LoaderTests(unittest.TestCase):
         self.assertEqual(bundle.view_semantic_hash, self.fixture.vh)
         self.assertEqual(len(bundle.rows["features"]), 2)
 
+    def test_134_ASCII_bundle_keeps_recorded_semantic_hashes(self):
+        result = load_bundle(self.fixture.root, "manifest.json", self.fixture.expected)
+        # Fixed baseline from the independently reviewed pre-policy fixture.
+        self.assertEqual(result.raw_bundle_semantic_hash,
+                         "eb256f17f08acbd09e4f257d2cbe397e5f1117a0c5ec2a140df34494d4e82724")
+        self.assertEqual(result.split_semantic_hash,
+                         "8be11f64934eaa781fe507ad7566a84f226da289ff542202c31b377bb1859c3f")
+        self.assertEqual(result.view_semantic_hash,
+                         "f0817f8f5c6f4450139469273f5be15446cab42b42e9586cd85d8138bb62f38c")
+        self.assertEqual(result.value_sha256, dict(
+            features="dae799832c4a3eb5f94cf302388988fcf45ecc34150da1fd70eefbc1413bb9fb",
+            quality="30bc210b8d561a3021f91ecba8bd5c151a525e0a0437a2e3817c319d56aded75",
+            sequence="39585c841c04b67b171940e6403f7c205f945c46a3d7b0b566c3b179b5b82503"))
+
+    def test_134_resealed_non_ASCII_split_reaches_date_guard(self):
+        variants = ("٢٠٢٦-١٠-٢٠", "２０２６-１０-２０",
+                    "".join(chr(0x10D40 + digit) for digit in (2, 0, 2, 6)) + "-10-20")
+        for index, value in enumerate(variants):
+            with self.subTest(value=ascii(value)):
+                f = Fixture(self.fixture.root / f"date-{index}")
+                baseline = load_bundle(f.root, "manifest.json", f.expected)
+                requested_split = f.expected.split_semantic_hash
+                old_pin = f.expected.split_manifest_sha256
+                f.amend("split.json", lambda d: d["row_assignments"][0].update(index_date=value))
+                # Equivalent pre-policy dates: semantic claims stay frozen. Only
+                # exact byte references are resealed, including training_split.
+                f.refresh_physical()
+                self.assertNotEqual(f.expected.split_manifest_sha256, old_pin)
+                self.assertEqual(f.expected.split_semantic_hash, requested_split)
+                self.assertEqual(f.read_json("descriptor.json")["view_semantic_hash"], baseline.view_semantic_hash)
+                self.assertEqual(f.read_json("split.json")["row_assignments"][0]["index_date"], value)
+                with patch.object(s, "calendar_date", wraps=s.calendar_date) as guard:
+                    with self.assertRaisesRegex(D1ContractError, "^invalid date syntax$"):
+                        load_bundle(f.root, "manifest.json", f.expected)
+                    guard.assert_any_call(value)
+
     def test_HL01_fully_resealed_fake_first_gap_reaches_position_guard(self):
         class FirstGapFixture(Fixture):
             def write_tables(self, prefix, rows, view):

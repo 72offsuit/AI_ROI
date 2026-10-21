@@ -69,12 +69,12 @@ def instant(value: str | datetime) -> datetime:
 
 def calendar_date(value: str | date) -> date:
     if isinstance(value, str):
-        require(bool(re.fullmatch(r"\d{4}-\d{2}-\d{2}", value)), "invalid date syntax")
+        require(bool(re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", value)), "invalid date syntax")
         try:
             value = date(*map(int, value.split("-")))
         except ValueError as exc:
             raise D1ContractError("invalid calendar date") from exc
-    require(type(value) is date, "date must not contain a time")
+    require(type(value) is date, "date requires YYYY-MM-DD text or an exact date object")
     return value
 
 
