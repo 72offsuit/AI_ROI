@@ -25,6 +25,93 @@ class PureScopeTests(unittest.TestCase):
                 self.assertEqual({row["customer_id"] for row in fit["rows"]}, expected)
 
 
+class EvidenceAndGapTests(unittest.TestCase):
+    """Literal logical inputs: these checks also execute without pyarrow."""
+
+    def setUp(self):
+        self.key = dict(entity_namespace="fixture", source="synthetic", customer_id="a",
+                        index_date="2026-10-20")
+        self.schema = dict(schema_version="fixture/1", features=[], key_definition=list(s.KEY),
+                           tokens=["PAD", "VIEW"], feature_order=[])
+        self.evidence = dict(provider="fixture", provider_role="fixture", contract_version="fixture/1",
+            source="synthetic", entity_namespace="fixture", entities=[s.entity(self.key)],
+            claims=[dict(event_types=["VIEW"], capability="fixture", start="2026-09-01T00:00:00Z",
+                end="2026-10-20T00:00:00Z", state="complete", gaps=[],
+                availability_basis=dict(as_of="2026-10-19T15:00:00Z", rule="fixture-available"),
+                ordering="explicit", session_completion="explicit")])
+
+    def sequence(self, length=1, state="VALID", gaps=None):
+        return dict(**self.key, state=state, length=length, tokens=["PAD"]*(30-length)+["VIEW"]*length,
+            mask=[False]*(30-length)+[True]*length,
+            relative_gap_ms=[None]*30 if gaps is None else gaps,
+            gap_mask=[False]*(31-length)+[True]*max(0, length-1) if length else [False]*30,
+            claim_indices=[0])
+
+    def logical(self, row):
+        return s.table_rows("sequence", [row], self.schema, self.evidence)[0]
+
+    def test_HL01_null_padding_first_and_real_zero_are_distinct(self):
+        for length, tail in ((1, []), (2, [0]), (3, [1250, 750]), (30, [1]*29)):
+            row = self.sequence(length, gaps=[None]*(31-length)+tail)
+            result = self.logical(row)
+            self.assertEqual(result["relative_gap_ms"], [None]*(31-length)+tail)
+            self.assertEqual(result["gap_mask"], [False]*(31-length)+[True]*(length-1))
+        for state, length in (("EMPTY_COMPLETE", 0), ("UNKNOWN", 0), ("UNKNOWN", 1)):
+            self.assertEqual(self.logical(self.sequence(length, state))["relative_gap_ms"], [None]*30)
+
+    def test_HL01_invalid_positions_types_lengths_and_masks_rejected(self):
+        changes = [dict(relative_gap_ms=[None]*29+[100], gap_mask=[False]*29+[True]),
+            dict(relative_gap_ms=[0]+[None]*28+[5]),
+            dict(relative_gap_ms=[None]*29+[-1]), dict(relative_gap_ms=[None]*29+[1.0]),
+            dict(relative_gap_ms=[None]*29+[True]), dict(relative_gap_ms=[None]*29+["1"]),
+            dict(relative_gap_ms=[None]*30), dict(gap_mask=[False]*30),
+            dict(relative_gap_ms=[None]*29), dict(mask=[False]*30),
+            dict(gap_mask=[False]*28+[1, True]), dict(tokens=["PAD"]*30)]
+        for change in changes:
+            with self.subTest(change=change):
+                row = self.sequence(2, gaps=[None]*29+[5])
+                row.update(change)
+                # A separate one-event row is required for the fake first-gap attack.
+                if change.get("relative_gap_ms") == [None]*29+[100]:
+                    row.update(length=1, tokens=["PAD"]*29+["VIEW"], mask=[False]*29+[True])
+                with self.assertRaises(D1ContractError): self.logical(row)
+
+    def test_HL02_closed_publication_projection_preserves_existing_explicit_meaning(self):
+        expected = s.evidence_body(self.evidence)
+        for field in ("ordering", "session_completion"):
+            for stamp in ("2026-10-20T01:00:00Z", "2026-10-20T02:00:00Z"):
+                altered = deepcopy(self.evidence)
+                altered["claims"][0][field] = dict(rule="explicit", asserted_at=stamp, assessed_at=stamp)
+                self.assertEqual(s.evidence_body(altered), expected)
+                self.assertEqual(semantic_hash("observation-claims", s.evidence_body(altered)),
+                                 semantic_hash("observation-claims", expected))
+
+    def test_HL02_unsupported_or_malformed_evidence_is_not_silently_discarded(self):
+        variants = ("event_id_sort", None, [], {}, {"rule": "other"},
+            {"rule": "explicit", "asserted_at": "2026-10-20T00:00:00+09:60"},
+            {"rule": "explicit", "asserted_at": None},
+            {"rule": "explicit", "ordinal": [1, 2]},
+            {"rule": "explicit", "ended_at": "2026-10-19T01:00:00Z"},
+            {"rule": "explicit", "availability_basis": {"as_of": "2026-10-19T01:00:00Z"}},
+            {"rule": "explicit", "path": "proof.json"})
+        for field in ("ordering", "session_completion"):
+            for value in variants:
+                with self.subTest(field=field, value=value):
+                    altered = deepcopy(self.evidence)
+                    altered["claims"][0][field] = value
+                    with self.assertRaises(D1ContractError): s.evidence_body(altered)
+
+    def test_HL02_actual_availability_and_completion_claim_are_semantic(self):
+        baseline = semantic_hash("observation-claims", s.evidence_body(self.evidence))
+        for field in ("as_of", "state"):
+            altered = deepcopy(self.evidence)
+            if field == "as_of":
+                altered["claims"][0]["availability_basis"]["as_of"] = "2026-10-19T15:00:00.000001Z"
+            else:
+                altered["claims"][0]["state"] = "incomplete"
+            self.assertNotEqual(semantic_hash("observation-claims", s.evidence_body(altered)), baseline)
+
+
 @unittest.skipUnless(PARQUET_AVAILABLE, "BLOCKED: pyarrow 미설치 — Parquet 묶음 의미 hash 시험")
 class SemanticTests(unittest.TestCase):
     def setUp(self):
@@ -44,6 +131,69 @@ class SemanticTests(unittest.TestCase):
         self.assertEqual((a.raw_bundle_semantic_hash, a.split_semantic_hash, a.view_semantic_hash, a.value_sha256),
                          (b.raw_bundle_semantic_hash, b.split_semantic_hash, b.view_semantic_hash, b.value_sha256))
         self.assertNotEqual(a.view_descriptor_sha256, b.view_descriptor_sha256)
+
+    def test_HL02_publication_only_changes_exact_pins_not_raw_view_or_results(self):
+        for field in ("ordering", "session_completion"):
+            class PublicationFixture(Fixture):
+                stamp = ""
+
+                def write_raw(self, prefix, rows, generation):
+                    self.evidence["claims"][0][field] = dict(rule="explicit",
+                        asserted_at=self.stamp, assessed_at=self.stamp)
+                    return super().write_raw(prefix, rows, generation)
+
+            PublicationFixture.stamp = "2026-10-20T01:00:00Z"
+            a = PublicationFixture(Path(self.temp.name) / (field+"-a"))
+            PublicationFixture.stamp = "2026-10-20T02:00:00Z"
+            b = PublicationFixture(Path(self.temp.name) / (field+"-b"))
+            self.same_meaning(a, b)
+            for role in ("encoder", "cluster"):
+                self.assertEqual(a.hash(f"objects/{role}.bin"), b.hash(f"objects/{role}.bin"))
+            for path in ("raw-a/evidence.json", "raw-a/manifest.json", "descriptor.json", "manifest.json"):
+                self.assertNotEqual(a.hash(path), b.hash(path))
+            # The newly assembled bundle is valid, but it cannot impersonate A's exact parent.
+            from dataclasses import replace
+            with self.assertRaisesRegex(D1ContractError, "requested raw parent mismatch"):
+                load_bundle(b.root, "manifest.json", replace(b.expected,
+                    raw_bundle_manifest_sha256=a.expected.raw_bundle_manifest_sha256))
+
+    def test_HL02_actual_availability_changes_raw_view_results_with_fixed_objects(self):
+        class AvailabilityFixture(Fixture):
+            def write_raw(self, prefix, rows, generation):
+                self.evidence["claims"][0]["availability_basis"]["as_of"] = "2026-10-19T15:00:00.000001Z"
+                return super().write_raw(prefix, rows, generation)
+
+        a = self.fixture()
+        b = AvailabilityFixture(Path(self.temp.name) / "actual-availability")
+        first, second = self.load(a), self.load(b)
+        self.assertNotEqual(first.raw_bundle_semantic_hash, second.raw_bundle_semantic_hash)
+        self.assertNotEqual(first.view_semantic_hash, second.view_semantic_hash)
+        for kind in s.TABLES:
+            self.assertNotEqual(first.value_sha256[kind], second.value_sha256[kind])
+        for role in ("encoder", "cluster"):
+            self.assertEqual(a.hash(f"objects/{role}.bin"), b.hash(f"objects/{role}.bin"))
+
+    def test_HL04_float32_scalar_vector_parquet_roundtrip_has_identical_semantics(self):
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+        from src.decision.features.d1_serialization import Float32, tlv
+        from io import BytesIO
+
+        values = [-1e-50, 1e-50, -0.0, 0.0, 2**-149, -2**-149, 1.5, -1.5]
+        table = pa.table({"scalar": pa.array(values, type=pa.float32()),
+                          "vector": pa.array([[v, -v] for v in values], type=pa.list_(pa.float32()))})
+        output = BytesIO()
+        pq.write_table(table, output)
+        read = pq.read_table(BytesIO(output.getvalue())).to_pylist()
+        for value, row in zip(values, read):
+            for before, after in ((Float32(value), Float32(row["scalar"])),
+                                  ([Float32(value), Float32(-value)],
+                                   [Float32(v) for v in row["vector"]])):
+                self.assertEqual(tlv(before), tlv(after))
+                self.assertEqual(semantic_hash("float32-roundtrip", before),
+                                 semantic_hash("float32-roundtrip", after))
+        negative, zero = self.fixture(dtype="Float32", value=-1e-50), self.fixture(dtype="Float32", value=0.0)
+        self.assertEqual(self.load(negative).value_sha256, self.load(zero).value_sha256)
 
     def test_V08_A_C_generated_at_only_entire_dependency_path(self):
         a = self.fixture()

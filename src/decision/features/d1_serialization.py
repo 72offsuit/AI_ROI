@@ -35,13 +35,28 @@ def require(condition: bool, message: str) -> None:
         raise D1ContractError(message)
 
 
+def normalize_timestamp(value: str, *, syntax_message: str =
+                        "timestamp: offset and at most six fractional digits required") -> str:
+    """Validate the D1 text grammar before parsing; retain every allowed microsecond."""
+    match = re.fullmatch(
+        r"([0-9]{4}-[0-9]{2}-[0-9]{2}T([0-9]{2}):([0-9]{2}):([0-9]{2}))"
+        r"(?:\.([0-9]{1,6}))?(Z|[+-][0-9]{2}:[0-9]{2})", value)
+    require(match is not None, syntax_message)
+    require(int(match.group(2)) < 24 and int(match.group(3)) < 60 and int(match.group(4)) < 60,
+            "timestamp: invalid clock components")
+    offset = match.group(6)
+    if offset != "Z":
+        require(int(offset[1:3]) < 24 and int(offset[4:]) < 60,
+                "timestamp: invalid offset components")
+    fraction = match.group(5)
+    return match.group(1) + ("." + fraction.ljust(6, "0") if fraction else "") + offset
+
+
 def instant(value: str | datetime) -> datetime:
     if isinstance(value, str):
-        require(bool(re.fullmatch(
-            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})",
-            value)), "timestamp: offset and at most six fractional digits required")
+        normalized = normalize_timestamp(value)
         try:
-            value = parse_datetime(value)
+            value = parse_datetime(normalized)
         except (ValueError, TypeError) as exc:
             raise D1ContractError("invalid timestamp") from exc
     require(isinstance(value, datetime) and value.utcoffset() is not None,
@@ -76,8 +91,11 @@ def _float(value: Any, width: int) -> bytes:
         payload = struct.pack(">f" if width == 4 else ">d", value)
     except (OverflowError, struct.error) as exc:
         raise D1ContractError("float out of range") from exc
-    require(math.isfinite(struct.unpack(">f" if width == 4 else ">d", payload)[0]),
+    converted = struct.unpack(">f" if width == 4 else ">d", payload)[0]
+    require(math.isfinite(converted),
             "float became non-finite")
+    if converted == 0:
+        payload = bytes(width)
     return _frame(4 if width == 4 else 3, payload)
 
 

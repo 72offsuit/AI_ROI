@@ -79,6 +79,54 @@ UNKNOWN의 원인은 기존 제안 어휘 OBSERVATION_UNKNOWN·AMBIGUOUS_EVENT_O
 
 이번 기록: plans/D1-hash-loader-fixes-122-125-review-20261021.md 및 plans/D1-hash-loader-fixes-122-125-verification-20261021.log. 이전 보고서·로그는 당시 실행 증거로 보존한다. 기존 파일명과 신규 시험 4개의 소유 등록 인계 경로는 그대로다.
 
+### 2026-10-21 · HL-01–HL-04 / #129–#132 수정 결정과 검증 계획
+
+기준 HEAD는 feat/d1-hash-loader의 5f4d6872862e74d5413060c7b48d8db71ab2163c다. 위 최초 구현 및 #122–#125 실행 기록은 당시 사실로 보존한다. 최신 #83·#122–#132의 본문·댓글과 승인 설계 SHA를 다시 확인했다. 이번에는 로컬 코드·기존 시험·이 기록만 수정하며 커밋·푸시·GitHub 쓰기·학습은 하지 않는다.
+
+| 이슈 | 선택할 입력·출력 규칙 | 대안·기각 사유 | 반증 조건 |
+|---|---|---|---|
+| #131 HL-03 | 문자열의 숫자 오프셋은 시 00–23, 분 00–59를 공용 parse_datetime 호출 전에 검사. Z와 1–6자리 소수부 및 UTC microseconds 유지 | 파서의 오프셋 정규화에 맡기면 잘못된 분을 다른 순간으로 수용 | +09:60·+01:99 수용, 정상 양/음 오프셋 오판정, 1µs 소실 |
+| #132 HL-04 | IEEE 변환으로 얻은 최종 Float32/Float64가 0이면 양의 0 payload로 정규화 | 변환 전 검사만 유지하면 음수 underflow를 놓침. epsilon 절삭은 비영 값 소실 | ±underflow/±0의 TLV·hash 불일치, 최소 subnormal 소실, Parquet 왕복 불일치 |
+| #129 HL-01 | relative_gap_ms는 Parquet list(Int64)의 nullable 원소. PAD·첫 실제 위치는 null/false, 후속 실제 위치는 비음수 정수/true | masked 저장 0은 이 경계에서 필요 없고 논리 결손과 실측 동시각 0을 혼동. 별도 변환 파일은 범위 밖 | 첫 유효 간격·PAD 간격·후속 null 수용 또는 정상 동시각 0 거부 |
+| #130 HL-02 | ordering/session_completion은 문자열 explicit 또는 아래 닫힌 객체만 지원. 발행 시각을 제거한 동일 문자열 explicit로 투영 | 임의 객체 허용·시각 전부 제거는 미지원 의미를 숨김 | 단순 발행 정보가 raw→view→결과에 전파, 이용 가능성 as_of 변경 누락, 미지원 필드 수용 |
+
+ordering/session_completion의 지원 객체는 필수 rule="explicit", 선택 asserted_at·assessed_at뿐이다. 선택 시각도 instant로 유효성을 검사하지만 의미에서는 제외한다. 두 표현은 기존 문자열 explicit와 같은 의미다. 이 표시는 합성·명시 근거의 기존 제한된 어휘이며 실제 순서·세션 종료를 인증하지 않는다. 다른 문자열·rule·키·중첩 객체·null은 명시적으로 거부한다. 종료시각·마지막 이벤트·ordinal 목록 등의 세부 구조는 승인 자료만으로 닫힌 계약을 확정할 수 없어 이번에 지원하지 않는다. availability_basis의 as_of/rule과 claim의 기간·상태·gaps 등 실제 계산 근거는 기존대로 의미에 남는다. 발행 시각을 계산 기준으로 쓰려면 이 선택 필드에 숨기지 않고 승인된 이용 가능성 계약에 표현해야 한다.
+
+UNKNOWN의 기존 고정 배열 표현과 #125의 null 출력/원인 검사는 보존한다. 원시 생성기의 UNKNOWN은 length·배열 전체가 null인 메모리 표현이므로 기존 고정 배열 로더와의 전체 연결은 여전히 보류다. 정상 원소 null 간격의 소비 경계만 이번에 맞춘다. 토큰 숫자→문자열 변환·Store·모델 학습·실제 입력 인수를 추가하지 않는다.
+
+**표현·버전·호환성:** 승인된 d1-semantic/2-proposed의 TLV tag/domain/IEEE·null 규칙과 기존 독립 literal golden은 유지한다. 이는 새 hash 규약 채택이 아니라 v0.2.2 C·E.1·E.2에 어긋난 구현을 고치는 것이다. bundle/view/descriptor 버전명도 유지한다. 이전 masked-zero 시퀀스·가짜 첫 간격·미지원 근거 구조는 더 이상 수용하지 않으며 자동 변환/과거 hash fallback은 없다. 기존 결함을 가진 산출물은 승인된 논리 표현으로 원천에서 다시 만들고 raw·fit-input·binding·view·결과 hash 및 정확한 파일 pin을 모두 새로 검증해야 한다. 음수 underflow의 잘못된 hash와 발행 메타가 섞인 hash도 재계산 대상이다. 올바른 Float64·표현 가능한 비영 Float32·기존 explicit 근거·독립 primitive golden은 바꾸지 않는다. 향후 지원 의미/필드를 추가하면 별도 계약·의미 버전 검토가 필요하다.
+
+검증은 먼저 네 잘못된 동작과 정상 묶음을 현재 코드에서 재현하고, 독립 literal·관계 기대값·정합 재봉인 공격을 기존 시험 모듈에 보존한다. 공격 묶음 작성 중에만 잘못된 간격을 hash할 수 있는 독립 투영을 사용하고 실제 load 시에는 원래 제품 검증을 복원한다. 외부 Expected 고정 거부와 정확한 부모·파일·객체 pin 검사를 계속 실행한다. 실행 결과는 새 plans 보고서·로그에 기록하며 기존 실행 결과를 덮어쓰지 않는다.
+
+실제 로컬 검증: 새 반례를 추가한 수정 전 시험은 73개에서 FAIL 29건(하위 사례 포함)·ERROR 1건으로 결함을 드러냈다. 최종 hash/로더 74 PASS, 계산·세션·시퀀스·품질 78 PASS, 경계·DR 39 PASS다. CPython 3.12.13의 의존성 환경 전체는 947개 중 944 PASS·3 SKIP, 무의존 환경은 785 PASS·162 SKIP이며 두 환경 모두 FAIL·ERROR 0이다. 소유 검사는 기존 미등록 10건으로 FAIL, Python 3.10은 실행기 부재로 BLOCKED다. 이는 합성 로컬 회귀 결과이며 실제 입력·모델 학습·BATHOS/출하 게이트 통과가 아니다. 상세 명령·사유·파일 hash는 plans/D1-hash-loader-fixes-129-132-review-20261021.md와 D1-hash-loader-fixes-129-132-verification-20261021.log에 보존한다.
+
+**현재 선택 상태:** plans/D1-SD1-SD8-decisions-20261021.md와 D1-Q1-Q5-approved-directions-20261021.md에서 광진의 방향 선택은 완료됐다. 아래 과거 절의 "미결정"은 작성 당시 기록이다. P3·G1 우선·분담 근거·D1 SVD+KMeans/D3 DL·가입일 용도 분리·D2 공통 분할·원시/공식 품질 분리·최고 여정, 고객/시간 분리와 Train 그룹 5-Fold, 개발 d=8/k=8/n_init=10, 종료−시작 duration 방향을 되돌리지 않는다. 공유 시간 계약 #126·제공자 수락·실제 정밀도/완전성·구체 seed·정식 계약 이관은 별도다. 이번 네 결함 외 final_refit/fold_id=null·전체 연결·CURRENT 게시·실제 인수는 보류하며 다른 지적을 함께 해결했다고 하지 않는다.
+
+### 2026-10-21 · #131 추가 F-1–F-3 — 두 시간 진입점의 문자열 검증
+
+현재 작업 트리의 HL 수정 위에 추가한다. #131 최신 본문 전체·댓글(추가 범위 포함), 독립 재검토 원문 및 기존 보고서·로그를 확인했다. 아래 결정은 코드 수정 전에 기록하며 앞선 실행 결과를 이번 추가 수정의 결과로 바꾸지 않는다.
+
+| 대안 | 선택·근거 | 한계/반증 조건 |
+|---|---|---|
+| 두 함수에 범위 검사·소수부 처리를 각각 복제 | 기각. 이번 F-2처럼 다시 갈라질 수 있음 | 한쪽만 비정상 입력 수용 |
+| timestamp 전체를 instant에 위임 | 기각. 기존 datetime의 정확한 타입 검사·UTC 범위 오류 처리가 달라짐 | 기존 datetime/오류 계약 회귀 |
+| d1_serialization의 작은 문자열 정규화 함수를 두 진입점에서 재사용 | 선택. 추가 파일 없이 ASCII 형식·구성값·소수부 한 벌을 사용하고 각 함수의 datetime 처리·파서 예외·UTC 처리는 유지 | 파서 호출 전에 범위 위반을 못 막거나 소수부를 절삭하면 실패 |
+| 버전별 skip·최소 버전 상향·공용 측정 파서 수정 | 기각. 승인 범위 및 최소 지원 선언을 우회 | 3.10 미실행을 PASS로 표시하거나 공유 코드 변경 |
+
+입력 문자열은 ASCII YYYY-MM-DDTHH:MM:SS, 선택 소수부 1–6자리, 필수 Z 또는 ±HH:MM이다. 시각의 시는 00–23, 분/초는 00–59, 오프셋 시는 00–23·분은 00–59로 파서 호출 전에 검사한다. 소수부는 6자리로 오른쪽 0 채움만 하며 수치를 바꾸지 않는다. 7자리·오프셋 부재·다른 문법은 거부하고 달력 날짜 유효성은 기존 parse_datetime으로 확인한다. datetime.fromisoformat 직접 호출은 추가하지 않는다.
+
+근거: [Python 3.10 공식 datetime.fromisoformat 문서](https://docs.python.org/3.10/library/datetime.html#datetime.datetime.fromisoformat)는 초 소수부를 .fff[fff] 형태로 설명한다. 이는 파서에 6자리를 전달할 근거이며 실제 3.10 실행 증거가 아니다. 현재 timestamp는 이미 6자리 채움을 하지만 오프셋 범위를 검사하지 않고, instant는 오프셋만 검사하고 채움이 없다. 3.14.6에서는 두 함수가 T24:00:00을 다음날로 수용하는 것도 수정 전에 직접 재현했다. P3에서 잘못된 +09:60 이벤트가 cutoff 이전으로 바뀌어 계산되는 반례를 같은 입력으로 재시험한다.
+
+검증 범위는 두 진입점과 EventBatch 이벤트/start, TimePolicy boundary/history_start, ObservationClaim start/end/gaps, OrderClaim.at, 계산·원시 시퀀스 generated_at의 실제 경로다. 독립 epoch microseconds/TLV, 파서에 전달된 정확한 정규화 문자열, 정상 cutoff 직전/경계/이후를 대조한다. 파서 인자 검사는 3.10 런타임 실행을 대신하지 않는다. 기존 #129 null 간격·#130 의미 투영/정확한 pin·#132 Float32 및 #122–#128 회귀는 보존한다. 정상 순간·TLV·의미 hash와 버전은 바꾸지 않는다.
+
+기록 정정은 이전 보고서 끝에 추가 정정 링크를 남기고 새 plans/D1-time-validation-fixes-131-F1-F3-review-20261021.md 및 대응 verification 로그에 모은다. 앞선 “1–6자리 유지”는 3.12 실행 근거였으며 최소 버전 인수 완료가 아니었다. 이전 73개 중간 시험에는 최종 74개 중 생성기/Parquet 채널 대조 1개가 없었다. 정상 fixture의 실제 R/V와 독립 검토 원시 로그의 252 대 251 집계 차이를 별도로 확인하며 과거 원문·로그는 삭제하지 않는다.
+
+SD·Q 선택은 유지한다. #126 공유 시간 계약·final_refit·실제 입력·학습·전체 Store·CURRENT·소유 등록·Python 3.10 실제 실행은 별도 확인 사항이고 이번 수정으로 승인하지 않는다.
+
+추가 수정의 실제 실행: 3.12.13과 3.14.6에서 동일한 재현 입력을 수정 전/후 비교했다. 두 버전의 관련 16개 시험은 수정 전 FAIL 30건(하위 사례 포함), 수정 후 16 PASS다. F-1의 파서 전달 문자열 검사도 포함되며 3.10 실행 결과는 아니다. 최종 3.12 의존성 환경은 hash/로더 79 PASS, 계산·세션·시퀀스·품질 81 PASS, 전체 955개 중 952 PASS·3 SKIP·FAIL/ERROR 0이다. 무의존 3.12 전체는 793 PASS·162 SKIP·FAIL/ERROR 0이다. 무의존 3.14의 D1 7모듈은 100 PASS·60 SKIP·FAIL/ERROR 0이며 전체 저장소 실행으로 확대하지 않는다. 소유 미등록 10건 FAIL과 3.10 BLOCKED는 남는다.
+
+독립 검토 원시 로그 30_probe_full.log(SHA-256 94485896fcb9877d20fbc0e72bdfa18d8c3c41671bddbc0e442ca9a62d690585)를 재집계했다. HL01/02/03/04의 PASS는 52/91/56/52로 합 251이고, 별도 RESIDUAL 1 PASS를 합친 값이 252다. 별도 SIDE-TS 2 PASS·4 FAIL까지 포함한 원시 로그 전체를 252/252 PASS로 표시하지 않는다. 과거 로그 재집계이며 이번 시험 실행 수가 아니다. 현재 정상 fixture의 R=eb256f17f08acbd09e4f257d2cbe397e5f1117a0c5ec2a140df34494d4e82724, V=f0817f8f5c6f4450139469273f5be15446cab42b42e9586cd85d8138bb62f38c는 이번 시간 정규화 추가 수정에서도 유지됨을 실제 로더로 확인했다.
+
 ## 기각한 안과 기각 사유
 
 | 안 | 사유 |

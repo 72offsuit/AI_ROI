@@ -10,7 +10,7 @@ from typing import Iterable
 from src.measurement.schema import EVENT_FIELDS, SCHEMA_VERSION, EventType, check_identifier, validate_event
 from src.measurement.sink import EventSource, event_source
 from src.measurement.timeparse import parse_datetime
-from .d1_serialization import D1ContractError, require, semantic_hash, tlv
+from .d1_serialization import D1ContractError, normalize_timestamp, require, semantic_hash, tlv
 
 KST = timezone(timedelta(hours=9))
 EVENT_TYPES = frozenset(item.value for item in EventType)
@@ -21,11 +21,8 @@ INPUT_VERSION = "d1-calculation-input/1-proposed"
 
 def timestamp(value: str | datetime) -> datetime:
     if isinstance(value, str):
-        match = re.fullmatch(r"([0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2})"
-                             r"(?:\.([0-9]{1,6}))?(Z|[+-][0-9]{2}:[0-9]{2})", value)
-        require(match is not None, "timestamp: explicit offset and <=6 fractional digits required")
-        fraction = match.group(2)
-        normalized = match.group(1) + ("." + fraction.ljust(6, "0") if fraction else "") + match.group(3)
+        normalized = normalize_timestamp(value,
+            syntax_message="timestamp: explicit offset and <=6 fractional digits required")
         try:
             value = parse_datetime(normalized)
         except ValueError as exc:

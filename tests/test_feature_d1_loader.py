@@ -3,6 +3,7 @@ from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
+from unittest.mock import patch
 
 from src.decision.features import d1_semantics as s
 from src.decision.features.d1_loader import load_bundle
@@ -29,6 +30,77 @@ class LoaderTests(unittest.TestCase):
         bundle = load_bundle(self.fixture.root, "manifest.json", self.fixture.expected)
         self.assertEqual(bundle.view_semantic_hash, self.fixture.vh)
         self.assertEqual(len(bundle.rows["features"]), 2)
+
+    def test_HL01_fully_resealed_fake_first_gap_reaches_position_guard(self):
+        class FirstGapFixture(Fixture):
+            def write_tables(self, prefix, rows, view):
+                for row in rows["sequence"]:
+                    row["relative_gap_ms"][-1] = 100
+                    row["gap_mask"][-1] = True
+                return super().write_tables(prefix, rows, view)
+
+        original = s.table_rows
+
+        def unchecked_sequence(kind, rows, schema, evidence):
+            if kind != "sequence":
+                return original(kind, rows, schema, evidence)
+            # Attack construction only: independent projection deliberately skips
+            # gap validation, so every actual wire hash/pin can be coherent.
+            claims = s.evidence_body(evidence)["claims"]
+            fields = ("state", "length", "tokens", "mask", "relative_gap_ms", "gap_mask")
+            result = [{**s.key(row), **{field: row[field] for field in fields},
+                "ordering_claims": s.canonical_set([claims[i] for i in row["claim_indices"]])}
+                for row in rows]
+            return s.ordered(result, s.key)
+
+        with patch.object(s, "table_rows", side_effect=unchecked_sequence):
+            f = FirstGapFixture(self.fixture.root / "HL01-first-gap")
+        # No patch is active during loading. The caller requests these exact bytes.
+        for path in ("raw-a/sequence.parquet", "objects/encoder-sequence.parquet",
+                     "objects/cluster-sequence.parquet", "learned/sequence.parquet"):
+            row = f.read_parquet(path, "sequence")[0]
+            self.assertEqual((row["length"], row["relative_gap_ms"][-1], row["gap_mask"][-1]),
+                             (1, 100, True))
+        with self.assertRaisesRegex(D1ContractError, "first actual event gap must be null/false"):
+            load_bundle(f.root, "manifest.json", f.expected)
+
+    def test_HL01_nullable_gaps_survive_raw_fit_and_output_parquet(self):
+        f = self.fixture
+        result = load_bundle(f.root, "manifest.json", f.expected)
+        for path in ("raw-a/sequence.parquet", "objects/encoder-sequence.parquet",
+                     "objects/cluster-sequence.parquet", "learned/sequence.parquet"):
+            for row in f.read_parquet(path, "sequence"):
+                self.assertEqual(row["relative_gap_ms"], [None]*30)
+                self.assertEqual(row["gap_mask"], [False]*30)
+        self.assertEqual(len(result.rows["features"]), 2)
+
+    def test_HL01_generator_and_parquet_gap_channels_agree_for_real_zero_and_elapsed(self):
+        from tests.test_feature_d1_calculation import batch, event
+        from tests.test_feature_d1_sequence import make_sequence, order
+
+        for gap, second_at in ((0, "2026-10-02T00:00:00+09:00"),
+                               (1250, "2026-10-02T00:00:01.250+09:00")):
+            with self.subTest(gap=gap):
+                records = [event("page_view", number=1), event("search", second_at, 2)]
+                source = batch(records)
+                produced = make_sequence(source, orders=(order(source, records),) if gap == 0 else ()).rows[0]
+
+                class TwoEventFixture(Fixture):
+                    def write_tables(self, prefix, rows, view):
+                        for row in rows["sequence"]:
+                            row.update(length=2, tokens=["PAD"]*28+["VIEW", "VIEW"],
+                                mask=[False]*28+[True, True], relative_gap_ms=[None]*29+[gap],
+                                gap_mask=[False]*29+[True])
+                        return super().write_tables(prefix, rows, view)
+
+                f = TwoEventFixture(self.fixture.root / f"gap-{gap}")
+                result = load_bundle(f.root, "manifest.json", f.expected)
+                for row in result.rows["sequence"]:
+                    for field in ("length", "mask", "relative_gap_ms", "gap_mask"):
+                        self.assertEqual(row[field], produced[field])
+                # Only the gap channel is compared; no numeric-token adapter is supplied.
+                self.assertEqual(produced["relative_gap_ms"], [None]*29+[gap])
+                self.assertEqual(produced["gap_mask"], [False]*29+[True])
 
     def test_V10_D1_equal_semantics_wrong_exact_requested_parent(self):
         f = Fixture(self.fixture.root / "republish", republish=True)
@@ -196,8 +268,9 @@ class LoaderTests(unittest.TestCase):
     def test_resealed_output_cannot_change_raw_sequence(self):
         f = self.fixture
         rows = pq.read_table(f.root / "learned/sequence.parquet").to_pylist()
-        rows[0]["gap_mask"][-1] = True
-        rows[0]["relative_gap_ms"][-1] = 100
+        rows[0].update(length=2, tokens=["PAD"]*28+["VIEW", "VIEW"],
+                       mask=[False]*28+[True, True], relative_gap_ms=[None]*29+[100],
+                       gap_mask=[False]*29+[True])
         f.write_parquet("learned/sequence.parquet", "sequence", rows)
         self.rehash_learned_values()
         self.reject("changed raw sequence")
@@ -279,7 +352,7 @@ class LoaderTests(unittest.TestCase):
                 new = dict(deepcopy(original), customer_id="c")
                 if empty_c and kind == "sequence":
                     new.update(state="EMPTY_COMPLETE", length=0, tokens=["PAD"] * 30,
-                               mask=[False] * 30, relative_gap_ms=[0] * 30, gap_mask=[False] * 30)
+                               mask=[False] * 30, relative_gap_ms=[None] * 30, gap_mask=[False] * 30)
                 if empty_c and kind == "quality" and new["feature_id"] in ("F36", "F37"):
                     new["reasons"] = ["NO_SEQUENCE_INFORMATION"]
                 rows[kind].append(new)
@@ -353,7 +426,7 @@ class LoaderTests(unittest.TestCase):
                 if kind == "features": rows[0]["F02"] = 999
                 elif kind == "sequence":
                     rows[0].update(length=2, tokens=["PAD"] * 28 + ["VIEW", "VIEW"],
-                        mask=[False] * 28 + [True, True], relative_gap_ms=[0] * 29 + [100],
+                        mask=[False] * 28 + [True, True], relative_gap_ms=[None] * 29 + [100],
                         gap_mask=[False] * 29 + [True])
                 else:
                     next(row for row in rows if row["feature_id"] == "F02")["audit_counts"]["observed"] = 999

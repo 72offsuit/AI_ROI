@@ -91,7 +91,7 @@ class Fixture:
             self.rows["sequence"].append(dict(**key, state="EMPTY_COMPLETE" if empty else "VALID",
                 length=0 if empty else 1, tokens=["PAD"] * (30 if empty else 29) + ([] if empty else ["VIEW"]),
                 mask=[False] * (30 if empty else 29) + ([] if empty else [True]),
-                relative_gap_ms=[0] * 30, gap_mask=[False] * 30, claim_indices=[0]))
+                relative_gap_ms=[None] * 30, gap_mask=[False] * 30, claim_indices=[0]))
         self.raw_a = self.write_raw("raw-a", self.rows, generation)
         self.raw_ref = self.raw_a
         if republish:

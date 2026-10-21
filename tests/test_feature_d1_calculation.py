@@ -59,6 +59,61 @@ def quality(output,fid,customer=CUSTOMER):
     return next(row for row in output.quality_rows if row["feature_id"]==fid and row["customer_id"]==customer)
 
 
+class TimeInputRegressionTests(unittest.TestCase):
+    def test_131_malformed_offset_cannot_move_future_event_before_cutoff(self):
+        at = "2026-10-20T00:30:00.000+09:60"
+        with self.assertRaisesRegex(D1ContractError, "invalid offset components"):
+            source = batch([event("page_view", at)])
+            calculate_features([source], index_date=INDEX, policy=policy(),
+                               observation_claims=claims_for(source), generated_at=ORIGIN)
+
+    def test_131_P3_normal_before_at_and_after_boundary_unchanged(self):
+        for at, accepted in (("2026-10-19T23:59:59.999999+09:00", True),
+                             ("2026-10-20T00:00:00+09:00", False),
+                             ("2026-10-20T00:00:00.000001+09:00", False)):
+            with self.subTest(at=at):
+                source = batch([event("page_view", at)])
+                if accepted:
+                    output = calculate_features([source], index_date=INDEX, policy=policy(),
+                                                observation_claims=claims_for(source), generated_at=ORIGIN)
+                    self.assertEqual(len(output.feature_rows), 1)
+                else:
+                    with self.assertRaisesRegex(D1ContractError, "forbidden-time event"):
+                        calculate_features([source], index_date=INDEX, policy=policy(),
+                                           observation_claims=claims_for(source), generated_at=ORIGIN)
+
+    def test_131_all_actual_timestamp_call_paths_reject_bad_offset(self):
+        from src.decision.features.d1_raw_sequence import OrderClaim, generate_raw_sequences
+
+        source = batch([event("page_view")])
+        claim = claims_for(source)[0]
+        factories = {
+            "EventBatch.event": lambda value: batch([event("page_view", value)]),
+            "EventBatch.start": lambda value: batch([], start=value),
+            "TimePolicy.boundary": lambda value: policy(boundary=value),
+            "TimePolicy.history_start": lambda value: policy(history_start=value),
+            "ObservationClaim.start": lambda value: replace(claim, start=value),
+            "ObservationClaim.end": lambda value: replace(claim, end=value),
+            "ObservationClaim.gap_start": lambda value: replace(claim, state="incomplete",
+                gaps=((value, "2026-10-03T00:00:00+09:00"),)),
+            "ObservationClaim.gap_end": lambda value: replace(claim, state="incomplete",
+                gaps=(("2026-10-01T00:00:00+09:00", value),)),
+            "OrderClaim.at": lambda value: OrderClaim(entity=source.entities[0], at=value,
+                ordinals=((source.events[0]["event_id"], 0),), input_value_sha256=source.input_value_sha256,
+                provider="fixture-provider", contract_version="d1-order-fixture/1",
+                evidence_ref="explicit-fixture-proof", purpose="synthetic"),
+            "calculation.generated_at": lambda value: calculate_features([source], index_date=INDEX,
+                policy=policy(), observation_claims=(claim,), generated_at=value),
+            "sequence.generated_at": lambda value: generate_raw_sequences([source], index_date=INDEX,
+                policy=policy(), observation_claims=(claim,), generated_at=value),
+        }
+        for name, factory in factories.items():
+            with self.subTest(path=name):
+                self.assertIsNotNone(factory("2026-10-02T00:00:00+09:00"))
+                with self.assertRaisesRegex(D1ContractError, "invalid offset components"):
+                    factory("2026-10-02T00:00:00+09:60")
+
+
 class CalculationTests(unittest.TestCase):
     def test_CALC01_two_purchase_independent_golden_example(self):
         result=run([event("purchase","2026-10-01T00:00:00+09:00",1,order_amount=20000),

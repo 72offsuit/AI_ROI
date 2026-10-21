@@ -166,11 +166,26 @@ def evidence_body(record: dict) -> dict:
         basis["as_of"] = instant(basis["as_of"])
         text(basis["rule"])
         claim["availability_basis"] = basis
-        semantic_settings(claim["ordering"])
-        semantic_settings(claim["session_completion"])
+        claim["ordering"] = explicit_evidence(claim["ordering"])
+        claim["session_completion"] = explicit_evidence(claim["session_completion"])
         claims.append(claim)
     body["claims"] = canonical_set(claims)
     return body
+
+
+def explicit_evidence(value: Any) -> str:
+    """Closed review-only evidence vocabulary; publication is not calculation time."""
+    if type(value) is str:
+        require(value == "explicit", "unsupported explicit evidence rule")
+        return value
+    require(type(value) is dict and "rule" in value and
+            set(value) <= {"rule", "asserted_at", "assessed_at"},
+            "unsupported explicit evidence structure")
+    require(value["rule"] == "explicit", "unsupported explicit evidence rule")
+    for field in ("asserted_at", "assessed_at"):
+        if field in value:
+            instant(value[field])
+    return "explicit"
 
 
 def typed(value: Any, spec: dict) -> Any:
@@ -226,16 +241,23 @@ def table_rows(kind: str, rows: list[dict], schema: dict, evidence: dict) -> lis
             require(all(type(row[name]) is list and len(row[name]) == 30 for name in
                         ("tokens", "mask", "relative_gap_ms", "gap_mask")), "sequence array length")
             require(all(type(v) is bool for v in row["mask"] + row["gap_mask"]), "mask type")
-            require(all(type(v) is int and v >= 0 for v in row["relative_gap_ms"]), "gap type")
+            require(all(v is None or (type(v) is int and v >= 0) for v in row["relative_gap_ms"]),
+                    "gap type")
             require(all(v in schema["tokens"] for v in row["tokens"]), "unknown token")
             length = item["length"]
             require(row["mask"] == [False] * (30 - length) + [True] * length, "padding mask")
             require(all(v == "PAD" for v in row["tokens"][:30-length]) and
                     all(v != "PAD" for v in row["tokens"][30-length:]), "padding tokens")
-            require(all(not mask or token_mask for mask, token_mask in zip(row["gap_mask"], row["mask"])),
-                    "gap on padding")
-            require(all(gap == 0 for gap, mask in zip(row["relative_gap_ms"], row["gap_mask"]) if not mask),
-                    "unknown gap must use masked storage zero")
+            first = 30-length
+            require(all(gap is None and not mask for gap, mask in
+                        zip(row["relative_gap_ms"][:first], row["gap_mask"][:first])),
+                    "padding gap must be null/false")
+            if length:
+                require(row["relative_gap_ms"][first] is None and not row["gap_mask"][first],
+                        "first actual event gap must be null/false")
+                require(all(row["gap_mask"][first+1:]), "following event gap mask must be true")
+                require(all(type(gap) is int and gap >= 0 for gap in row["relative_gap_ms"][first+1:]),
+                        "following event gap must be nonnegative Int64")
             require(item["state"] != "EMPTY_COMPLETE" or length == 0, "empty sequence has events")
             require(item["state"] != "VALID" or length > 0, "valid sequence is empty")
             require(type(row["claim_indices"]) is list and all(

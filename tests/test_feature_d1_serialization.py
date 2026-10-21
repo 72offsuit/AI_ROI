@@ -1,6 +1,7 @@
 import hashlib
 import unittest
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+from unittest.mock import patch
 
 from src.decision.features.d1_serialization import (
     D1ContractError, Float32, Float64, calendar_date, canonical_set, file_sha256,
@@ -9,6 +10,79 @@ from src.decision.features.d1_serialization import (
 
 
 class SerializationTests(unittest.TestCase):
+    def test_131_F1_both_parsers_receive_exact_six_digit_fraction(self):
+        from src.decision.features.d1_feature_inputs import timestamp
+        from src.measurement.timeparse import parse_datetime
+
+        for fn, module in ((instant, "d1_serialization"), (timestamp, "d1_feature_inputs")):
+            for fraction in ("", ".1", ".12", ".123", ".1234", ".12345", ".123456"):
+                value = "1970-01-01T00:00:00"+fraction+"Z"
+                expected = "1970-01-01T00:00:00"+(fraction.ljust(7, "0") if fraction else "")+"Z"
+                with self.subTest(fn=fn.__name__, fraction=fraction), patch(
+                        f"src.decision.features.{module}.parse_datetime", wraps=parse_datetime) as parser:
+                    fn(value)
+                    parser.assert_called_once_with(expected)
+
+    def test_131_F2_F3_bad_components_rejected_before_shared_parser(self):
+        from src.decision.features.d1_feature_inputs import timestamp
+
+        values = ["2026-10-20T00:00:00"+offset for offset in
+                  ("+09:60", "+01:99", "+24:00", "-24:00", "-00:60")]
+        values += ["2026-10-20T"+clock+"+09:00" for clock in
+                   ("24:00:00", "25:00:00", "23:60:00", "23:59:60")]
+        for fn, module in ((instant, "d1_serialization"), (timestamp, "d1_feature_inputs")):
+            for value in values:
+                with self.subTest(fn=fn.__name__, value=value), patch(
+                        f"src.decision.features.{module}.parse_datetime") as parser:
+                    with self.assertRaises(D1ContractError): fn(value)
+                    parser.assert_not_called()
+
+    def test_131_calendar_syntax_and_excess_precision_rejected_at_both_entries(self):
+        from src.decision.features.d1_feature_inputs import timestamp
+
+        values = ("2026-02-29T00:00:00Z", "2026-13-01T00:00:00Z", "2026-04-31T00:00:00Z",
+                  "2026-10-20T00:00:00", "2026-10-20 00:00:00Z", "2026-10-20T00:00:00z",
+                  "2026-10-20T00:00:00.1234567Z", "2026-10-20T00:00:00.Z",
+                  "2026-10-20T00:00:00+0900", "2026-10-20T00:00:00+9:00")
+        for fn in (instant, timestamp):
+            for value in values:
+                with self.subTest(fn=fn.__name__, value=value), self.assertRaises(D1ContractError): fn(value)
+
+    def test_131_both_entries_match_independent_epoch_literals(self):
+        from src.decision.features.d1_feature_inputs import timestamp
+
+        for fn in (instant, timestamp):
+            for suffix in ("Z", "+00:00"):
+                self.assertEqual(tlv(fn("1970-01-01T00:00:00.1"+suffix)).hex(),
+                                 "07000000000000000800000000000186a0")
+            self.assertEqual(tlv(fn("1970-01-01T00:00:00.1Z")),
+                             tlv(fn("1970-01-01T00:00:00.100000Z")))
+            self.assertEqual(tlv(fn("1970-01-01T09:00:00.000001+09:00")).hex(),
+                             "0700000000000000080000000000000001")
+            self.assertEqual(tlv(fn("1969-12-31T19:00:00.000001-05:00")).hex(),
+                             "0700000000000000080000000000000001")
+            self.assertNotEqual(tlv(fn("1970-01-01T00:00:00.000001Z")),
+                                tlv(fn("1970-01-01T00:00:00.000002Z")))
+
+    def test_131_datetime_type_awareness_and_calculation_UTC_errors_preserved(self):
+        from src.decision.features.d1_feature_inputs import timestamp
+
+        class DerivedDatetime(datetime):
+            pass
+
+        value = datetime(1970, 1, 1, 9, tzinfo=timezone(timedelta(hours=9)))
+        for fn in (instant, timestamp):
+            self.assertEqual(fn(value), datetime(1970, 1, 1, tzinfo=timezone.utc))
+            for invalid in (None, 1, datetime(1970, 1, 1)):
+                with self.subTest(fn=fn.__name__, invalid=invalid), self.assertRaises(D1ContractError):
+                    fn(invalid)
+        derived = DerivedDatetime(1970, 1, 1, tzinfo=timezone.utc)
+        self.assertEqual(instant(derived), value)
+        with self.assertRaises(D1ContractError): timestamp(derived)
+        for value in ("0001-01-01T00:00:00+09:00", "9999-12-31T23:59:59-01:00"):
+            with self.assertRaisesRegex(D1ContractError, "timestamp outside supported UTC range"):
+                timestamp(value)
+
     def test_independent_golden_frames(self):
         # Literal wire bytes from the design's tag/BE-length/payload rules.
         cases = [(None, "000000000000000000"), (False, "01000000000000000100"),
@@ -59,3 +133,42 @@ class SerializationTests(unittest.TestCase):
                  lambda: strict_json(b'"\\ud800"')]
         for case in cases:
             with self.subTest(case=case), self.assertRaises(D1ContractError): case()
+
+    def test_HL03_invalid_offset_components_and_syntax_rejected(self):
+        for suffix in ("+09:60", "+01:99", "-00:60", "+24:00", "-24:00", "+99:00",
+                       "+9:00", "+0900", "+09:0", "++09:00", "Z+09:00", ""):
+            with self.subTest(suffix=suffix), self.assertRaises(D1ContractError):
+                instant("2026-10-20T00:00:00" + suffix)
+
+    def test_HL03_valid_offsets_and_microsecond_literal_payloads(self):
+        for value in ("1970-01-01T09:00:00+09:00", "1969-12-31T19:00:00-05:00",
+                      "1970-01-01T23:59:00+23:59", "1969-12-31T00:01:00-23:59",
+                      "1970-01-01T00:00:00+00:00", "1970-01-01T00:00:00Z"):
+            with self.subTest(value=value):
+                self.assertEqual(tlv(instant(value)).hex(), "0700000000000000080000000000000000")
+        for digits, micros in (("1", 100000), ("12", 120000), ("123", 123000),
+                               ("1234", 123400), ("12345", 123450), ("123456", 123456)):
+            self.assertEqual(tlv(instant(f"1970-01-01T00:00:00.{digits}Z"))[-8:],
+                             micros.to_bytes(8, "big", signed=True))
+        self.assertEqual(tlv(instant("1970-01-01T00:00:00.000001Z")).hex(),
+                         "0700000000000000080000000000000001")
+        self.assertNotEqual(tlv(instant("1970-01-01T00:00:00.123456Z")),
+                            tlv(instant("1970-01-01T00:00:00.123455Z")))
+
+    def test_HL04_underflow_and_direct_signed_zero_use_literal_positive_zero(self):
+        hashes = set()
+        for value in (-1e-50, 1e-50, -0.0, 0.0):
+            with self.subTest(value=value):
+                self.assertEqual(tlv(Float32(value)).hex(), "04000000000000000400000000")
+                hashes.add(semantic_hash("float32-underflow", Float32(value)))
+        self.assertEqual(len(hashes), 1)
+        self.assertNotEqual(tlv(Float64(-1e-50)), tlv(Float64(0.0)))
+
+    def test_HL04_representable_nonzero_and_dtype_are_preserved(self):
+        for value, payload in ((1.5, "3fc00000"), (-1.5, "bfc00000"),
+                               (2**-149, "00000001"), (-2**-149, "80000001")):
+            self.assertEqual(tlv(Float32(value)).hex(), "040000000000000004" + payload)
+        self.assertNotEqual(tlv(Float32(0.0)), tlv(Float64(0.0)))
+        for value in (float("nan"), float("inf"), -float("inf"), 1e40, -1e40):
+            with self.subTest(value=value), self.assertRaises(D1ContractError):
+                tlv(Float32(value))
