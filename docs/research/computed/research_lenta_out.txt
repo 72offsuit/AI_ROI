@@ -1,0 +1,7 @@
+['age', 'gender', 'group', 'response_att'] 195
+687029
+             mean    size
+group                    
+control  0.102579  171137
+test     0.110126  515892
+ATE +0.0075 treat share 0.751

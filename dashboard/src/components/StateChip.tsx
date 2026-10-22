@@ -151,6 +151,22 @@ export function FixtureBadge() {
   );
 }
 
+/**
+ * Sprint result screens fed from `dashboard/fixtures/sprint-v0/` (AIROI_SPRINT_SOURCE=mock).
+ * Same weight as FixtureBadge for the same reason: a mock number must never pass for a
+ * pipeline result, least of all on a presentation screen.
+ */
+export function MockBadge() {
+  return (
+    <span
+      className={`${AUX_BASE} text-(--obs-fixture-ink) bg-(--obs-fixture-surface)`}
+      aria-label="목업 — 실제 실행 결과가 아닙니다"
+    >
+      <span aria-hidden="true">목업 — 실제 실행 결과가 아닙니다</span>
+    </span>
+  );
+}
+
 /** `status: "vacuous"` — the check ran and examined nothing. Never green, never ✓. */
 export function VacuousChip() {
   return (

@@ -1,0 +1,28 @@
+visit/wk mean 2.61 CV 0.623 shape_eq 2.58
+purchase prob per visit mean 0.211
+orders/month (visit*p) mean 2.53 median 1.57 CV 1.153 gamma_shape_eq 0.75
+AOV mean 45876 median 40007 ln-sd(mixture) 0.505 CV 0.561
+cycle median 14.9 mean 18.1 ln-sd(mixture) 0.637 p90 33.5
+top20% spend share 0.676 top10% 0.498
+top20% order-count share 0.559
+base_churn_propensity pop mean 0.242
+coupon_sensitivity pop mean 0.529
+marketing_fatigue pop mean 0.272
+cart_abandonment_propensity pop mean 0.393
+repurchase_propensity pop mean 0.607
+price_sensitivity pop mean 0.488
+shipping_fee_sensitivity pop mean 0.484
+P(fatigue>0.6) 0.0624
+share customers orders/month >= 4.33 (weekly+): 0.166 ; >=1/month: 0.645 ; <0.5/month: 0.181
+vip_loyal orders/mo mean 8.02 AOV med 72576
+loyal orders/mo mean 3.62 AOV med 47937
+price_sensitive orders/mo mean 1.54 AOV med 34295
+explorer orders/mo mean 1.49 AOV med 39257
+churn_progressing orders/mo mean 0.72 AOV med 30964
+new_customer orders/mo mean 1.88 AOV med 35866
+spend share vip_loyal 0.370
+spend share loyal 0.377
+spend share price_sensitive 0.091
+spend share explorer 0.083
+spend share churn_progressing 0.027
+spend share new_customer 0.053

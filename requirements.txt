@@ -1,4 +1,4 @@
-# 런타임 의존성 — 측정 계층(src/measurement/)이 실제로 import 하는 것만 적는다.
+# 런타임 의존성 — 측정 계층(src/measurement/)과 의사결정 계층(src/decision/)이 실제로 import 하는 것만 적는다.
 #
 # Resolved on Python 3.12.4 (CI parity — .github/workflows/isolation.yml pins 3.12).
 # Local dev Python is 3.14.6; versions were NOT resolved there on purpose, because a
@@ -14,6 +14,9 @@
 #   pyarrow -> src/measurement/sink.py       (lazy, function-local, guarded)
 #   PyYAML  -> src/measurement/config_loader.py  (the only `import yaml` in the repo)
 # tests/test_neutrality.py enforces both containments as source checks.
+# The ML stack below is confined to src/decision/ (never src/measurement/ — test_neutrality
+# whitelists stdlib-only top-level imports there). Tests that need it skip with
+# "BLOCKED: numpy/pandas/scikit-learn 미설치" in the no-install job; a skip is not a pass.
 
 # Parquet writer/reader for the Event Sink. Optional at runtime: sink.py falls back to
 # gzip JSONL via resolve_format("auto") when pyarrow is absent, and records which format
@@ -28,7 +31,28 @@ pyarrow==25.0.1
 # control, so tests/test_neutrality.py asserts the unsafe loaders never appear.
 PyYAML==6.0.3
 
+# ── Decision layer (src/decision/, issue #144 sprint 1) ───────────────────────
+# Versions are what the sprint venv (Python 3.12) actually ran — NOT re-resolved on a
+# separate 3.12.4 environment like the two pins above. Exact pins for the same NFR-001
+# reason: a different sklearn/numpy release can change tree splits and CV scores for the
+# same seed, which would make model-report numbers non-reproducible.
+
+# Array math for features, metrics and the F1 threshold search.
+numpy==2.5.4
+# Event frame (src/decision/data.py) and the vectorised feature table
+# (src/decision/features/sprint_table.py). pandas reads Parquet through pyarrow (above).
+pandas==3.0.6
+# Churn baselines/proposed models (LogisticRegression · RandomForest · HistGradientBoosting),
+# StratifiedKFold, imputation and metrics (src/decision/churn.py · clv.py).
+scikit-learn==1.9.1
+# Spearman rank correlation for CLV evaluation (src/decision/clv.py). Also an sklearn dependency.
+scipy==1.18.1
+# TreeExplainer feature attribution for the churn report. Failure is tolerated:
+# churn.churn_importance() falls back to permutation importance and records that it did.
+shap==0.54.1
+
 # ── Deliberately absent ───────────────────────────────────────────────────────
-# pandas · numpy · scikit-learn  -> src/decision/ owns those; ML/DL is outside cycle C1.
+# torch                          -> optional DL (src/decision/churn_dl.py). Lives in
+#                                   requirements-ml.txt; no CI job installs it.
 # lint · type checkers           -> this repo defines no lint/build/type gate (charter
 #                                   §6.3). We do not invent a gate we cannot enforce.
