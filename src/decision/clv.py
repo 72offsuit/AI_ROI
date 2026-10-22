@@ -20,7 +20,7 @@ import math
 import numpy as np
 import pandas as pd
 
-from src.decision.features.sprint_table import make_preprocessor
+from src.decision.features.sprint_table import make_preprocessor, model_columns
 
 BASELINE_FEATURE = "monetary_90d"
 BASELINE_DAYS = 90
@@ -37,8 +37,9 @@ def fit_clv(X: pd.DataFrame, future_value, *, seed: int = 0):
     model = make_pipeline(make_preprocessor(), HistGradientBoostingRegressor(
         loss="poisson", learning_rate=0.05, max_iter=200, max_leaf_nodes=15,
         l2_regularization=1.0, min_samples_leaf=20, early_stopping=False, random_state=seed))
-    model.fit(X.loc[keep].astype(float), y[keep].to_numpy())
-    model.features_ = list(X.columns)
+    features = model_columns(X)
+    model.fit(X.loc[keep, features].astype(float), y[keep].to_numpy())
+    model.features_ = features
     return model
 
 

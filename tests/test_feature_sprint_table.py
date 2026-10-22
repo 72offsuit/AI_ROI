@@ -167,14 +167,29 @@ class TestSprintFeatureTable(unittest.TestCase):
         cls.events = _coerce(pd.DataFrame.from_records(make_events(n_customers=120)))
 
     def test_at_least_30_numeric_features(self) -> None:
-        from src.decision.features.sprint_table import FEATURE_NAMES, build_feature_table
+        from src.decision.features.sprint_table import (
+            FEATURE_NAMES, TABLE_COLUMNS, build_feature_table, model_columns)
 
         table = build_feature_table(self.events, FIXTURE_T0)
         self.assertGreaterEqual(len(FEATURE_NAMES), 30)
-        self.assertEqual(list(FEATURE_NAMES), list(table.columns))
+        self.assertEqual(list(TABLE_COLUMNS), list(table.columns))
+        self.assertEqual(list(FEATURE_NAMES), model_columns(table))
         self.assertTrue(all(str(t) == "float64" for t in table.dtypes))
         self.assertEqual("customer_id", table.index.name)
         self.assertTrue(table.index.is_unique)
+
+    def test_s1_alias_column_matches_recency(self) -> None:
+        """오케스트레이션(#154) S1 규칙이 쓰는 이름. 값은 recency 와 같고 구매 이력이 없으면 NaN."""
+        import pandas as pd
+
+        from src.decision.features.sprint_table import build_feature_table
+
+        table = build_feature_table(self.events, FIXTURE_T0)
+        pd.testing.assert_series_equal(table["recency"], table["days_since_last_purchase"],
+                                       check_names=False)
+        no_orders = table["frequency_observed"] == 0
+        self.assertTrue(table.loc[no_orders, "days_since_last_purchase"].isna().all())
+        self.assertTrue(table.loc[~no_orders, "days_since_last_purchase"].notna().all())
 
     def test_names_follow_d1_dictionary(self) -> None:
         """D1 Feature ID 를 단 컬럼은 이름이 D1 `DEFINITIONS` 의 공개 이름과 같다."""
