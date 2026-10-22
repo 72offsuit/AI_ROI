@@ -23,13 +23,21 @@ if DEPS:
 
 
 def synthetic(n=2500, seed=0, arms=("T0", "T1", "T3"), probs=(0.4, 0.3, 0.3)):
-    """x1>0 인 고객에게만 T3 효과 +0.25, T1 은 모두에게 +0.05, 일부에 역효과는 없음."""
+    """x1>0 인 고객에게만 T3 효과 +0.25, T1 은 모두에게 +0.05, 일부에 역효과는 없음.
+
+    실제 Feature 표(51 개 float, 결손 = NaN)를 흉내 내 x2 · x3 · seg 에 결손을 섞는다.
+    """
     rng = np.random.default_rng(seed)
     idx = [f"C{i:08d}" for i in range(n)]
     X = pd.DataFrame({"x1": rng.normal(size=n), "x2": rng.normal(size=n),
+                      "x3": rng.exponential(30.0, size=n),
                       "seg": rng.choice(["a", "b", "c"], n)}, index=idx)
+    x2_true = X["x2"].copy()
+    X.loc[rng.random(n) < 0.10, "x2"] = np.nan
+    X.loc[rng.random(n) < 0.30, "x3"] = np.nan
+    X.loc[rng.random(n) < 0.05, "seg"] = None
     t = pd.Series(rng.choice(list(arms), n, p=list(probs)), index=idx)
-    base = 1 / (1 + np.exp(-(0.6 * X["x2"] - 0.3)))
+    base = 1 / (1 + np.exp(-(0.6 * x2_true - 0.3)))
     tau = np.where(t == "T3", 0.25 * (X["x1"] > 0), 0.0) + np.where(t == "T1", 0.05, 0.0)
     y = pd.Series((rng.random(n) < np.clip(base + tau, 0, 1)).astype(int), index=idx)
     true_t3 = pd.Series(0.25 * (X["x1"] > 0), index=idx)
@@ -91,11 +99,17 @@ class TestMetaLearners(unittest.TestCase):
         b = predict_cate(fit_uplift(self.X, self.t, self.y, "x_learner", seed=7), self.X.iloc[:100])
         pd.testing.assert_frame_equal(a, b)
 
-    def test_missing_outcome_is_rejected_not_filled(self) -> None:
+    def test_feature_nan_is_kept_and_predicted(self) -> None:
+        self.assertTrue(self.X["x2"].isna().any())
+        cate = predict_cate(fit_uplift(self.X, self.t, self.y, "t_learner", seed=0), self.X)
+        self.assertFalse(cate.loc[self.X["x2"].isna(), "T3"].isna().any())
+
+    def test_missing_outcome_is_excluded_and_counted_not_filled(self) -> None:
         y = self.y.astype(float).copy()
-        y.iloc[0] = np.nan
-        with self.assertRaises(ValueError):
-            fit_uplift(self.X, self.t, y, "t_learner")
+        y.iloc[:7] = np.nan
+        model = fit_uplift(self.X, self.t, y, "t_learner")
+        self.assertEqual(7, model.n_outcome_missing_excluded)
+        self.assertEqual(len(self.X) - 7, sum(model.n_by_arm.values()))
 
     def test_unknown_arm_rejected(self) -> None:
         t = self.t.copy()
@@ -127,6 +141,9 @@ class TestEvaluate(unittest.TestCase):
         lo, hi = r["ate"]["T3"]["ci95"]
         self.assertLess(lo, r["ate"]["T3"]["value"])
         self.assertLess(r["ate"]["T3"]["value"], hi)
+        self.assertIn(r["best_method"], ("t_learner", "x_learner"))
+        self.assertIn("validation", r["best_method_selection"]["basis"])
+        self.assertEqual(0, r["n_outcome_missing_excluded"])
         json.dumps(r)   # 게시 가능한 형태
 
     def test_proposed_beat_random_on_strong_heterogeneity(self) -> None:
@@ -140,6 +157,15 @@ class TestEvaluate(unittest.TestCase):
         row = [m for m in r["models"] if m["name"] == "churn_risk_targeting"][0]
         self.assertEqual("not_run", row["status"])
         self.assertIsNone(row["qini"])
+
+    def test_orchestrator_call_shape(self) -> None:
+        """오케스트레이션 호출: evaluate(X, treatment, retention, seed) → fit(…, best_method)."""
+        y = self.y.astype(float).copy()
+        y.iloc[:5] = np.nan
+        r = evaluate_uplift_models(self.X.iloc[:2000], self.t.iloc[:2000], y.iloc[:2000], 3)
+        self.assertEqual(5, r["n_outcome_missing_excluded"])
+        model = fit_uplift(self.X.iloc[:2000], self.t.iloc[:2000], y.iloc[:2000], r["best_method"])
+        self.assertEqual(r["best_method"], model.method)
 
     def test_singleton_arm_falls_back_to_random_split(self) -> None:
         t = self.t.iloc[:1500].copy()

@@ -60,6 +60,18 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
 **근거:** S1 은 위 조사의 설계 문서(data_spec §12.1)를 따르고, S2~S5 는 data_spec §13.1 의
 "한 단계씩 정보를 더한다" 구조를 따른다. S3 은 이슈 지시(위험×CATE)를 따랐다.
 
+**통합 계약(오케스트레이션 PR #154 에 맞춤):**
+
+- `evaluate_uplift_models` 의 `best_method` 는 제안 모델 중 **Validation Qini**(train 안에서 다시 떼어 낸
+  25%) 최고다. Test 지표로 고르지 않는다 — `src/decision/AGENTS.md` "Test 를 보며 반복 조정하지 않는다".
+- 결과 y 결측 행은 **제외하고 건수**(`n_outcome_missing_excluded`)를 남긴다. Feature X 의 NaN 은 그대로
+  HistGB 에 넣는다(결손을 0 으로 채우지 않는다).
+- HistGB 기저 학습기 설정(`BASE_LEARNER`: 깊이 3 · 잎 최소 80 · L2 3 · 학습률 0.03 · 200 회)은 **테스트용
+  합성 데이터**에서 3 안을 비교해 골랐다. 프로젝트 데이터·Test 분할을 보고 고른 값이 아니다.
+- `summarize_strategy` 는 `sim_contribution_profit` 차이를 먼저 쓰고, 양쪽에 없으면 `Δ(매출 − 마케팅비)`
+  대체 계산에 `PROFIT_FALLBACK_REVENUE_BASED` 를 붙인다. 이 대체값은 COGS 를 빼지 않아 **과대평가**다.
+- `analyze_ab` 는 이진(비율 z-검정)과 연속(Welch t) 결과를 값으로 판정해 둘 다 지원한다.
+
 ## 기각한 안과 기각 사유
 
 | 안 | 왜 택하지 않았나 |
@@ -67,6 +79,8 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
 | S1 안 B (30일) | 프로젝트 자체 At Risk 정의(28일)와 다른 숫자를 기준선에 쓰면 비교 근거가 둘이 된다 |
 | S1 안 C (42일+) | 기준선을 약하게 만들어 Incremental Profit 을 부풀린다 — BASE-003 이 막으려는 것 |
 | S5 를 LP(scipy `linprog`)로 정확히 풀기 | 정수성 완화 후 반올림 규칙이 필요하고 스프린트 3시간 안에 검증 불가. Greedy 도 OPT-003 이 허용 |
+| best_method 를 Test Qini 로 고르기 | Test 를 보고 모델을 고르면 Test 가 더 이상 Test 가 아니다. Validation 으로 고르고 Test 는 보고만 한다 |
+| 기여이익이 없을 때 매출 × 가중 마진율(0.26)로 COGS 추정 | `economic_config.yaml` 이 그 블록을 생성 파라미터로만 두고 비율 곱셈을 EC-1 위반으로 명시한다. 대체값은 과대평가임을 표시하고 그대로 둔다 |
 | 세그먼트 임계를 절대값(예: uplift > 0.02) | 결과 변수 단위(구매 확률 vs 원)에 따라 의미가 바뀐다. 이슈 지시대로 분위수 기반 |
 
 ## 이 결정이 틀렸다면 어떻게 드러나나

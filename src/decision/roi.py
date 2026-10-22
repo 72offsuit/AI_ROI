@@ -13,6 +13,21 @@
   ai_roi                     = ai_net_incremental_value / ai_investment_cost   (ROI-005 · PRD §64)
                                ai_investment_cost 가 주어지지 않으면 계산 불가.
 값이 하나라도 없으면 파생값은 None 이다 — 0 으로 채우지 않는다.
+
+입력 키 — 오케스트레이션 집계(``sim_*``)와 단순 형식을 둘 다 받는다. 값마다 아래 후보를
+순서대로 보되, **증분 계산에는 전략과 기준선 양쪽에 다 있는 첫 키**를 쓴다(기준이 섞이면
+차이가 의미를 잃는다). 어떤 키를 썼는지 ``basis`` 에 남긴다.
+
+  매출        sim_revenue → revenue → revenue_krw
+  마케팅비    sim_marketing_cost → marketing_cost → planned_treatment_cost_krw(계획치)
+  기여이익    sim_contribution_profit → contribution_profit
+  이탈률      sim_churn_rate → churn_rate
+
+★ 기여이익이 어느 한쪽에라도 없으면 **대체 계산** ``Δ(매출 − 마케팅비)`` 을 쓰고
+  ``incremental_profit_basis = "fallback:revenue_minus_marketing_cost"`` 와 플래그
+  ``PROFIT_FALLBACK_REVENUE_BASED`` 를 붙인다. 이 값은 **COGS 를 빼지 않았으므로 기여이익
+  증분을 과대평가**하고, 순매출(할인 후, DR-101)에서 쿠폰비를 다시 빼므로 쿠폰 할인을
+  이중 차감한다. 기여이익의 대용이 아니라 "기여이익이 없을 때의 방향 확인용" 이다.
 """
 
 from __future__ import annotations
@@ -24,6 +39,15 @@ from .strategies import STRATEGY_NAMES
 
 ROW_KEYS = ("id", "name", "n_targeted", "treatment_mix", "revenue", "marketing_cost",
             "contribution_profit", "churn_rate")
+CANDIDATES: dict[str, tuple[str, ...]] = {
+    "revenue": ("sim_revenue", "revenue", "revenue_krw"),
+    "marketing_cost": ("sim_marketing_cost", "marketing_cost", "planned_treatment_cost_krw"),
+    "contribution_profit": ("sim_contribution_profit", "contribution_profit"),
+    "churn_rate": ("sim_churn_rate", "churn_rate"),
+}
+#: 그대로 옮겨 싣는 부가 키(있으면).
+PASSTHROUGH = ("n_population", "n_with_outcome", "n_outcome_missing", "retention_rate",
+               "revenue_per_customer_krw", "purchases", "planned_treatment_cost_krw")
 #: PRD §65 '마케팅 비용 폭증' 판정 — 기준선 대비 비용 증가율이 이 값 이상이면 경고.
 #: 근거 문헌 없음: 스프린트 가정(DR-145). 경고일 뿐 결과를 바꾸지 않는다.
 COST_SURGE_RATIO = 1.0
@@ -44,17 +68,60 @@ def _sub(a: Any, b: Any) -> float | None:
     return None if a is None or b is None else a - b
 
 
+def _first(m: Mapping[str, Any], keys: tuple[str, ...]) -> tuple[float | None, str | None]:
+    for k in keys:
+        v = _num(m.get(k))
+        if v is not None:
+            return v, k
+    return None, None
+
+
+def _paired(m: Mapping[str, Any], b: Mapping[str, Any], keys: tuple[str, ...]) -> tuple[float | None, str | None]:
+    """양쪽에 다 있는 첫 키로 차이를 낸다."""
+    for k in keys:
+        a, c = _num(m.get(k)), _num(b.get(k))
+        if a is not None and c is not None:
+            return a - c, k
+    return None, None
+
+
 def summarize_strategy(metrics: Mapping[str, Any], baseline_metrics: Mapping[str, Any] | None,
                        ai_investment_cost: float | None = None) -> dict[str, Any]:
     """전략 요약 행 1개. ``baseline_metrics`` 가 None 이면 증분 지표는 전부 계산 불가."""
     row: dict[str, Any] = {k: metrics.get(k) for k in ROW_KEYS}
+    if row["id"] is None:
+        row["id"] = metrics.get("strategy_id")
     if row["name"] is None and row["id"] in STRATEGY_NAMES:
         row["name"] = STRATEGY_NAMES[row["id"]]
+    basis: dict[str, str | None] = {}
+    for field, keys in CANDIDATES.items():
+        row[field], basis[field] = _first(metrics, keys)
+    for k in PASSTHROUGH:
+        if k in metrics:
+            row[k] = metrics[k]
+    flags: list[str] = []
     base = baseline_metrics or {}
-    inc = _sub(metrics.get("contribution_profit"), base.get("contribution_profit")) if baseline_metrics else None
-    dcost = _sub(metrics.get("marketing_cost"), base.get("marketing_cost")) if baseline_metrics else None
+    inc = dcost = None
+    if baseline_metrics:
+        inc, pk = _paired(metrics, base, CANDIDATES["contribution_profit"])
+        dcost, ck = _paired(metrics, base, CANDIDATES["marketing_cost"])
+        basis["incremental_marketing_cost"] = ck
+        if inc is not None:
+            basis["incremental_profit"] = pk
+        else:
+            drev, rk = _paired(metrics, base, CANDIDATES["revenue"])
+            if drev is not None and dcost is not None:
+                inc = drev - dcost
+                basis["incremental_profit"] = f"fallback:revenue_minus_marketing_cost({rk}−{ck})"
+                flags.append("PROFIT_FALLBACK_REVENUE_BASED")
+            else:
+                basis["incremental_profit"] = None
+        if ck == "planned_treatment_cost_krw":
+            flags.append("MARKETING_COST_PLANNED_NOT_REALIZED")
     row["incremental_profit_vs_S1"] = inc
+    row["incremental_profit_basis"] = basis.get("incremental_profit")
     row["incremental_marketing_cost"] = dcost
+    row["basis"] = basis
     if inc is None or dcost is None:
         row["roi"], row["roi_status"] = None, "계산 불가 — 이익 또는 비용 결손"
     elif dcost <= 0:
@@ -73,21 +140,22 @@ def summarize_strategy(metrics: Mapping[str, Any], baseline_metrics: Mapping[str
         row["ai_net_incremental_value"] = net
         row["ai_roi"] = net / aic
         row["ai_roi_status"] = "ok"
-    row["flags"] = interpretation_flags(metrics, base) if baseline_metrics else []
+    row["flags"] = flags + (interpretation_flags(metrics, base) if baseline_metrics else [])
     return row
 
 
 def interpretation_flags(metrics: Mapping[str, Any], base: Mapping[str, Any]) -> list[str]:
     """PRD §65 · ROI-006 — 좋은 결과로 보지 않는 조합."""
     flags = []
-    drev = _sub(metrics.get("revenue"), base.get("revenue"))
-    dprof = _sub(metrics.get("contribution_profit"), base.get("contribution_profit"))
+    drev, _ = _paired(metrics, base, CANDIDATES["revenue"])
+    dprof, _ = _paired(metrics, base, CANDIDATES["contribution_profit"])
     if drev is not None and dprof is not None and drev > 0 and dprof < 0:
         flags.append("revenue_up_profit_down")
-    dchurn = _sub(metrics.get("churn_rate"), base.get("churn_rate"))
-    c, c0 = _num(metrics.get("marketing_cost")), _num(base.get("marketing_cost"))
-    if dchurn is not None and dchurn < 0 and c is not None and c0 is not None and c0 > 0:
-        if (c - c0) / c0 >= COST_SURGE_RATIO:
+    dchurn, _ = _paired(metrics, base, CANDIDATES["churn_rate"])
+    dcost, ck = _paired(metrics, base, CANDIDATES["marketing_cost"])
+    c0 = _num(base.get(ck)) if ck else None
+    if dchurn is not None and dchurn < 0 and dcost is not None and c0 is not None and c0 > 0:
+        if dcost / c0 >= COST_SURGE_RATIO:
             flags.append("retention_up_cost_surge")
     return flags
 

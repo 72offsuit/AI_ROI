@@ -304,11 +304,28 @@ def plan(strategy_id: str, scores: Mapping[str, Any], budget_krw: int | None,
 
     scores 키: ``churn_p``(Series) · ``cate``(DataFrame T1~T4) · ``clv``(Series|None) ·
     ``days_since_last_purchase``(Series) · 선택 ``lifetime_order_count`` · ``eligible`` ·
-    ``margin_rate``. 필요한 점수가 없으면 ``NotComputable`` — 빈 배정으로 대신하지 않는다.
+    ``margin_rate``. 필요한 점수(``REQUIRED_SCORES``)가 없으면 ``NotComputable`` — 빈 배정으로
+    대신하지 않는다. ``costs`` 는 처치별 고객당 단가 dict(``T0`` 키가 있어도 된다).
+    S2~S5 는 ``budget_krw`` 가 None 이면 ValueError(호출 오류 — 모든 AI 전략 ≤ C_rule).
     """
     if strategy_id not in _PLANNERS:
         raise KeyError(f"알 수 없는 전략: {strategy_id!r} (S0~S5)")
+    missing = [k for k in REQUIRED_SCORES[strategy_id] if scores.get(k) is None]
+    if missing:
+        raise NotComputable(f"{strategy_id} 에 필요한 점수가 없다: {missing}")
     return _PLANNERS[strategy_id](scores, budget_krw, costs)
+
+
+#: 전략별 필수 점수. 없으면 ``plan`` 이 ``NotComputable`` 을 던진다(빈 배정으로 대신하지 않는다).
+#: S1 의 ``lifetime_order_count`` · ``eligible`` 은 선택 — 없으면 그 조건이 not_run(``s1_eligibility``).
+REQUIRED_SCORES: dict[str, tuple[str, ...]] = {
+    "S0": (),
+    "S1": ("days_since_last_purchase",),
+    "S2": ("churn_p",),
+    "S3": ("churn_p", "cate"),
+    "S4": ("cate", "clv"),
+    "S5": ("cate", "clv"),
+}
 
 
 def plan_summary(assignment: Mapping[str, str]) -> dict[str, Any]:

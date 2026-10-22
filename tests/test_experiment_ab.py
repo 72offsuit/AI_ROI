@@ -54,10 +54,31 @@ class TestAB(unittest.TestCase):
         self.assertAlmostEqual(0.06, adj["b"])     # 단조 유지
         self.assertIsNone(adj["d"])
 
-    def test_non_binary_rejected(self) -> None:
-        df = pd.DataFrame({"arm": ["T0", "T3"], "retained": [0.5, 2.0]})
-        with self.assertRaises(ValueError):
-            analyze_ab(df, "arm", "retained")
+    def test_continuous_outcome_welch(self) -> None:
+        import numpy as np
+
+        rng = np.random.default_rng(0)
+        df = pd.DataFrame({"arm": ["T0"] * 2000 + ["T3"] * 2000 + ["T1"] * 2000,
+                           "revenue": np.concatenate([rng.gamma(2, 10000, 2000),
+                                                      rng.gamma(2, 11500, 2000),
+                                                      rng.gamma(2, 10000, 2000)])})
+        df.loc[0, "revenue"] = np.nan
+        r = analyze_ab(df, "arm", "revenue", control="T0")
+        self.assertEqual("continuous", r["outcome_kind"])
+        self.assertEqual(1, r["n_outcome_missing_excluded"])
+        c = r["comparisons"]["T3"]
+        from scipy.stats import ttest_ind
+
+        ref = ttest_ind(df.loc[df.arm == "T3", "revenue"], df.loc[df.arm == "T0", "revenue"].dropna(),
+                        equal_var=False)
+        self.assertAlmostEqual(float(ref.pvalue), c["p_value"], places=10)
+        self.assertLess(c["ci95"][0], c["diff"])
+        self.assertIsNotNone(c["required_n_per_arm_observed_effect"])
+        self.assertIn("p_value_holm", r["comparisons"]["T1"])
+
+    def test_binary_kind_is_reported(self) -> None:
+        r = analyze_ab(frame({"T0": (100, 20), "T3": (100, 30)}), "arm", "retained")
+        self.assertEqual("binary", r["outcome_kind"])
 
 
 if __name__ == "__main__":

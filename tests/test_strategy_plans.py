@@ -77,10 +77,28 @@ class TestPlans(unittest.TestCase):
         with self.assertRaises(ValueError):
             plan("S2", self.s, None, COSTS)
 
+    def test_orchestrator_unit_costs_with_t0(self) -> None:
+        unit = {"T0": 0, "T1": 3000, "T2": 3000, "T3": 7000, "T4": 30}
+        for sid in STRATEGY_NAMES:
+            with self.subTest(strategy=sid):
+                a = plan(sid, self.s, 100_000, unit)
+                self.assertLessEqual(sum(unit[t] for t in a.values()), 100_000)
+
     def test_s1_through_dispatcher(self) -> None:
         a = plan("S1", self.s, None, COSTS)
         d = self.s["days_since_last_purchase"]
         self.assertEqual(set(d.index[(d >= 28) & (d <= 90)]), set(a))
+
+
+class TestMissingScores(unittest.TestCase):
+    """필요한 점수가 없으면 판별 가능한 예외 — 빈 배정으로 대신하지 않는다 (표준 라이브러리)."""
+
+    def test_each_strategy_names_what_is_missing(self) -> None:
+        unit = {"T0": 0, "T1": 3000, "T2": 3000, "T3": 7000, "T4": 30}
+        for sid in ("S1", "S2", "S3", "S4", "S5"):
+            with self.subTest(strategy=sid), self.assertRaises(NotComputable):
+                plan(sid, {}, 100_000, unit)
+        self.assertEqual({}, plan("S0", {}, 100_000, unit))
 
 
 class TestPlanSummary(unittest.TestCase):
@@ -118,6 +136,38 @@ class TestRoi(unittest.TestCase):
         self.assertAlmostEqual((-10.0 - 5.0) / 5.0, r["ai_roi"])
         self.assertIn("revenue_up_profit_down", r["flags"])
         self.assertIn("retention_up_cost_surge", r["flags"])
+
+    def test_orchestrator_metrics_prefer_sim_contribution_profit(self) -> None:
+        base = {"strategy_id": "S1", "sim_revenue": 1000.0, "sim_contribution_profit": 300.0,
+                "sim_marketing_cost": 100.0, "revenue_krw": 990.0, "planned_treatment_cost_krw": 120.0,
+                "churn_rate": 0.2, "n_population": 10}
+        ai = {"strategy_id": "S5", "sim_revenue": 1050.0, "sim_contribution_profit": 330.0,
+              "sim_marketing_cost": 120.0, "revenue_krw": 1040.0, "planned_treatment_cost_krw": 150.0,
+              "churn_rate": 0.18, "n_population": 10}
+        r = summarize_strategy(ai, base)
+        self.assertEqual("S5", r["id"])
+        self.assertAlmostEqual(30.0, r["incremental_profit_vs_S1"])
+        self.assertEqual("sim_contribution_profit", r["incremental_profit_basis"])
+        self.assertAlmostEqual(30.0 / 20.0, r["roi"])
+        self.assertNotIn("PROFIT_FALLBACK_REVENUE_BASED", r["flags"])
+        self.assertEqual(10, r["n_population"])
+
+    def test_revenue_fallback_is_flagged(self) -> None:
+        base = {"strategy_id": "S1", "sim_contribution_profit": None, "revenue_krw": 1000.0,
+                "planned_treatment_cost_krw": 100.0}
+        ai = {"strategy_id": "S2", "sim_contribution_profit": None, "revenue_krw": 1100.0,
+              "planned_treatment_cost_krw": 140.0}
+        r = summarize_strategy(ai, base)
+        self.assertAlmostEqual(100.0 - 40.0, r["incremental_profit_vs_S1"])
+        self.assertTrue(r["incremental_profit_basis"].startswith("fallback:"))
+        self.assertIn("PROFIT_FALLBACK_REVENUE_BASED", r["flags"])
+        self.assertIn("MARKETING_COST_PLANNED_NOT_REALIZED", r["flags"])
+
+    def test_mixed_basis_is_not_compared(self) -> None:
+        """한쪽만 sim 기여이익이 있고 매출도 공통 키가 없으면 계산 불가."""
+        r = summarize_strategy({"strategy_id": "S2", "sim_contribution_profit": 10.0},
+                               {"strategy_id": "S1", "contribution_profit": 5.0})
+        self.assertIsNone(r["incremental_profit_vs_S1"])
 
     def test_summarize_all(self) -> None:
         rows = summarize_all({"S1": self.BASE, "S0": {"marketing_cost": 0.0, "contribution_profit": 250.0}})

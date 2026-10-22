@@ -8,8 +8,13 @@
 * 검정력 — 관측 효과에서 달성 검정력, 그리고 그 효과를 α·검정력 목표로 검출하는
   군당 최소 표본(정규근사). ``mde`` 를 주면 그 효과 기준으로도 낸다.
 
-결과는 **이진**(유지=1 / 이탈=1 등)이어야 한다. 그 외는 ValueError — 다른 검정을 조용히
-대신 쓰지 않는다. scipy 는 함수 안에서 import 한다.
+결과 종류는 값으로 판정하고 결과 dict 의 ``outcome_kind`` 에 적는다.
+
+* **이진**(값 ⊆ {0,1}: 유지·구매) — 위의 비율 검정.
+* **연속**(매출 등) — 평균 차, Welch t-검정과 Welch 자유도 95% CI, 정규근사 검정력·최소 표본.
+  매출은 0 이 많고 꼬리가 길어 정규근사가 느리게 수렴한다 — 표본이 작으면 CI 를 믿지 않는다.
+
+결과 결측 행은 제외하고 건수를 남긴다(0 으로 채우지 않는다). scipy 는 함수 안에서 import 한다.
 """
 
 from __future__ import annotations
@@ -83,22 +88,80 @@ def srm_check(counts: Mapping[str, int], expected_ratio: Mapping[str, float] | N
             "threshold": threshold}
 
 
+def sample_size_two_means(sd_c: float, sd_t: float, delta: float, alpha: float = 0.05,
+                          power: float = 0.8) -> int | None:
+    """양측 평균 차 검정의 군당 최소 표본(등배정, 정규근사). 효과 0 이면 None."""
+    if delta == 0:
+        return None
+    za, zb = _z(1 - alpha / 2), _z(power)
+    return int(math.ceil((za + zb) ** 2 * (sd_c ** 2 + sd_t ** 2) / delta ** 2))
+
+
+def _compare_means(y_t, y_c, alpha: float, power: float, mde: float | None) -> dict[str, Any]:
+    from scipy.stats import norm, t as tdist
+
+    n_t, n_c = len(y_t), len(y_c)
+    if n_t < 2 or n_c < 2:
+        return {"n_control": n_c, "n_treatment": n_t, "status": "계산 불가 — 표본 2 미만",
+                "diff": None, "ci95": None, "p_value": None}
+    m_t, m_c = float(y_t.mean()), float(y_c.mean())
+    v_t, v_c = float(y_t.var(ddof=1)), float(y_c.var(ddof=1))
+    diff = m_t - m_c
+    se = math.sqrt(v_t / n_t + v_c / n_c)
+    out: dict[str, Any] = {"n_control": n_c, "n_treatment": n_t, "mean_control": m_c,
+                           "mean_treatment": m_t, "diff": diff,
+                           "relative_lift": (diff / m_c) if m_c != 0 else None}
+    if se == 0:
+        out.update({"t": None, "df": None, "p_value": None, "ci95": None, "achieved_power": None,
+                    "status": "계산 불가 — 분산 0"})
+    else:
+        df_w = (v_t / n_t + v_c / n_c) ** 2 / ((v_t / n_t) ** 2 / (n_t - 1) + (v_c / n_c) ** 2 / (n_c - 1))
+        tstat = diff / se
+        q = float(tdist.ppf(1 - alpha / 2, df_w))
+        za = _z(1 - alpha / 2)
+        d = abs(diff) / se
+        out.update({"t": tstat, "df": df_w, "p_value": float(2 * tdist.sf(abs(tstat), df_w)),
+                    "ci95": [diff - q * se, diff + q * se],
+                    "achieved_power": float(norm.cdf(d - za) + norm.cdf(-d - za))})
+    sd_t, sd_c = math.sqrt(v_t), math.sqrt(v_c)
+    out["required_n_per_arm_observed_effect"] = sample_size_two_means(sd_c, sd_t, diff, alpha, power)
+    out["required_n_per_arm_mde"] = (sample_size_two_means(sd_c, sd_t, mde, alpha, power)
+                                     if mde is not None else None)
+    return out
+
+
 def analyze_ab(df, arm_col: str, outcome_col: str, control: str = "T0", alpha: float = 0.05,
                power: float = 0.8, expected_ratio: Mapping[str, float] | None = None,
                mde: float | None = None) -> dict[str, Any]:
-    """처치군 각각을 ``control`` 과 비교한다. ``df`` 는 pandas DataFrame."""
+    """처치군 각각을 ``control`` 과 비교한다. ``df`` 는 pandas DataFrame. 이진·연속 결과 모두."""
     from scipy.stats import chi2_contingency, norm
 
     data = df[[arm_col, outcome_col]]
     n_missing = int(data[outcome_col].isna().sum())
     data = data.dropna(subset=[outcome_col])
     vals = set(data[outcome_col].astype(float).unique())
-    if not vals <= {0.0, 1.0}:
-        raise ValueError(f"{outcome_col} 이 이진(0/1)이 아니다 — 비율 검정을 적용할 수 없다")
+    binary = vals <= {0.0, 1.0}
     arms_all = sorted(data[arm_col].astype(str).unique())
     if control not in arms_all:
         raise ValueError(f"대조군 {control} 이 없다")
-    g = data.assign(_arm=data[arm_col].astype(str), _y=data[outcome_col].astype(float)).groupby("_arm")["_y"]
+    data = data.assign(_arm=data[arm_col].astype(str), _y=data[outcome_col].astype(float))
+    if not binary:
+        groups = {a: data.loc[data["_arm"] == a, "_y"].to_numpy() for a in arms_all}
+        comps = {a: _compare_means(groups[a], groups[control], alpha, power, mde)
+                 for a in arms_all if a != control}
+        adj = holm({a: c.get("p_value") for a, c in comps.items()})
+        for a in comps:
+            comps[a]["p_value_holm"] = adj[a]
+            comps[a]["significant_holm"] = (adj[a] < alpha) if adj[a] is not None else None
+        counts = {a: int(len(groups[a])) for a in arms_all}
+        return {
+            "outcome": outcome_col, "outcome_kind": "continuous",
+            "n": int(sum(counts.values())), "n_outcome_missing_excluded": n_missing,
+            "arms": counts, "control": control, "alpha": alpha, "power_target": power, "mde": mde,
+            "srm": srm_check(counts, expected_ratio), "comparisons": comps,
+            "test_method": "Welch t-test · 95% CI (Welch df) · Holm adjusted · power by normal approx",
+        }
+    g = data.groupby("_arm")["_y"]
     n = g.size().to_dict()
     x = g.sum().to_dict()
     rate = {a: x[a] / n[a] for a in n}
@@ -142,6 +205,7 @@ def analyze_ab(df, arm_col: str, outcome_col: str, control: str = "T0", alpha: f
         comps[a]["p_value_holm"] = adj[a]
         comps[a]["significant_holm"] = (adj[a] < alpha) if adj[a] is not None else None
     return {
+        "outcome": outcome_col, "outcome_kind": "binary",
         "n": int(sum(n.values())), "n_outcome_missing_excluded": n_missing,
         "arms": {a: int(n[a]) for a in arms_all}, "control": control,
         "alpha": alpha, "power_target": power, "mde": mde,

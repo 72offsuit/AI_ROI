@@ -72,28 +72,40 @@ def _prep_X(X: pd.DataFrame, columns: list[str] | None = None) -> pd.DataFrame:
     return out
 
 
-def _check_inputs(X: pd.DataFrame, treatment: pd.Series, y: pd.Series) -> tuple[pd.Series, pd.Series]:
-    treatment = pd.Series(treatment).astype(str)
-    y = pd.Series(y).astype(float)
+def _check_inputs(X: pd.DataFrame, treatment: pd.Series, y: pd.Series):
+    """검증 후 ``(X, treatment, y, n_outcome_missing)``.
+
+    결과(y) 결측 행은 **제외하고 건수를 돌려준다** — 0 으로 채우지 않는다. 결과를 모르는
+    고객은 처치 효과의 증거가 아니다. X 의 결측(NaN)은 그대로 둔다(HistGB 가 처리).
+    """
     if len(X) != len(treatment) or len(X) != len(y):
         raise ValueError("X · treatment · y 길이가 다르다")
+    treatment = pd.Series(treatment).set_axis(X.index).astype(str)
+    y = pd.Series(y).set_axis(X.index).astype(float)
     bad = sorted(set(treatment) - set(ARMS))
     if bad:
         raise ValueError(f"알 수 없는 처치 값: {bad[:5]} (T0~T4 만 허용)")
-    if y.isna().any():
-        raise ValueError("y 에 결측이 있다 — 결과를 0 으로 채우지 않는다. 결측 행을 먼저 제외하라")
+    keep = y.notna().to_numpy()
+    n_missing = int((~keep).sum())
+    if n_missing:
+        X, treatment, y = X[keep], treatment[keep], y[keep]
     if (treatment == CONTROL).sum() < MIN_ARM_N:
         raise ValueError(f"대조군(T0) 표본이 {MIN_ARM_N} 미만이다 — CATE 를 계산할 수 없다")
-    return treatment.set_axis(X.index), y.set_axis(X.index)
+    return X, treatment, y, n_missing
+
+
+#: 기저 학습기 설정. 처치군마다 따로 학습하므로 군당 표본이 수백 건이어도 버티도록 얕고
+#: 강하게 규제한다. ★ 이 값은 **이 저장소의 테스트 합성 데이터**(tests/test_uplift_models.py)
+#: 에서 3 안을 비교해 골랐다 — 프로젝트 데이터·Test 분할을 보고 고른 값이 아니다(DR-145).
+#: (max_leaf_nodes 15·min_leaf 20 은 합성 3,000 건에서 T-learner Qini 가 음수까지 떨어졌다.)
+BASE_LEARNER = dict(max_iter=200, learning_rate=0.03, max_depth=3, min_samples_leaf=80,
+                    l2_regularization=3.0)
 
 
 def _regressor(seed: int):
     from sklearn.ensemble import HistGradientBoostingRegressor
 
-    return HistGradientBoostingRegressor(
-        max_iter=150, learning_rate=0.08, max_leaf_nodes=15,
-        min_samples_leaf=20, l2_regularization=1.0, random_state=seed,
-    )
+    return HistGradientBoostingRegressor(random_state=seed, **BASE_LEARNER)
 
 
 # ── 모델 ─────────────────────────────────────────────────────────────────────
@@ -106,6 +118,7 @@ class UpliftModel:
     models: dict[str, Any] = field(default_factory=dict)
     propensity: dict[str, float] = field(default_factory=dict)
     n_by_arm: dict[str, int] = field(default_factory=dict)
+    n_outcome_missing_excluded: int = 0
 
 
 def _threads():
@@ -128,11 +141,12 @@ def _fit_uplift(X: pd.DataFrame, treatment: pd.Series, y: pd.Series,
                 method: str, seed: int) -> UpliftModel:
     if method not in METHODS:
         raise ValueError(f"method 는 {METHODS} 중 하나다: {method!r}")
-    treatment, y = _check_inputs(X, treatment, y)
+    X, treatment, y, n_missing = _check_inputs(X, treatment, y)
     Xp = _prep_X(X)
     n_by_arm = {a: int((treatment == a).sum()) for a in ARMS}
     arms = [a for a in TREATED if n_by_arm[a] >= MIN_ARM_N]
-    model = UpliftModel(method=method, columns=list(Xp.columns), arms=arms, n_by_arm=n_by_arm)
+    model = UpliftModel(method=method, columns=list(Xp.columns), arms=arms, n_by_arm=n_by_arm,
+                        n_outcome_missing_excluded=n_missing)
     ctrl = (treatment == CONTROL).to_numpy()
 
     if method == "s_learner":
@@ -296,10 +310,12 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
       * ``s_learner`` — Baseline 메타러너.
     대표 처치군(``primary_arm``, 기본 T3 · 없으면 표본 최다 처치군)에서 모델 행을 내고,
     처치군별 결과는 ``by_arm`` 에 둔다. 처치군별 ATE·95% CI 는 **전체 표본**에서 낸다.
-    """
-    from sklearn.model_selection import train_test_split
 
-    treatment, y = _check_inputs(X, treatment, y)
+    ``best_method`` — 제안 모델 중 **Validation**(train 안에서 다시 떼어 낸 25%) Qini 가 가장
+    높은 것. Test 성능으로 고르지 않는다(src/decision/AGENTS.md — Test 를 보며 고르면 그것이
+    과적합이다). Test 지표는 고른 뒤 보고만 한다.
+    """
+    X, treatment, y, n_missing = _check_inputs(X, treatment, y)
     arms_n = {a: int((treatment == a).sum()) for a in ARMS}
     usable = [a for a in TREATED if arms_n[a] >= MIN_ARM_N]
     if not usable:
@@ -314,11 +330,12 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
 
     # 층화 분할 — 표본 1 개뿐인 처치군이 있으면 층화가 불가능하므로 단순 무작위로 내린다(기록).
     stratified = min(arms_n[a] for a in ARMS if arms_n[a] > 0) >= 2
-    idx_tr, idx_te = train_test_split(np.arange(len(X)), test_size=test_size, random_state=seed,
-                                      stratify=treatment.to_numpy() if stratified else None)
+    idx_tr, idx_te = _split(treatment, test_size, seed, stratified)
     X_tr, X_te = X.iloc[idx_tr], X.iloc[idx_te]
     t_tr, t_te = treatment.iloc[idx_tr], treatment.iloc[idx_te]
     y_tr, y_te = y.iloc[idx_tr], y.iloc[idx_te]
+
+    selection = _select_method(X_tr, t_tr, y_tr, methods, primary_arm, seed, stratified)
 
     cates: dict[str, pd.DataFrame] = {}
     for m in methods:
@@ -353,7 +370,10 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
         by_arm[a] = {"n_test": sel_n,
                      "models": [{k: v for k, v in r.items() if k != "qini_curve"} for r in rows_for(a, False)]}
     return {
+        "best_method": selection["best_method"],
+        "best_method_selection": selection,
         "n": int(len(X)), "n_train": int(len(idx_tr)), "n_test": int(len(idx_te)),
+        "n_outcome_missing_excluded": n_missing,
         "seed": seed, "test_size": test_size, "split": "stratified_by_arm" if stratified else "random",
         "outcome_kind": "binary" if binary else "continuous",
         "arms": arms_n, "primary_arm": primary_arm,
@@ -368,6 +388,45 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
             "ate_ci": "Welch normal approximation, full sample",
         },
     }
+
+
+def _split(treatment: pd.Series, test_size: float, seed: int, stratified: bool):
+    from sklearn.model_selection import train_test_split
+
+    return train_test_split(np.arange(len(treatment)), test_size=test_size, random_state=seed,
+                            stratify=treatment.to_numpy() if stratified else None)
+
+
+#: best_method 선택용 Validation 비율(train 안에서).
+VALIDATION_SIZE = 0.25
+
+
+def _select_method(X_tr, t_tr, y_tr, methods, primary_arm: str, seed: int, stratified: bool) -> dict[str, Any]:
+    """train 을 다시 나눠 Validation Qini 로 제안 모델을 고른다. 제안 모델이 없으면 전체 후보."""
+    candidates = [m for m in methods if METHOD_KIND[m] == "proposed"] or list(methods)
+    if not candidates:
+        return {"best_method": None, "status": "not_run", "reason": "후보 모델이 없다"}
+    counts = t_tr.value_counts()
+    strat = stratified and int(counts.min()) >= 2
+    i_fit, i_val = _split(t_tr, VALIDATION_SIZE, seed + 1, strat)
+    t_val = t_tr.iloc[i_val]
+    sel = t_val.isin([CONTROL, primary_arm]).to_numpy()
+    tr = (t_val[sel] == primary_arm).to_numpy()
+    yy = y_tr.iloc[i_val].to_numpy()[sel]
+    scores: dict[str, float | None] = {}
+    for m in candidates:
+        try:
+            model = fit_uplift(X_tr.iloc[i_fit], t_tr.iloc[i_fit], y_tr.iloc[i_fit], method=m, seed=seed)
+            cate = predict_cate(model, X_tr.iloc[i_val])[primary_arm].to_numpy()[sel]
+            scores[m] = qini_curve(cate, tr, yy)["qini"] if not np.isnan(cate).any() else None
+        except ValueError as error:          # 처치군·대조군 부족 등 — 그 후보만 계산 불가
+            scores[m] = None
+            scores[f"{m}:reason"] = str(error)  # type: ignore[assignment]
+    valid = {m: q for m, q in scores.items() if ":" not in m and q is not None}
+    best = max(candidates, key=lambda m: (valid.get(m, -np.inf), -candidates.index(m))) if valid else None
+    return {"best_method": best, "basis": f"validation Qini (train 의 {VALIDATION_SIZE:.0%}), arm {primary_arm}",
+            "candidates": candidates, "validation_qini": scores,
+            "n_validation": int(sel.sum())}
 
 
 def evaluate_on_benchmark(df: pd.DataFrame, feature_cols: list[str], treatment_col: str,
