@@ -98,6 +98,8 @@ export interface StrategyComparison extends SprintHeader {
     contribution_profit?: number | null;
     churn_rate?: number | null;
     incremental_profit_vs_S1?: number | null;
+    incremental_profit_basis?: string | null;
+    flags?: string[] | null;
     roi?: number | null;
   }[];
 }
@@ -124,11 +126,21 @@ export interface AbTest extends SprintHeader {
 export interface RealismReport {
   generated_at?: string | null;
   metrics?: {
+    id?: string | null;
     name: string;
     unit?: string | null;
-    synthetic?: number | null;
-    reference?: { dataset?: string | null; value?: number | null; source_url?: string | null } | null;
-    verdict?: "consistent" | "deviates" | "no_reference" | string | null;
+    /** A number, or a record of named sub-values (e.g. median · mean · p75) — scripts/research/realism_check.py. */
+    synthetic?: number | Record<string, unknown> | null;
+    reference?: {
+      dataset?: string | null;
+      value?: number | Record<string, unknown> | null;
+      band?: unknown;
+      source_url?: string | null;
+    } | null;
+    /** realism_check.py's own verdict: pass · borderline · fail · no_data. */
+    verdict?: string | null;
+    /** The same verdict in the dashboard vocabulary: consistent · deviates · no_reference. */
+    dashboard_verdict?: "consistent" | "deviates" | "no_reference" | string | null;
   }[];
 }
 

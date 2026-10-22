@@ -23,11 +23,45 @@ const GROUNDING_DOC =
 const REPORT_DOC =
   "https://github.com/72offsuit/AI_ROI/blob/main/docs/research/realism_report.json";
 
-function verdictChip(verdict: string | null | undefined) {
-  if (verdict === "consistent") return <StateChip state="ok" label="일치 · consistent" />;
-  if (verdict === "deviates") return <StateChip state="gap" label="차이 있음 · deviates" />;
-  if (verdict === "no_reference") return <StateChip state="planned" label="참조값 없음 · no_reference" />;
-  return <StateChip state="violation" label={`판정 미표기 · ${String(verdict)}`} />;
+// realism_check.py writes its own verdict (pass · borderline · fail · no_data) and the same
+// verdict in the dashboard vocabulary (dashboard_verdict). The raw word is shown so that
+// borderline and fail — both "deviates" — stay distinguishable.
+function verdictChip(raw: string | null | undefined, dashboard: string | null | undefined) {
+  if (raw === "pass") return <StateChip state="ok" label="통과 · pass" />;
+  if (raw === "borderline") return <StateChip state="gap" label="경계 · borderline" />;
+  if (raw === "fail") return <StateChip state="gap" label="실패 · fail" />;
+  if (raw === "no_data") return <StateChip state="planned" label="데이터 없음 · no_data" />;
+  const v = dashboard ?? raw;
+  if (v === "consistent") return <StateChip state="ok" label="일치 · consistent" />;
+  if (v === "deviates") return <StateChip state="gap" label="차이 있음 · deviates" />;
+  if (v === "no_reference") return <StateChip state="planned" label="참조값 없음 · no_reference" />;
+  return <StateChip state="violation" label={`판정 미표기 · ${String(v)}`} />;
+}
+
+// Lists a value as the file gives it: a number, a [lo, hi] band, or named sub-values.
+// Nested records (e.g. `uncapped`) are not flattened — only scalar entries are shown.
+function ValueList({ value }: { value: unknown }) {
+  if (Array.isArray(value) && value.length === 2) {
+    const [lo, hi] = value.map((x) => fmtAuto(x));
+    return lo === null || hi === null ? <Val text={null} /> : <Val text={`${lo} ~ ${hi}`} />;
+  }
+  if (value !== null && typeof value === "object" && !Array.isArray(value)) {
+    const entries = Object.entries(value as Record<string, unknown>).filter(
+      ([, v]) => typeof v === "number" || typeof v === "boolean" || (Array.isArray(v) && v.length === 2),
+    );
+    if (entries.length === 0) return <Val text={null} />;
+    return (
+      <>
+        {entries.map(([k, v]) => (
+          <span key={k} className="block whitespace-nowrap">
+            <span className="text-text-secondary">{k}</span>{" "}
+            {typeof v === "boolean" ? <Val text={String(v)} /> : <ValueList value={v} />}
+          </span>
+        ))}
+      </>
+    );
+  }
+  return <Val text={fmtAuto(value)} />;
 }
 
 function safeUrl(url: string | null | undefined): string | null {
@@ -80,7 +114,7 @@ export default async function GroundingPage() {
                   <th className={TH}>지표</th>
                   <th className={TH}>단위</th>
                   <th className={THR}>생성 (시뮬레이터)</th>
-                  <th className={THR}>실데이터</th>
+                  <th className={THR}>실데이터 (값 · 통과 범위)</th>
                   <th className={TH}>참조 데이터셋</th>
                   <th className={TH}>판정</th>
                 </tr>
@@ -89,16 +123,29 @@ export default async function GroundingPage() {
                 {metrics.map((m) => {
                   const url = safeUrl(m.reference?.source_url);
                   return (
-                    <tr key={m.name}>
-                      <td className={TD}>{m.name}</td>
+                    <tr key={m.id ?? m.name}>
+                      <td className={TD}>
+                        {typeof m.id === "string" ? <code className="font-mono">{m.id}</code> : null} {m.name}
+                      </td>
                       <td className={TD}>
                         <Txt text={m.unit} />
                       </td>
                       <td className={TDR}>
-                        <Val text={fmtAuto(m.synthetic)} />
+                        <ValueList value={m.synthetic} />
                       </td>
                       <td className={TDR}>
-                        <Val text={fmtAuto(m.reference?.value)} />
+                        {m.reference?.value !== undefined && m.reference?.value !== null ? (
+                          <ValueList value={m.reference.value} />
+                        ) : null}
+                        {m.reference?.band !== undefined && m.reference?.band !== null ? (
+                          <span className="block">
+                            <span className="text-text-secondary">범위</span> <ValueList value={m.reference.band} />
+                          </span>
+                        ) : null}
+                        {(m.reference?.value === undefined || m.reference?.value === null) &&
+                        (m.reference?.band === undefined || m.reference?.band === null) ? (
+                          <Val text={null} />
+                        ) : null}
                       </td>
                       <td className={TD}>
                         {m.reference === null || m.reference === undefined ? (
@@ -111,7 +158,7 @@ export default async function GroundingPage() {
                           </a>
                         )}
                       </td>
-                      <td className={TD}>{verdictChip(m.verdict)}</td>
+                      <td className={TD}>{verdictChip(m.verdict, m.dashboard_verdict)}</td>
                     </tr>
                   );
                 })}
