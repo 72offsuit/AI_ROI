@@ -26,9 +26,15 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "047c9d783cc91c1465a93d229c0916aad1e727c3f2a444ae1032135d68e79e72",
         716,
     ),
+    # S3: P6 가 Day 1~272 에 가입해 14일 창에서 그 고객들의 이벤트가 빠진다(DR-S3-p6-signup).
+    "sim-0.3": (
+        "dcd8a4e0038f5be0db3ba003f66ec69e52d83e2480ffa56b894425dca73e7145",
+        "827c8bc47e8122ce3ccd257fd101047e1a9c2595603375a949761a80966186b1",
+        692,
+    ),
 }
 # 행동은 그대로이고 판 라벨만 바뀐 판 → 행동 기준 판. S2 는 생성(페르소나·Trait)만 더하고 이벤트 규칙을
-# 건드리지 않는다(사용자 확정 U1·U4). Trait 이 행동에 연결되는 S4 에서 이 항목을 지운다.
+# 건드리지 않는다(사용자 확정 U1·U4). sim-0.3(S3)은 가입일을 바꿔 행동이 바뀐 판이라 항목이 없다.
 BEHAVIOR_BASELINE: dict[str, str] = {"sim-0.2": "sim-0.1"}
 # seed 42 · 50명의 [customer_id, persona, hidden_traits] 정준 JSON sha256. 이벤트와 무관한 생성 결과의 고정점이다.
 GENERATION_GOLDEN = "c9c991a24689051c08a739b06fe5701a0dd435a44f25ce45d1c390b572dae762"

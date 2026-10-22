@@ -72,7 +72,7 @@ class SinkFormatError(SimulatorError)
 
 | 함수 | 인자 | 반환 | 예외 |
 |---|---|---|---|
-| `init` | `seed`: `0 ≤ seed < 2⁶³` 정수 · `num_customers`: 1 ~ 99,999,999(고객 ID `C00000001` 부터 순번) · `profile`: `smoke` `short` `reference` `long` `rolling` 중 하나 · `output_root`: 이 세계 전용 Sink 루트, 없거나 빈 디렉터리. `bool` 은 정수로 받지 않는다 | `None`. 이전 세계와 스냅샷 토큰을 버린다. 이벤트를 쓰지 않는다 | `TypeError` · `ValueError` · `OutputRootError` · `SimulatorError`(시뮬레이터의 생성 설정을 읽을 수 없거나 형식이 틀렸다) |
+| `init` | `seed`: `0 ≤ seed < 2⁶³` 정수 · `num_customers`: 1 ~ 99,999,999(고객 ID `C00000001` 부터 순번) · `profile`: `smoke` `short` `small` `reference` `long` `rolling` 중 하나 · `output_root`: 이 세계 전용 Sink 루트, 없거나 빈 디렉터리. `bool` 은 정수로 받지 않는다 | `None`. 이전 세계와 스냅샷 토큰을 버린다. 이벤트를 쓰지 않는다 | `TypeError` · `ValueError` · `OutputRootError` · `SimulatorError`(시뮬레이터의 생성 설정을 읽을 수 없거나 형식이 틀렸다) |
 | `advance` | `days`: 0 이상의 `int`. 창 끝이 epoch ms 13자리(2286-11-20)를 넘으면 `ValueError` | `RunSummary`. 창 `[now, now+days)` 를 기록하고 시각을 옮긴다. 1회 = 측정 계층 실행 기록 1건. `advance(0)` 은 아무것도 하지 않는다. `advance(a)` 후 `advance(b)` 는 `advance(a+b)` 와 이벤트 단위로 같다. 비어 있지 않은 루트는 실행 기록과 디스크가 맞고 이 세계 계보의 파티션 내용이 계보 기록과 같을 때만 이어 쓰고, 루트의 저장 형식은 첫 쓰기 때 정해져 바뀌지 않는다 | `TypeError` · `ValueError` · `NotInitializedError` · `OutputRootError` · `SinkFormatError` · `SimulatorError` |
 | `snapshot` | — | 토큰 `str`. 같은 토큰으로 여러 번 `restore` 할 수 있다 | `NotInitializedError` |
 | `restore` | `snap` · `output_root`(키워드, **빈** 루트) | `None`. 토큰 시점으로 되돌리고 이후 쓰기를 `output_root` 로 돌린다. 이미 쓴 루트에는 다시 쓰지 않는다. 이어받을 계보를 이 런타임이 읽을 수 없으면 거부한다 | `TypeError` · `SnapshotError` · `OutputRootError` · `SinkFormatError` · `SimulatorError`(시뮬레이터의 생성 설정이 같은 프로세스 안에서 바뀌었다) |

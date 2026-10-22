@@ -17,6 +17,7 @@ import src.simulator.__main__ as cli
 from src.measurement import schema as sc
 from src.measurement import sink as sk
 from src.simulator import api
+from src.simulator._internal import profiles
 from tests.test_simulator_support import REPO_ROOT, SimulatorCase, root_digest
 
 SIMULATOR_DIR = REPO_ROOT / "src" / "simulator"
@@ -215,9 +216,25 @@ class TestArgumentRules(SimulatorCase):
                     api.init(*arguments, hidden_root=self.hidden)
 
     def test_profiles_from_the_spec_are_accepted(self) -> None:
-        for profile in ("smoke", "short", "reference", "long", "rolling"):
+        for profile in ("smoke", "short", "small", "reference", "long", "rolling"):
             with self.subTest(profile=profile):
                 api.init(1, 2, profile, self.fresh_root(), hidden_root=self.hidden)
+
+    def test_profile_time_axes_follow_the_spec(self) -> None:
+        # data_spec §2.2 표 · DR-S3-p6-signup U11. label 42일은 프로파일 간 고정이다.
+        expected = {
+            "smoke": (90, None, 140), "short": (180, 90, 275), "small": (180, 90, 275),
+            "reference": (273, 365, 640), "long": (365, 730, 1100), "rolling": (273, 365, 900),
+        }
+        self.assertEqual(set(expected), set(profiles.PROFILES))
+        for name, (warmup, clv, run) in expected.items():
+            with self.subTest(profile=name):
+                axes = profiles.PROFILES[name]
+                self.assertEqual((warmup, 42, clv, run), (
+                    axes["warmup_days"], axes["label_window_days"],
+                    axes["clv_horizon_days"], axes["run_days"],
+                ))
+                self.assertGreater(run, warmup + 42)
 
     def test_advance_rules(self) -> None:
         with mock.patch("src.simulator._internal.runtime.active", None):
