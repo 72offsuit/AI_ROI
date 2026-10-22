@@ -208,16 +208,25 @@ class TestGuardrailsCli(SimulatorCase):
             ])
         self.assertEqual(cli.EXIT_OK, code)
         text = out.getvalue()
-        for name in ("churn_rate", "ate_T1", "ate_T4", "coupon_use_T2", "coupon_use_T3", "sleeping_dog"):
+        for name in ("churn_rate", "ate_T1", "ate_T4", "coupon_use_T2", "coupon_use_T3",
+                     "sleeping_dog_T3", "persuadable_T3", "identity_T3", "spec41_churn_rate"):
             self.assertIn(name, text)
-        reports = sorted((self.hidden / "ground_truth" / "guardrails").glob("guardrails-*.json"))
+        reports = sorted(
+            path for path in (self.hidden / "ground_truth" / "guardrails").glob("guardrails-*.json")
+        )
         self.assertEqual(1, len(reports))
         report = json.loads(reports[0].read_text(encoding="utf-8"))
-        self.assertEqual(
-            {"churn_rate", "ate_T1", "ate_T2", "ate_T3", "ate_T4", "coupon_use_T2", "coupon_use_T3",
-             "sleeping_dog"},
-            {check["name"] for check in report["checks"]},
-        )
+        names = {check["name"] for check in report["checks"]}
+        for arm in ("T1", "T2", "T3", "T4"):
+            self.assertIn(f"ate_{arm}", names)
+            self.assertIn(f"identity_{arm}", names)
+            quadrant = report["potential_outcome_quadrants"][arm]
+            cells = [quadrant[f"{k}_bp"] for k in ("persuadable", "sleeping_dog", "sure_thing", "lost_cause")]
+            self.assertLessEqual(abs(sum(cells) - 10_000), 4)
+            # 항등식 P − D = ATE (잠재결과 정의) — S6 구현 결함 검사
+            self.assertLessEqual(abs(quadrant["persuadable_bp"] - quadrant["sleeping_dog_bp"] - quadrant["ate_bp"]), 2)
+        self.assertEqual([500, 2000], next(c for c in report["checks"] if c["name"] == "coupon_use_T2")["range_bp"])
+        self.assertIn("eligible_spec41", report)
         self.assertIn(report["checks"][0]["status"], ("pass", "fail", "not_run"))
 
 

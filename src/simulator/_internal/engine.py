@@ -259,7 +259,7 @@ def _visit(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -
     if _below_ppm(u_intent, _intent_ppm(window, customer, at_ms, arm, response)):
         lo, hi = p.basket_spread_pct
         target = traits["order_value"] * draw.between(lo, hi) // 100
-        target = _topped_up(window, customer, draw, target, promo)
+        target = _topped_up(window, customer, draw, target, promo, at_ms)
     customer["session"] = {
         "session_id": f"S-{cid}-{at_ms}",
         "start_ms": at_ms,
@@ -272,7 +272,7 @@ def _visit(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -
     }
     customer["rfm"]["last_visit_ms"] = at_ms
     records = [window.event(customer, at_ms, seq, "session_start", "home")]
-    if promo is not None and promo["claim"] and not promo["clicked"]:
+    if _coupon_open(window, promo, at_ms, "claim") and not promo["clicked"]:
         # 받아 두기로 한 고객은 노출 뒤 첫 방문에서 쿠폰을 누른다. 누른 쿠폰만 결제에 쓴다.
         promo["clicked"] = True
         record = window.event(customer, at_ms, next_seq(customer), "coupon_clicked", "home")
@@ -282,6 +282,14 @@ def _visit(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -
         records.append(record)
     _continue(window, customer, at_ms, records[-1])
     return records
+
+
+def _coupon_open(window: _Window, promo: dict | None, at_ms: int, flag: str) -> bool:
+    """쿠폰이 아직 쓸 수 있는가 — 받아 둠(flag), 미사용, 유효기간(배정 시각 + valid_days) 안."""
+    if promo is None or not promo["coupon_id"] or not promo[flag] or promo["used"]:
+        return False
+    valid = window.params.arms[promo["treatment_id"]].coupon_valid_days
+    return at_ms < promo["at_ms"] + valid * clock.DAY_MS
 
 
 def _intent_ppm(
@@ -305,12 +313,13 @@ def _intent_ppm(
 
 
 def _topped_up(
-    window: _Window, customer: dict[str, object], draw: rng.Stream, target: int, promo: dict | None
+    window: _Window, customer: dict[str, object], draw: rng.Stream, target: int, promo: dict | None,
+    at_ms: int,
 ) -> int:
     """기준 금액 바로 아래의 목표 금액을 기준까지 올린다 — 쿠폰 최소주문 · 일반 무료배송 기준."""
     p = window.params
     traits = window.traits(customer)
-    if promo is not None and promo["claim"] and not promo["used"]:
+    if _coupon_open(window, promo, at_ms, "claim"):
         minimum = p.arms[promo["treatment_id"]].coupon_min_order_krw
         if target < minimum and (minimum - target) * 100 <= minimum * p.topup_max_gap_pct:
             chance = traits["coupon"] * p.coupon_topup_scale_pct // 100
@@ -329,13 +338,20 @@ def _action(window: _Window, customer: dict[str, object], at_ms: int, seq: int) 
     session = customer["session"]
     if session["stage"] == "checkout":
         records = _complete(window, customer, at_ms, seq)
-    elif session["intent"] and _cart_value(window, customer, at_ms) >= session["intent"]:
+    elif session["intent"] and session["intent"] <= _cart_value(window, customer, at_ms) and (
+        session["intent"] == 1
+        or _cart_value(window, customer, at_ms) * 100 <= session["intent"] * window.params.intent_trim_over_pct
+    ):
         records = [_checkout(window, customer, at_ms, seq)]
     else:
         cid = customer["customer_id"]
         browse = window.draws.stream(cid, "browse")
-        weights = window.params.intent_weights if session["intent"] else window.params.browse_weights
-        action = behavior.ACTIONS[browse.weighted(weights)]
+        if session["intent"] > 1 and _cart_value(window, customer, at_ms) * 100 > (
+            session["intent"] * window.params.intent_trim_over_pct
+        ):
+            action = "remove_from_cart"  # 목표 금액을 크게 넘긴 장바구니는 덜어낸 뒤 결제한다
+        else:
+            action = behavior.ACTIONS[browse.weighted(_weights(window, customer, session))]
         if action == "add_to_cart":
             record = _add_to_cart(window, customer, at_ms, seq)
         elif action == "remove_from_cart":
@@ -348,6 +364,16 @@ def _action(window: _Window, customer: dict[str, object], at_ms: int, seq: int) 
         records = [record]
     _continue(window, customer, at_ms, records[-1])
     return records
+
+
+def _weights(window: _Window, customer: dict[str, object], session: dict[str, object]) -> tuple[int, ...]:
+    p = window.params
+    if session["intent"]:
+        return p.intent_weights
+    # 탐색 세션: page_view·product_view·remove 는 config 가중치(×1000), 담기는 장바구니 이탈 성향이 정한다.
+    page, view, _, remove = p.browse_weights
+    atc = window.traits(customer)["abandon"] * p.browse_atc_weight_pct // 100 // 1000
+    return (page * 1000, view * 1000, atc, remove * 1000)
 
 
 def _cart_value(window: _Window, customer: dict[str, object], at_ms: int) -> int:
@@ -371,7 +397,7 @@ def _checkout(window: _Window, customer: dict[str, object], at_ms: int, seq: int
     promo = treatment.live_promo(window, customer, at_ms)
     discount = 0
     coupon = None
-    if promo is not None and promo["clicked"] and not promo["used"]:
+    if _coupon_open(window, promo, at_ms, "clicked"):
         arm = p.arms[promo["treatment_id"]]
         if subtotal >= arm.coupon_min_order_krw:
             discount = min(arm.coupon_discount_krw, subtotal)
@@ -433,8 +459,13 @@ def _complete(window: _Window, customer: dict[str, object], at_ms: int, seq: int
     record["treatment_id"] = order["treatment_id"]
     records.append(record)
     items = customer["cart"]
+    history = customer["purchased"]
     for pid, _, _ in order["lines"]:
         items.pop(pid, None)
+        if pid in history:
+            history.remove(pid)
+        history.append(pid)
+    del history[: max(0, len(history) - window.params.recent_purchases_cap)]
     rfm = customer["rfm"]
     rfm["order_count"] += 1
     rfm["monetary"] += amount
@@ -467,8 +498,14 @@ def _complete(window: _Window, customer: dict[str, object], at_ms: int, seq: int
 def _product_view(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -> Event:
     p = window.params
     browse = window.draws.stream(customer["customer_id"], "browse")
-    pool = p.category_pools[browse.weighted(p.category_weights)]
-    product = p.catalog[pool[browse.below(len(pool))]]
+    purchased = customer["purchased"]
+    reorder = window.traits(customer)["loyalty"] * p.reorder_scale_pct // 100
+    if purchased and _below_ppm(browse.next_u64(), reorder):
+        # 반복 구매: 과거에 산 상품을 다시 본다(브랜드 충성도 Trait).
+        product = p.product_index[purchased[browse.below(len(purchased))]]
+    else:
+        pool = p.category_pools[browse.weighted(p.category_weights)]
+        product = p.catalog[pool[browse.below(len(pool))]]
     views = customer["recent_views"]
     views.append([at_ms, product.product_id])
     del views[: max(0, len(views) - behavior.RECENT_VIEWS_CAP)]
@@ -481,6 +518,11 @@ def _add_to_cart(window: _Window, customer: dict[str, object], at_ms: int, seq: 
         return _product_view(window, customer, at_ms, seq)
     product = window.params.product_index[views[-1][1]]
     wanted = window.draws.stream(customer["customer_id"], "cart").between(*window.params.add_quantity)
+    target = customer["session"]["intent"]
+    if target > 1:
+        # 구매 세션은 목표 금액에 필요한 만큼만 담는다(넘침은 한 개 단가 이하).
+        remaining = target - _cart_value(window, customer, at_ms)
+        wanted = max(1, min(wanted, -(-remaining // product.unit_price)))
     added = cart.add(
         customer["cart"], product.product_id, wanted, product.unit_price, at_ms, window.lifetime,
     )

@@ -36,7 +36,7 @@ CONFIG_TEXT = genconfig.CONFIG_PATH.read_text(encoding="utf-8")
 CONFIG_PINS: dict[str, str] = {
     "sim-gen-v1": "e150e434d1abef461b9491f1e70f0902f83c4ef999d108a04e0e85bd79c19ccc",
     "sim-gen-v2": "49bfe06b2edaa9d45ca653d98175d7458b90e7707dca1d00f57a28f9e4d4006d",
-    "sim-gen-v3": "52219e58fc40001d452766315a6b1412fadf59f3b8914d3b759a9b433a56bdcc",
+    "sim-gen-v3": "66588097846aa9914aa57f62034a4d2d05bbe8cc66b2a01e3a89040b55df1157",
 }
 
 

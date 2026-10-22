@@ -9,9 +9,9 @@
 > | **코드** | `src/simulator/_internal/{genconfig,traits,fixedpoint,persona,world}.py` |
 > | **설명**(이 문서) | 위 셋을 한 흐름으로 묶는다. 숫자를 새로 정하지 않는다 |
 >
-> 현재 생성 config: `sim-gen-v3` · 생성 부분 다이제스트 `52219e58fc40001d452766315a6b1412fadf59f3b8914d3b759a9b433a56bdcc` · `SIMULATOR_VERSION` `sim-0.4`
+> 현재 생성 config: `sim-gen-v3` · 생성 부분 다이제스트 `66588097846aa9914aa57f62034a4d2d05bbe8cc66b2a01e3a89040b55df1157` · `SIMULATOR_VERSION` `sim-0.4`
 > (S3 #77: P6 `signup_day_range` 추가 — `docs/decisions/DR-S3-p6-signup.md`. 페르소나·Trait 값은 `sim-gen-v1` 과 같다)
-> (S4~S6 #143: `behavior`·`catalog` 블록 추가 — Trait 이 행동·이탈·처치 반응을 구동한다. `docs/decisions/DR-S4-S6-sprint.md`. 페르소나·Trait 값은 그대로다)
+> (S4~S6 #143: `behavior`·`catalog` 블록 추가 — Trait 이 행동·이탈·처치 반응을 구동한다. `docs/decisions/DR-143-sim-sprint.md`. 페르소나·Trait 값은 그대로다)
 
 ---
 
@@ -305,7 +305,7 @@ world_id      = "W-" + sha256(["sim-world-v2", seed, n, profile, start_ms, confi
 - **Sleeping Dog 상한 신호.** data_spec τ 식에서 τ < 0 이려면 `marketing_fatigue > 0.6` 이어야 한다. 그 질량이 **6.18%(해석해) · 6.13%(n=26,000 표본)** 로 가드레일 하한 8% 보다 낮다. 실제 Sleeping Dog 는 Y(0)=1 까지 요구해 더 작다.
   - S2 에서 고치지 않은 이유: 가드레일은 Eligible 모집단의 실현값에 대한 것이고, 손잡이가 여럿이다(P5 fatigue μ, κ, 임계 0.6, P5 비중). data_spec 이 지목한 `τ_base` 는 양 성분 계수라 이 상한을 올리지 못한다.
   - 가장 민감한 손잡이는 fatigue μ 다(±20% 에 2.16~11.92%). 조정이 필요하면 GATE 1 전에 `DR-S2-hidden-trait-dist`·`DR-S2-persona-mix` 를 번복하고 **근거로 가드레일만 적는다.**
-- Persuadable 후보 질량 P(coupon > 0.6, fatigue ≤ 0.6) = 33.81%(해석해) · 33.72%(표본). 4분면 목표 Persuadables 는 20~30% 다.
+- Persuadable 후보 질량 P(coupon > 0.6, fatigue ≤ 0.6) = 33.81%(해석해) · 33.72%(표본). 4분면 목표 Persuadables 는 **11~21%** 다(2026-10-22 교정, 사용자 확정 — `docs/research/data_grounding.md` §3-2. PRD 원문 20~30% 에서 내림. 근거: `docs/decisions/DR-143-sim-sprint.md`).
 - `hidden_traits.parquet`(data_spec §15.1)가 필요하면 상태 JSON 에서 유도하는 파생물로 만든다(원천을 둘로 만들지 않는다).
 
 ### S7 (#81) — GATE 1
@@ -331,7 +331,7 @@ world_id      = "W-" + sha256(["sim-world-v2", seed, n, profile, start_ms, confi
 
 ## 8. 변경 절차
 
-1. **GATE 1 전.** 구성비·모수를 바꿀 수 있다. 근거는 **가드레일(생성 이탈률 15~25%, ATE 3~6%p, 쿠폰 사용률 25~40%, Sleeping Dog 8~15%)과 외부 자료뿐**이다.
+1. **GATE 1 전.** 구성비·모수를 바꿀 수 있다. 근거는 **가드레일(생성 이탈률 15~25%, ATE 3~6%p, 쿠폰 사용률 5~20% — 분모: 쿠폰 처치군(T2·T3) 전체 중 유효기간 안 사용(2026-10-22 교정, `docs/research/data_grounding.md` §3-1), Sleeping Dog 8~15%)과 외부 자료뿐**이다.
    1. 해당 DR 을 번복하거나 새 DR 을 쓴다(`docs/DECISION_RECORDS.md`).
    2. `config/simulator_config.yaml` 을 고치고 `config_version` 을 올린다.
    3. `tests/test_simulator_persona.py` 의 `CONFIG_PINS` 에 새 다이제스트를 **줄로 더한다. 기존 줄의 값은 고치지 않는다** — 같은 판 이름의 해시를 바꿔 쓰면 테스트가 통과해 버린다. 리뷰에서 `CONFIG_PINS` 기존 줄 diff 가 0 인지 확인한다.

@@ -1,7 +1,7 @@
 """행동·이탈·처치 반응 모수(`config/simulator_config.yaml` 의 behavior·catalog·guardrails) 해석 — S4~S6(#143).
 
 값은 모두 정수다. 키가 빠지거나 남으면 로드 단계에서 거부한다(`genconfig.parse` 가 부른다).
-모수의 근거 상태: `docs/decisions/DR-S4-S6-sprint.md` — 초안 값이며 외부 근거 대조는 #148 이후 조정한다.
+모수의 근거 상태: `docs/decisions/DR-143-sim-sprint.md` — 초안 값이며 외부 근거 대조는 #148 이후 조정한다.
 """
 
 from __future__ import annotations
@@ -59,6 +59,7 @@ class Arm:
     recovery_ppm: int
     coupon_discount_krw: int | None
     coupon_min_order_krw: int | None
+    coupon_valid_days: int | None
 
 
 @dataclass(frozen=True)
@@ -83,6 +84,7 @@ class Params:
         session = _block("behavior.session", behavior["session"], frozenset({
             "continue_browse_ppm", "continue_intent_ppm", "max_actions_browse", "max_actions_intent",
             "action_delay_ms", "browse_weights", "intent_weights", "add_quantity",
+            "browse_add_to_cart_weight_pct", "intent_trim_over_pct", "reorder_scale_pct", "recent_purchases_cap",
         }))
         self.continue_browse_ppm = _int("session.continue_browse_ppm", session["continue_browse_ppm"], 0, PPM)
         self.continue_intent_ppm = _int("session.continue_intent_ppm", session["continue_intent_ppm"], 0, PPM)
@@ -92,6 +94,13 @@ class Params:
         self.browse_weights = _weights("session.browse_weights", session["browse_weights"])
         self.intent_weights = _weights("session.intent_weights", session["intent_weights"])
         self.add_quantity = _pair("session.add_quantity", session["add_quantity"], 1)
+        # 탐색 세션의 add_to_cart 가중치(단위 1/1000) = 장바구니 이탈 성향(ppm) × 이 값(%) / 100 / 1000.
+        self.browse_atc_weight_pct = _int(
+            "session.browse_add_to_cart_weight_pct", session["browse_add_to_cart_weight_pct"], 0, 10_000
+        )
+        self.intent_trim_over_pct = _int("session.intent_trim_over_pct", session["intent_trim_over_pct"], 100, 1000)
+        self.reorder_scale_pct = _int("session.reorder_scale_pct", session["reorder_scale_pct"], 0, 1000)
+        self.recent_purchases_cap = _int("session.recent_purchases_cap", session["recent_purchases_cap"], 1, 1000)
 
         purchase = _block("behavior.purchase", behavior["purchase"], frozenset({
             "intent_scale_pct", "cycle_factor_min_ppm", "cycle_factor_max_ppm", "basket_spread_pct",
@@ -162,16 +171,17 @@ class Params:
             coupon = arm["coupon"]
             discount = minimum = None
             if coupon is not None:
-                coupon = _block(f"{where}.coupon", coupon, frozenset({"discount_krw", "min_order_krw"}))
+                coupon = _block(f"{where}.coupon", coupon, frozenset({"discount_krw", "min_order_krw", "valid_days"}))
                 discount = _int(f"{where}.coupon.discount_krw", coupon["discount_krw"], 1)
                 minimum = _int(f"{where}.coupon.min_order_krw", coupon["min_order_krw"], discount)
+                valid = _int(f"{where}.coupon.valid_days", coupon["valid_days"], 1, 3650)
             self.arms[tid] = Arm(
                 tid, str(arm["sensitivity"]),
                 _int(f"{where}.visit_boost_pct", arm["visit_boost_pct"], 0, 1000),
                 _int(f"{where}.intent_boost_pct", arm["intent_boost_pct"], 0, 1000),
                 _int(f"{where}.onset_protect_pct", arm["onset_protect_pct"], 0, 100),
                 _int(f"{where}.recovery_ppm", arm["recovery_ppm"], 0, PPM),
-                discount, minimum,
+                discount, minimum, valid if coupon is not None else None,
             )
 
         self.catalog = _catalog(config.catalog)
@@ -182,11 +192,12 @@ class Params:
         if guardrails:
             _block("guardrails", guardrails, frozenset({
                 "note", "active_lookback_days", "churn_rate_bp", "ate_bp", "coupon_use_bp", "sleeping_dog_bp",
+                "persuadable_bp",
             }))
             self.active_lookback_days = _int("guardrails.active_lookback_days", guardrails["active_lookback_days"], 1)
             self.guardrail_ranges = {
                 name: _pair(f"guardrails.{name}", guardrails[name])
-                for name in ("churn_rate_bp", "ate_bp", "coupon_use_bp", "sleeping_dog_bp")
+                for name in ("churn_rate_bp", "ate_bp", "coupon_use_bp", "sleeping_dog_bp", "persuadable_bp")
             }
         else:
             self.active_lookback_days = 42

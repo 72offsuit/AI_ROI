@@ -35,6 +35,7 @@ _TOP_KEYS = frozenset({
 _CUSTOMER_KEYS = frozenset({
     "customer_id", "signup_ms", "lifecycle", "persona", "hidden_traits", "cart", "recent_views",
     "session", "rfm", "assignments", "next_seq", "engagement", "churning", "checkout_seq", "promo",
+    "purchased",
 })
 # 공개 오류 메시지 정책: 숨은 필드의 이름·페르소나 id·Trait 값을 싣지 않는다(docs/persona_spec.md 5.3).
 # 메시지는 load_state 의 StateFormatError 로 시스템 팀까지 간다. 키 목록에서는 이 둘을 가린다.
@@ -64,6 +65,7 @@ _BEHAVIOR_ALIASES = (
     ("responsiveness", "marketing_responsiveness"),
     ("fatigue", "marketing_fatigue"),
     ("abandon", "cart_abandonment_propensity"),
+    ("loyalty", "brand_loyalty"),
 )
 
 
@@ -146,6 +148,7 @@ def _new_customer(
         "churning": False,
         "checkout_seq": 0,
         "promo": None,
+        "purchased": [],
     }
 
 
@@ -428,6 +431,9 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
     if not isinstance(customer["churning"], bool):
         raise _fail(f"{where}.churning", "bool 이 아니다")
     _int(f"{where}.checkout_seq", customer["checkout_seq"], 0, 999_999)
+    purchased = _list(f"{where}.purchased", customer["purchased"])
+    if len(purchased) > params.active().recent_purchases_cap or any(p not in product_ids for p in purchased):
+        raise _fail(f"{where}.purchased", "상한을 넘거나 카탈로그에 없는 상품이 있다")
     promo = customer["promo"]
     if promo is not None:
         promo = _keys(f"{where}.promo", promo, _PROMO_KEYS)

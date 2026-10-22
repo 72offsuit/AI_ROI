@@ -8,8 +8,9 @@
     "구성비(ratio_bp)와 페르소나별 모수는 docs/data_spec.html §3.2·§3.3 초안이고 외부 근거가 없다. repurchase_propensity 는 잠정값이다. 근거와 민감도: docs/decisions/DR-S2-persona-mix.md · DR-S2-hidden-trait-dist.md.",
     "생성 부분(config_version·personas·hidden_traits)을 바꾸면 config_version 을 올리고 tests/test_simulator_persona.py 의 CONFIG_PINS 에 새 다이제스트를 추가한다. 옛 상태·계보는 거부된다.",
     "GATE 1 이후에는 AI 성능을 이유로 바꾸지 않는다(SRS FREEZE-002·003). 바꿔야 하면 Issue → 수정 → 판 상향 → Baseline 부터 재실행한다.",
-    "S4~S6(#143) 스프린트: behavior(방문·퍼널·이탈·처치 반응)와 catalog(상품 풀) 블록을 더했다. 두 블록도 생성 부분이라 다이제스트에 든다. 값은 PRD·data_spec 기반 초안이고 외부 근거 대조는 #148 리서치 결과로 Phase 2 에 조정한다 — 근거: docs/decisions/DR-S4-S6-sprint.md.",
-    "behavior 의 단위: *_pct 는 1/100, *_ppm 은 1/1000000, *_ms 는 밀리초, *_days 는 일, 금액은 원. guardrails 블록은 검사 범위(bp = 1/10000)이고 생성에 쓰지 않으므로 다이제스트에 들지 않는다."
+    "S4~S6(#143) 스프린트: behavior(방문·퍼널·이탈·처치 반응)와 catalog(상품 풀) 블록을 더했다. 두 블록도 생성 부분이라 다이제스트에 든다. 값은 PRD·data_spec 기반 초안이고 외부 근거 대조는 #148 리서치 결과로 Phase 2 에 조정한다 — 근거: docs/decisions/DR-143-sim-sprint.md.",
+    "behavior 의 단위: *_pct 는 1/100, *_ppm 은 1/1000000, *_ms 는 밀리초, *_days 는 일, 금액은 원. guardrails 블록은 검사 범위(bp = 1/10000)이고 생성에 쓰지 않으므로 다이제스트에 들지 않는다.",
+    "2026-10-22 실측 검증(#148 F4·F9·F10) 반영: 탐색 세션의 담기는 장바구니 이탈 성향 Trait 이 정한다(browse_add_to_cart_weight_pct), 구매 세션은 목표 금액만큼만 담고 넘치면 덜어낸다(intent_trim_over_pct), 조회의 일부는 과거 구매 상품을 다시 본다(reorder_scale_pct × 브랜드 충성도). 쿠폰은 유효 14일(economic_config T3 조건)."
   ],
   "personas": [
     {
@@ -322,7 +323,7 @@
     },
     "session": {
       "continue_browse_ppm": 700000,
-      "continue_intent_ppm": 920000,
+      "continue_intent_ppm": 970000,
       "max_actions_browse": 12,
       "max_actions_intent": 40,
       "action_delay_ms": [
@@ -332,7 +333,7 @@
       "browse_weights": {
         "page_view": 3,
         "product_view": 4,
-        "add_to_cart": 2,
+        "add_to_cart": 0,
         "remove_from_cart": 1
       },
       "intent_weights": {
@@ -344,15 +345,19 @@
       "add_quantity": [
         1,
         4
-      ]
+      ],
+      "browse_add_to_cart_weight_pct": 250,
+      "intent_trim_over_pct": 110,
+      "reorder_scale_pct": 80,
+      "recent_purchases_cap": 30
     },
     "purchase": {
-      "intent_scale_pct": 100,
-      "cycle_factor_min_ppm": 300000,
-      "cycle_factor_max_ppm": 1500000,
+      "intent_scale_pct": 120,
+      "cycle_factor_min_ppm": 500000,
+      "cycle_factor_max_ppm": 2000000,
       "basket_spread_pct": [
-        70,
-        131
+        60,
+        111
       ],
       "abandon_scale_pct": 40,
       "shipping_abandon_scale_pct": 30,
@@ -363,10 +368,10 @@
       "free_shipping_threshold_krw": 40000
     },
     "churn": {
-      "onset_hazard_scale_ppm": 15000,
-      "decay_per_day_ppm": 850000,
+      "onset_hazard_scale_ppm": 7000,
+      "decay_per_day_ppm": 920000,
       "engagement_floor_ppm": 20000,
-      "recovery_hazard_ppm": 3000
+      "recovery_hazard_ppm": 5000
     },
     "treatment": {
       "window_days": 42,
@@ -396,7 +401,8 @@
           "recovery_ppm": 30000,
           "coupon": {
             "discount_krw": 3000,
-            "min_order_krw": 30000
+            "min_order_krw": 30000,
+            "valid_days": 14
           }
         },
         "T3": {
@@ -407,7 +413,8 @@
           "recovery_ppm": 50000,
           "coupon": {
             "discount_krw": 7000,
-            "min_order_krw": 50000
+            "min_order_krw": 50000,
+            "valid_days": 14
           }
         },
         "T4": {
@@ -422,7 +429,7 @@
     }
   },
   "guardrails": {
-    "note": "S7-lite 검사 범위(bp). 생성에 쓰지 않는다. SRS SIM-005 · src/simulator/AGENTS.md 의 처치 강도 가드레일.",
+    "note": "S7-lite 검사 범위(bp). 생성에 쓰지 않는다. 이탈률·ATE·Sleeping Dog 은 SRS SIM-005 · src/simulator/AGENTS.md. 쿠폰 사용률 5~20%(분모: 쿠폰 처치군 T2·T3 전체 중 유효기간 안 사용)와 Persuadable 11~21% 는 2026-10-22 사용자 확정 (docs/research/data_grounding.md §3-1·§3-2, DR-143-sim-sprint) — PRD 원문(25~40%·20~30%)과 다르다.",
     "active_lookback_days": 42,
     "churn_rate_bp": [
       1500,
@@ -433,12 +440,16 @@
       600
     ],
     "coupon_use_bp": [
-      2500,
-      4000
+      500,
+      2000
     ],
     "sleeping_dog_bp": [
       800,
       1500
+    ],
+    "persuadable_bp": [
+      1100,
+      2100
     ]
   }
 }
