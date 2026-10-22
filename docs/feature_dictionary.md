@@ -116,3 +116,15 @@ VALID와 EMPTY_COMPLETE는30칸 tokens/mask/relative_gap_ms/gap_mask를 가진�
 d1_quality_summary.aggregate_raw_quality는 caller_supplied_K 목록과 명시적 F-ID 목록에서 raw null/available 수·분모·결측률·사유별 건수를 반환한다. 같은 호출에서는 명시한 K 행 수를 각 Feature의 분모로 쓰며, source/namespace/index_date를 합치지 않는다. 별도의 E 수도 반환한다. Feature별 U_f가 다르면 별도 명시적 호출로 구분한다. 미구현 Feature를 포함해 요청 목록을 그대로 남기고 canonical/quality/모집단 행 누락·중복·가용성 모순은 입력 오류다.
 
 분모0은 rate=null·ZERO_DENOMINATOR다. 사유별 건수 합계는 분모보다 클 수 있다. 예외/행 제거0, short-history 조정 미적용, official_verdict=null이며 SD6/SD7 공식 모집단·분할·예외·5% 합격을 정하지 않는다. QUAL01–13은 합성 검증이다. 이 요약은 출처·학습 객체·정식 계보를 검증하는 로더나 실제 원시 결측률 인수를 대신하지 않는다.
+
+## 2026-10-22 합성 근거·원시 시퀀스 파일 연결
+
+SD1–SD8 및 Q1–Q5의 사용자 방향 선택은 유지한다. 위 과거의 대기 표시는 당시 기록이며 방향 선택 자체를 다시 미결정으로 되돌리지 않는다. #126의 공통 cutoff 계약 반영, 실제 G1·제공자 근거·인수, 학습 실행·소비자 인수는 여전히 별도다.
+
+`d1_evidence.verify_evidence`는 W0 I03 synthetic의 생산·전달·수신을 각각 검증한다. 외부 Expected FilePin과 제공된 bytes를 확인하고 공개 이벤트/고객 projection으로 EventBatch identity를 재구성한다. 파일 경로를 탐색하지 않는다. 합성 JSON 근거 본문은 해당 record의 provider 제외 본문으로 고정하며 운영 제공 계약을 대신하지 않는다. 부분 전달/수신·정밀도 손실·누락/시점 미충족 근거는 관측 unknown/incomplete로 전파한다. 필요한 최근30개/선택 경계 tie만 full-tie 고유 ordinal을 요구하며 불필요한 과거 tie의 실제 이벤트 존재까지 검사하지 않는다. 다른 capability를 event_capture로 간주하지 않는다. admission은 항상 BLOCKED_ADMISSION이고 operational 요청은 거부한다.
+
+`d1_sequence_file.adapt_sequences`는 검증된 근거 context와 기존 RawSequenceOutput의 재현 정보를 대조해 `d1-sequence-file/2-proposed` SequenceRow로 투영한다. 숫자 토큰과 고정 문자열 사전 간 변환은 명시적이며 UNKNOWN의 length/배열 null·완전 관측 빈 입력·첫/PAD gap null과 실제0을 보존한다. 원시 감사/선택 event_id는 원래 RawSequenceOutput에 남는다. 파일은 모든 감사 필드를 보관하는 전체 원시 bundle이 아니다.
+
+`encode_sequence_file`/`decode_sequence_file`은 실제 Parquet bytes와 typed 값의 hash를 구분한다. nullable Int64 gap, string token, Bool mask, date32의 실제 dtype을 검사한다. 의미 hash는 typed 행·입력/관측/필요 순서 의미·명시 정책을 포함하고 생성 시각·압축·물리 행 순서·근거 파일 포장을 제외한다. reader는 별도의 정확한 파일 SHA256과 필요한 근거 FilePin을 계속 요구한다. legacy load_bundle의 cutoff/UNKNOWN 표현·전체 Store/CURRENT는 수정하지 않는다. 원시 파일 투영으로 F36/F37 학습 또는 FE-006 전체 충족을 주장하지 않는다.
+
+관련 결정: `docs/decisions/DR-D1-w1-evidence-sequence-file.md`. 합성 검증과 실제 입력 인수를 구분하며 소유 등록·독립 검토는 후속이다.
