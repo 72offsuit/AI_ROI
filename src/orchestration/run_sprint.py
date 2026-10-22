@@ -343,6 +343,50 @@ def rct_assign(customer_ids: list[str], seed: int) -> dict[str, str]:
     return assignment
 
 
+def write_assignment_file(path: Path, assigned_at: datetime, assignments: Mapping[str, str],
+                          **extra: Any) -> Path:
+    """배정 기록 — `{"assigned_at": ISO+오프셋, "assignments": {cid: tid}}` (realism_check `--assignments`)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"assigned_at": assigned_at.isoformat(), "assignments": dict(sorted(assignments.items())), **extra}
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
+    return path
+
+
+@contextmanager
+def override_attr(module_name: str, attr: str, value: Any) -> Iterator[dict[str, Any]]:
+    """의사결정 모듈의 상수를 이 블록 동안만 바꾸고 되돌린다. 없는 이름이면 바꾸지 않고 그 사실을 적는다."""
+    record: dict[str, Any] = {"target": f"{module_name}.{attr}", "requested": value}
+    if value is None:
+        record["applied"] = False
+        yield record
+        return
+    module = importlib.import_module(module_name)
+    if not hasattr(module, attr):
+        record.update(applied=False, reason="모듈에 그 이름이 없다")
+        yield record
+        return
+    original = getattr(module, attr)
+    record.update(applied=True, default=original)
+    setattr(module, attr, value)
+    try:
+        yield record
+    finally:
+        setattr(module, attr, original)
+
+
+def stratified_cap(X: Any, y: Any, max_rows: int | None, seed: int) -> tuple[Any, Any, dict[str, Any]]:
+    """학습 표본 상한 — 클래스 비율을 유지해 `max_rows` 건 근처로 줄인다(같은 seed 면 같은 표본)."""
+    n = int(len(y))
+    if max_rows is None or n <= max_rows:
+        return X, y, {"applied": False, "n": n, "max_rows": max_rows}
+    frac = max_rows / n
+    picked = y.groupby(y, group_keys=False).sample(frac=frac, random_state=seed).index.sort_values()
+    return X.loc[picked], y.loc[picked], {
+        "applied": True, "n_before": n, "n": int(len(picked)), "max_rows": max_rows,
+        "method": f"클래스별 비율 유지 무작위 추출(random_state={seed})",
+    }
+
+
 # ── 이벤트 읽기 ─────────────────────────────────────────────────────────────
 
 
@@ -653,6 +697,8 @@ class SprintConfig:
     active_days: int = DEFAULT_ACTIVE_DAYS
     run_id: str | None = None
     realism_report: Path = REALISM_REPORT
+    cv_folds: int | None = None       # churn CV fold 수 덮어쓰기 — 없으면 의사결정 기본값(5)
+    max_train_rows: int | None = None  # churn 학습·CV 표본 상한 — 없으면 전원
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -790,6 +836,8 @@ def run(config: SprintConfig) -> Path:
     _log(f"run_id={run_id} seed={config.seed} N={config.num_customers} profile={config.profile} out={out}")
 
     ctx: dict[str, Any] = {"timeline": {}}
+    assignments_dir = out / "assignments"
+    assignment_files: dict[str, Any] = {"rct": None, "strategies": {}}
     reader = EventReader()
     if reader.fallback_reason:
         _log(f"이벤트 읽기: 대체 경로 sim.events — {reader.fallback_reason}")
@@ -851,6 +899,10 @@ def run(config: SprintConfig) -> Path:
         with log.stage("simulate_rct", requires=("rct_assign",)):
             skip_if_not_run(log, "simulate_rct")
             sim.apply_treatment(ctx["rct_assignment"])
+            rct_file = assignments_dir / f"T0-{ctx['t1'].astimezone(KST):%Y%m%d}.json"
+            write_assignment_file(rct_file, ctx["t1"], ctx["rct_assignment"],
+                                  kind="exploration_rct", includes_control=True)
+            assignment_files["rct"] = rct_file
             summary = sim.advance(LABEL_WINDOW_DAYS)
             ctx["t2"] = summary.end
             ctx["timeline"]["t2"] = summary.end
@@ -899,13 +951,17 @@ def run(config: SprintConfig) -> Path:
             if not two_classes(y):
                 raise NotRun("T0 군 churn 라벨이 한 값뿐이다 — 학습·평가 불가 (구매 이벤트 유무 확인)")
             churn_eval["positive_rate"] = float(y.mean())
-            evaluation = decision_fn("evaluate_churn_models")(X, y, config.seed)
-            churn_eval.update(evaluation)  # label_def · n · pos_rate · models · shap_top … (대시보드 ChurnEval)
+            X, y, churn_eval["training_sample"] = stratified_cap(X, y, config.max_train_rows, config.seed)
+            evaluate = decision_fn("evaluate_churn_models")
             fit = decision_fn("fit_best_churn")
-            if "eval_result" in inspect.signature(fit).parameters:
-                ctx["churn_model"] = fit(X, y, config.seed, eval_result=evaluation)
-            else:
-                ctx["churn_model"] = fit(X, y, config.seed)
+            with override_attr(DECISION_API["evaluate_churn_models"][0], "N_SPLITS", config.cv_folds) as folds:
+                churn_eval["cv_folds_override"] = folds
+                evaluation = evaluate(X, y, config.seed)
+                churn_eval.update(evaluation)  # label_def · n · pos_rate · models · shap_top … (대시보드 ChurnEval)
+                if "eval_result" in inspect.signature(fit).parameters:
+                    ctx["churn_model"] = fit(X, y, config.seed, eval_result=evaluation)
+                else:
+                    ctx["churn_model"] = fit(X, y, config.seed)
             ctx["churn_train"] = (X, y)
             if isinstance(evaluation, Mapping) and evaluation.get("best_proposed") is not None:
                 ctx["churn_best_name"] = evaluation["best_proposed"]
@@ -1079,6 +1135,12 @@ def run(config: SprintConfig) -> Path:
                 sim.restore(ctx["snapshot"], output_root=branch_root)
                 if assignments:
                     sim.apply_treatment(assignments)
+                strategy_file = write_assignment_file(
+                    assignments_dir / "strategies" / f"{strategy}.json", ctx["t2"], assignments,
+                    kind="strategy_branch", strategy_id=strategy, includes_control=False,
+                    note="plan 이 고른 처치 대상만(T0 미포함). 같은 t2 스냅샷의 분기 — RCT 배정표와 섞지 않는다",
+                )
+                assignment_files["strategies"][strategy] = strategy_file
                 summary = sim.advance(LABEL_WINDOW_DAYS)
                 ctx["timeline"]["end"] = summary.end
                 counts = Counter(assignments.values())
@@ -1246,6 +1308,9 @@ def run(config: SprintConfig) -> Path:
                 for key in ("X1", "X2") if key in ctx and hasattr(ctx[key], "attrs")
             },
             "realism_report": realism,
+            "assignment_files": assignment_files,
+            "churn_options": {"cv_folds": config.cv_folds, "max_train_rows": config.max_train_rows,
+                              "note": "지정하지 않으면 의사결정 기본값(Stratified 5-Fold · 전원)"},
             "rct": rct_meta,
             "strategy_comparison_protocol": {
                 "snapshot_at": ctx["timeline"].get("t2"),
@@ -1296,6 +1361,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--active-days", type=int, default=DEFAULT_ACTIVE_DAYS,
                         help="탐색 RCT 모집단 — t1 직전 이 일수 안에 이벤트가 있는 고객")
     parser.add_argument("--run-id", default=None)
+    parser.add_argument("--cv-folds", type=int, default=None,
+                        help="churn 교차검증 fold 수 (기본: 의사결정 기본값 5)")
+    parser.add_argument("--max-train-rows", type=int, default=None,
+                        help="churn 학습·CV 표본 상한 — 클래스 비율 유지 추출 (기본: 전원)")
     parser.add_argument("--realism-report", type=Path, default=REALISM_REPORT,
                         help="있으면 결과 폴더로 사본을 둔다 (기본: docs/research/realism_report.json)")
     return parser
@@ -1307,6 +1376,7 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed, num_customers=args.customers, profile=args.profile, out=args.out,
         results_root=args.results_root, warmup_days=args.warmup_days, budget_krw=args.budget_krw,
         active_days=args.active_days, run_id=args.run_id, realism_report=args.realism_report,
+        cv_folds=args.cv_folds, max_train_rows=args.max_train_rows,
     )
     started = time.perf_counter()
     run_dir = run(config)

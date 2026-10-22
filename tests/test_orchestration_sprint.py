@@ -80,7 +80,7 @@ class FakeDecision:
                 "src.decision.churn",
                 evaluate_churn_models=self.evaluate_churn_models, fit_best_churn=self.fit_best_churn,
                 predict_churn_proba=self.predict_churn_proba,
-                evaluate_temporal_holdout=self.evaluate_temporal_holdout,
+                evaluate_temporal_holdout=self.evaluate_temporal_holdout, N_SPLITS=5,
             ),
             "src.decision.clv": module(
                 "src.decision.clv", fit_clv=self.fit_clv, predict_clv=self.predict_clv,
@@ -141,7 +141,8 @@ class FakeDecision:
 
     # churn -----------------------------------------------------------------
     def evaluate_churn_models(self, X, y, seed):
-        self.calls.append(("evaluate_churn_models", {"n": len(y), "seed": seed}))
+        folds = getattr(sys.modules.get("src.decision.churn"), "N_SPLITS", None)
+        self.calls.append(("evaluate_churn_models", {"n": len(y), "seed": seed, "folds": folds}))
         return {"label_def": "fake", "n": int(len(y)), "pos_rate": float(y.mean()),
                 "models": [{"name": "fake", "kind": "proposed", "cv": {"roc_auc": {"mean": None, "std": None}}}],
                 "best_proposed": "fake"}
@@ -383,6 +384,27 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         self.assertEqual("ok", meta["margin_rate"]["status"])
         self.assertEqual(3, len(_read(self.run_dir, "strategy_comparison")["what_if"]["rows"]))
 
+    def test_rct_and_strategy_assignment_files(self) -> None:
+        meta = _read(self.run_dir, "run_meta")
+        rct_path = Path(meta["assignment_files"]["rct"])
+        self.assertEqual(self.base / "out" / "assignments", rct_path.parent)
+        self.assertRegex(rct_path.name, r"^T0-\d{8}\.json$")
+        rct = json.loads(rct_path.read_text(encoding="utf-8"))
+        self.assertEqual(meta["timeline"]["t1"], rct["assigned_at"])
+        self.assertTrue(rct["assigned_at"].endswith("+09:00"))
+        self.assertEqual(meta["rct"]["n_eligible"], len(rct["assignments"]))  # 통제군 포함 전원
+        self.assertEqual(set(rs.RCT_ARMS), set(rct["assignments"].values()))
+        for strategy in rs.STRATEGIES:
+            path = Path(meta["assignment_files"]["strategies"][strategy])
+            self.assertEqual(self.base / "out" / "assignments" / "strategies", path.parent)
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            self.assertEqual(self.fake.plans[strategy], payload["assignments"])
+            self.assertEqual(meta["timeline"]["t2"], payload["assigned_at"])
+        self.assertIsNone(meta["churn_options"]["cv_folds"])
+        churn = _read(self.run_dir, "churn_eval")
+        self.assertFalse(churn["training_sample"]["applied"])  # 옵션이 없으면 동작이 그대로다
+        self.assertEqual(5, [c[1]["folds"] for c in self.fake.calls if c[0] == "evaluate_churn_models"][0])
+
     def test_realism_report_is_copied_next_to_results(self) -> None:
         meta = _read(self.run_dir, "run_meta")
         self.assertEqual("ok", meta["realism_report"]["status"])
@@ -557,6 +579,33 @@ class TestHelpers(unittest.TestCase):
                 offenders.append(node.lineno)
         self.assertGreater(guarded, 10)
         self.assertEqual([], offenders)
+
+    def test_override_attr_restores_and_reports(self) -> None:
+        module = types.ModuleType("fake_mod")
+        module.N_SPLITS = 5
+        with mock.patch.dict(sys.modules, {"fake_mod": module}):
+            with rs.override_attr("fake_mod", "N_SPLITS", 3) as record:
+                self.assertEqual(3, module.N_SPLITS)
+            self.assertEqual(5, module.N_SPLITS)
+            self.assertEqual({"applied": True, "default": 5, "requested": 3}, {k: record[k] for k in ("applied", "default", "requested")})
+            with rs.override_attr("fake_mod", "N_SPLITS", None) as record:
+                self.assertFalse(record["applied"])
+            with rs.override_attr("fake_mod", "MISSING", 3) as record:
+                self.assertFalse(record["applied"])
+                self.assertFalse(hasattr(module, "MISSING"))
+
+    def test_stratified_cap_keeps_class_ratio(self) -> None:
+        y = pd.Series([1] * 200 + [0] * 800, index=[f"C{i:08d}" for i in range(1000)])
+        X = pd.DataFrame({"a": range(1000)}, index=y.index)
+        Xs, ys, record = rs.stratified_cap(X, y, 100, seed=1)
+        self.assertTrue(record["applied"])
+        self.assertEqual(100, len(ys))
+        self.assertAlmostEqual(0.2, ys.mean(), places=2)
+        self.assertEqual(list(ys.index), list(Xs.index))
+        self.assertEqual(list(ys.index), list(rs.stratified_cap(X, y, 100, seed=1)[1].index))
+        same = rs.stratified_cap(X, y, None, seed=1)
+        self.assertIs(X, same[0])
+        self.assertFalse(same[2]["applied"])
 
     def test_decision_fn_reports_missing_module(self) -> None:
         with mock.patch.dict(sys.modules, {"src.decision.churn": None}):
