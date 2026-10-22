@@ -1,0 +1,13 @@
+{
+  "sprint": "sprint-v0",
+  "sealed": false,
+  "run_id": "mock-20261022-0001",
+  "generated_at": "2026-10-22T14:00:00+09:00",
+  "mock": true,
+  "horizon_days": 90,
+  "models": [
+    { "name": "과거 평균 (90일 매출 이월)", "kind": "baseline", "mae": 48210, "rmse": 91540, "spearman": 0.412, "top20_hit": 0.463 },
+    { "name": "BG/NBD + Gamma-Gamma", "kind": "baseline", "mae": 41380, "rmse": 83020, "spearman": 0.538, "top20_hit": 0.552 },
+    { "name": "LightGBM 회귀", "kind": "proposed", "mae": 36950, "rmse": 77410, "spearman": null, "top20_hit": 0.611 }
+  ]
+}

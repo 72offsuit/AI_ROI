@@ -1,0 +1,54 @@
+{
+  "sprint": "sprint-v0",
+  "sealed": false,
+  "run_id": "mock-20261022-0001",
+  "generated_at": "2026-10-22T14:00:00+09:00",
+  "mock": true,
+  "segments": [
+    {
+      "id": "S1",
+      "name": "설득 가능 (Persuadables)",
+      "n": 3820,
+      "share": 0.191,
+      "avg_churn_p": 0.462,
+      "avg_cate": 0.071,
+      "avg_clv": 182000
+    },
+    {
+      "id": "S2",
+      "name": "확실한 고객 (Sure Things)",
+      "n": 7410,
+      "share": 0.3705,
+      "avg_churn_p": 0.118,
+      "avg_cate": 0.004,
+      "avg_clv": 264000
+    },
+    {
+      "id": "S3",
+      "name": "잃은 고객 (Lost Causes)",
+      "n": 5230,
+      "share": 0.2615,
+      "avg_churn_p": 0.713,
+      "avg_cate": 0.002,
+      "avg_clv": 61000
+    },
+    {
+      "id": "S4",
+      "name": "건드리면 안 되는 고객 (Sleeping Dogs)",
+      "n": 1960,
+      "share": 0.098,
+      "avg_churn_p": 0.254,
+      "avg_cate": -0.038,
+      "avg_clv": 143000
+    },
+    {
+      "id": "S5",
+      "name": "신규 관찰 필요",
+      "n": 1580,
+      "share": 0.079,
+      "avg_churn_p": 0.391,
+      "avg_cate": null,
+      "avg_clv": null
+    }
+  ]
+}

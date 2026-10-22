@@ -1,0 +1,56 @@
+{
+  "sprint": "sprint-v0",
+  "sealed": false,
+  "run_id": "mock-20261022-0001",
+  "generated_at": "2026-10-22T14:00:00+09:00",
+  "mock": true,
+  "label_def": "관측 종료 시점 이후 42일 내 구매 0건이면 이탈(1)",
+  "n": 20000,
+  "pos_rate": 0.284,
+  "models": [
+    {
+      "name": "최근성 규칙 (Recency ≥ 30일)",
+      "kind": "baseline",
+      "cv": {
+        "roc_auc": { "mean": 0.672, "std": 0.011 },
+        "pr_auc": { "mean": 0.441, "std": 0.016 },
+        "f1": { "mean": 0.468, "std": 0.013 },
+        "lift_at_10": { "mean": 1.82, "std": 0.09 }
+      },
+      "temporal_holdout": null
+    },
+    {
+      "name": "로지스틱 회귀",
+      "kind": "baseline",
+      "cv": {
+        "roc_auc": { "mean": 0.741, "std": 0.009 },
+        "pr_auc": { "mean": 0.528, "std": 0.014 },
+        "f1": { "mean": 0.531, "std": 0.012 },
+        "lift_at_10": { "mean": 2.24, "std": 0.08 }
+      },
+      "temporal_holdout": null
+    },
+    {
+      "name": "LightGBM",
+      "kind": "proposed",
+      "cv": {
+        "roc_auc": { "mean": 0.803, "std": 0.007 },
+        "pr_auc": { "mean": 0.617, "std": 0.012 },
+        "f1": { "mean": 0.589, "std": 0.010 },
+        "lift_at_10": { "mean": 2.71, "std": 0.07 }
+      },
+      "temporal_holdout": null
+    }
+  ],
+  "shap_top": [
+    { "feature": "recency_days", "mean_abs": 0.412 },
+    { "feature": "orders_90d", "mean_abs": 0.287 },
+    { "feature": "sessions_30d", "mean_abs": 0.219 },
+    { "feature": "coupon_use_rate", "mean_abs": 0.143 },
+    { "feature": "avg_order_amount", "mean_abs": 0.118 },
+    { "feature": "cart_abandon_rate", "mean_abs": 0.097 },
+    { "feature": "days_since_signup", "mean_abs": 0.071 },
+    { "feature": "category_diversity", "mean_abs": 0.054 }
+  ],
+  "importance_method": "TreeSHAP 평균 |SHAP| (검증 폴드 합집합)"
+}

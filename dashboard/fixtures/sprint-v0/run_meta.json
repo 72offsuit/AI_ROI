@@ -1,0 +1,24 @@
+{
+  "sprint": "sprint-v0",
+  "sealed": false,
+  "run_id": "mock-20261022-0001",
+  "generated_at": "2026-10-22T14:00:00+09:00",
+  "mock": true,
+  "seed": 42,
+  "N": 20000,
+  "profile": "small",
+  "simulator_version": "0.3.0-mock",
+  "stages": [
+    { "name": "simulate", "status": "ok", "reason": null, "seconds": 41.2 },
+    { "name": "publish", "status": "ok", "reason": null, "seconds": 6.8 },
+    { "name": "features", "status": "ok", "reason": null, "seconds": 12.5 },
+    { "name": "churn", "status": "ok", "reason": null, "seconds": 58.1 },
+    { "name": "churn_temporal_holdout", "status": "not_run", "reason": "small 프로파일의 관측 기간이 홀드아웃 창(28일)을 확보하지 못함", "seconds": null },
+    { "name": "clv", "status": "ok", "reason": null, "seconds": 21.7 },
+    { "name": "uplift", "status": "ok", "reason": null, "seconds": 73.4 },
+    { "name": "segments", "status": "ok", "reason": null, "seconds": 3.9 },
+    { "name": "strategy", "status": "ok", "reason": null, "seconds": 9.6 },
+    { "name": "ab_test", "status": "ok", "reason": null, "seconds": 1.2 },
+    { "name": "realism", "status": "failed", "reason": "참조 데이터셋 1종 다운로드 실패 — 해당 지표는 no_reference", "seconds": 4.4 }
+  ]
+}

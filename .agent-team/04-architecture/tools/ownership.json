@@ -490,6 +490,11 @@
       "pattern": "scripts/research/**",
       "owner": "team",
       "why": "스프린트 1(#148) 실데이터 기준 통계 재현 스크립트. 리드 소유"
+    },
+    {
+      "pattern": "requirements-ml.txt",
+      "owner": "phillip",
+      "why": "선택 의존성(torch, Churn GRU · #144). CI 비대상 — requirements.txt · requirements-dev.txt 와 같은 소유자"
     }
   ],
   "planned": [
