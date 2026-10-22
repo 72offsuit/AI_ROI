@@ -156,3 +156,156 @@ def plan_S1(scores: Mapping[str, Any], budget_krw: int | None = None,
         out[cid] = action
         spent += unit
     return out
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# 이하 S2~S5 — S1 커밋(ce05a66) 이후에 추가했다. 위 S1 규칙은 건드리지 않았다.
+# AI 전략은 pandas 가 필요하므로 함수 안에서 import 한다 (S0·S1 은 의존성 없이 동작).
+# ═════════════════════════════════════════════════════════════════════════════
+
+STRATEGY_NAMES: dict[str, str] = {
+    "S0": "무처치",
+    "S1": "Rule-based (기준선)",
+    "S2": "Churn AI",
+    "S3": "Churn + Uplift",
+    "S4": "Churn + Uplift + CLV",
+    "S5": "Full AI + 예산 최적화",
+}
+
+#: S2 의 기본 처치 — S1 과 같은 T3 로 두어 S1 대비 차이가 **타깃 선정**에서만 나오게 한다.
+S2_DEFAULT_TREATMENT = "T3"
+
+
+class NotComputable(ValueError):
+    """필요한 점수가 없어 전략을 계산할 수 없다 — 빈 배정(0 명)으로 대신하지 않는다."""
+
+
+def planning_costs(treatment_cost: Mapping[str, Any], message_cost_krw: float) -> dict[str, float]:
+    """고객당 **계획 비용**(예산 차감용) = 처치 단가 + 메시지 비용.
+
+    ``economic_config.yaml`` 의 ``treatment_cost``·``cost_accounting.message_cost_krw`` 를
+    그대로 받는다(파일은 호출자가 읽는다). 쿠폰이 전부 쓰인다고 보는 **상한**이다 —
+    실현 비용이 예산을 넘지 않게 하려는 보수적 선택이며, 사용률을 곱한 기대 비용이 아니다.
+    캠페인 고정비는 고객 단위가 아니므로 여기 넣지 않는다(호출자가 예산에서 먼저 뺀다).
+    """
+    out = {}
+    for t in TREATMENTS:
+        unit = treatment_cost[t]["unit_cost_krw"] if isinstance(treatment_cost[t], Mapping) else treatment_cost[t]
+        if _missing(unit):
+            raise NotComputable(f"treatment_cost[{t}] 단가가 없다")
+        out[t] = float(unit) + float(message_cost_krw)
+    return out
+
+
+def _need(scores: Mapping[str, Any], key: str, sid: str):
+    v = scores.get(key)
+    if v is None:
+        raise NotComputable(f"{sid} 는 scores['{key}'] 가 필요하다")
+    return v
+
+
+def _need_budget(budget_krw: Any, costs: Mapping[str, Any] | None, sid: str) -> None:
+    if budget_krw is None:
+        raise ValueError(f"{sid} 는 예산 상한이 필요하다 (모든 AI 전략 ≤ C_rule)")
+    if not costs:
+        raise ValueError(f"{sid} 는 costs(고객당 계획 비용)가 필요하다")
+
+
+def _fill(order: list[tuple[str, str]], budget_krw: float, costs: Mapping[str, Any]) -> dict[str, str]:
+    """우선순위 순서대로 예산이 허락하는 고객을 배정한다(넘치는 고객은 건너뛴다)."""
+    out: dict[str, str] = {}
+    spent = 0.0
+    for cid, t in order:
+        unit = float(costs[t])
+        if spent + unit <= budget_krw:
+            out[cid] = t
+            spent += unit
+    return out
+
+
+def _value(scores: Mapping[str, Any], sid: str):
+    """CLV → 가치(원). ``margin_rate`` 가 있으면 CLV(매출 기준)에 곱하고, 없으면 CLV 가
+    이미 이익 기준이라고 본다(DR-145)."""
+    clv = _need(scores, "clv", sid)
+    rate = scores.get("margin_rate")
+    return clv.astype(float) * (float(rate) if rate is not None else 1.0)
+
+
+def plan_S2(scores, budget_krw, costs) -> dict[str, str]:
+    """S2 Churn AI — ``churn_p`` 내림차순, 전원 기본 처치(T3). 결손 churn_p 는 제외."""
+    _need_budget(budget_krw, costs, "S2")
+    p = _need(scores, "churn_p", "S2").astype(float).dropna()
+    df = p.rename("p").to_frame()
+    df["cid"] = df.index.astype(str)
+    df = df.sort_values(["p", "cid"], ascending=[False, True], kind="mergesort")
+    return _fill([(c, S2_DEFAULT_TREATMENT) for c in df["cid"]], budget_krw, costs)
+
+
+def plan_S3(scores, budget_krw, costs) -> dict[str, str]:
+    """S3 Churn + Uplift — 고객별 CATE 최대 처치를 고르고 ``churn_p × CATE`` 내림차순.
+
+    CATE ≤ 0(효과 없음·역효과 = Sleeping Dog)은 제외한다. 비용은 순서에 반영하지 않는다
+    (그것이 S4·S5 와의 차이다)."""
+    _need_budget(budget_krw, costs, "S3")
+    p = _need(scores, "churn_p", "S3").astype(float)
+    cate = _need(scores, "cate", "S3").astype(float)
+    cate = cate[[t for t in TREATMENTS if t in cate.columns]]
+    cate = cate[cate.notna().any(axis=1)]
+    best_t = cate.idxmax(axis=1)
+    best_u = cate.max(axis=1)
+    df = best_t.rename("t").to_frame()
+    df["score"] = p.reindex(df.index) * best_u
+    df = df[(best_u > 0) & df["score"].notna()]
+    df["cid"] = df.index.astype(str)
+    df = df.sort_values(["score", "cid"], ascending=[False, True], kind="mergesort")
+    return _fill(list(zip(df["cid"], df["t"])), budget_krw, costs)
+
+
+def _expected_gain(scores, sid: str):
+    """처치별 총 기대 증분가치(원) = CATE × 가치. 비용 차감 전."""
+    cate = _need(scores, "cate", sid).astype(float)
+    cate = cate[[t for t in TREATMENTS if t in cate.columns]]
+    return cate.mul(_value(scores, sid).reindex(cate.index), axis=0)
+
+
+def plan_S4(scores, budget_krw, costs) -> dict[str, str]:
+    """S4 + CLV — 고객별 ``CATE_t × 가치 − cost_t`` 최대 처치, 그 값 내림차순, 양수만.
+
+    churn_p 는 순서에 직접 쓰지 않는다 — CATE 가 이미 '처치로 바뀌는 몫' 이다(data_spec §13.1)."""
+    _need_budget(budget_krw, costs, "S4")
+    import pandas as pd
+
+    gain = _expected_gain(scores, "S4")
+    net = gain - pd.Series({t: float(costs[t]) for t in gain.columns})
+    net = net[net.notna().any(axis=1)]
+    df = net.idxmax(axis=1).rename("t").to_frame()
+    df["v"] = net.max(axis=1)
+    df = df[df["v"] > 0]
+    df["cid"] = df.index.astype(str)
+    df = df.sort_values(["v", "cid"], ascending=[False, True], kind="mergesort")
+    return _fill(list(zip(df["cid"], df["t"])), budget_krw, costs)
+
+
+def plan_S5(scores, budget_krw, costs) -> dict[str, str]:
+    """S5 Full AI + 예산 최적화 — ``optimize.optimize_budget`` (다중선택 배낭 탐욕 근사)."""
+    from .optimize import optimize_budget
+
+    _need_budget(budget_krw, costs, "S5")
+    gain = _expected_gain(scores, "S5")
+    return optimize_budget(gain, costs, budget_krw)
+
+
+_PLANNERS = {"S0": plan_S0, "S1": plan_S1, "S2": plan_S2, "S3": plan_S3, "S4": plan_S4, "S5": plan_S5}
+
+
+def plan(strategy_id: str, scores: Mapping[str, Any], budget_krw: int | None,
+         costs: Mapping[str, Any] | None) -> dict[str, str]:
+    """전략 ID → ``{customer_id: "T1".."T4"}``. 미배정(T0) 고객은 넣지 않는다.
+
+    scores 키: ``churn_p``(Series) · ``cate``(DataFrame T1~T4) · ``clv``(Series|None) ·
+    ``days_since_last_purchase``(Series) · 선택 ``lifetime_order_count`` · ``eligible`` ·
+    ``margin_rate``. 필요한 점수가 없으면 ``NotComputable`` — 빈 배정으로 대신하지 않는다.
+    """
+    if strategy_id not in _PLANNERS:
+        raise KeyError(f"알 수 없는 전략: {strategy_id!r} (S0~S5)")
+    return _PLANNERS[strategy_id](scores, budget_krw, costs)
