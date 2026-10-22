@@ -61,7 +61,7 @@ class TestS1Selection(unittest.TestCase):
         self.assertEqual(2, info["n_days_missing"])
 
     def test_doctests(self) -> None:
-        result = doctest.testmod(strategies)
+        result = doctest.testmod(strategies, verbose=False)
         self.assertGreater(result.attempted, 0)
         self.assertEqual(0, result.failed)
 

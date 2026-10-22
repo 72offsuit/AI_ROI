@@ -32,6 +32,8 @@ METHODS = ("s_learner", "t_learner", "x_learner")
 METHOD_KIND = {"s_learner": "baseline", "t_learner": "proposed", "x_learner": "proposed"}
 #: 처치군(또는 대조군) 최소 표본. 이보다 적으면 그 처치의 CATE 는 계산 불가.
 MIN_ARM_N = 30
+#: 학습·예측 시 OpenMP 스레드 수. None 이면 제한하지 않는다.
+N_THREADS: int | None = 1
 #: Qini 곡선 점 개수 상한(대시보드 페이로드 크기).
 CURVE_POINTS = 50
 #: PRD §15.1 — Uplift MVP 는 T0 vs T3 이진 처치. 평가의 대표 처치군 기본값.
@@ -106,9 +108,24 @@ class UpliftModel:
     n_by_arm: dict[str, int] = field(default_factory=dict)
 
 
+def _threads():
+    """OpenMP 스레드 상한. 작은 모델을 여러 개 학습할 때 스레드 경합으로 8 배 가까이
+    느려지는 것을 측정했다(합성 2,500 건 테스트 27 s → 3.5 s). threadpoolctl 은
+    scikit-learn 의 필수 의존성이다."""
+    from threadpoolctl import threadpool_limits
+
+    return threadpool_limits(limits=N_THREADS, user_api="openmp")
+
+
 def fit_uplift(X: pd.DataFrame, treatment: pd.Series, y: pd.Series,
                method: str = "t_learner", seed: int = 0) -> UpliftModel:
     """메타러너를 학습한다. ``method`` ∈ ``METHODS``."""
+    with _threads():
+        return _fit_uplift(X, treatment, y, method, seed)
+
+
+def _fit_uplift(X: pd.DataFrame, treatment: pd.Series, y: pd.Series,
+                method: str, seed: int) -> UpliftModel:
     if method not in METHODS:
         raise ValueError(f"method 는 {METHODS} 중 하나다: {method!r}")
     treatment, y = _check_inputs(X, treatment, y)
@@ -150,6 +167,11 @@ def _with_arm_onehot(Xp: pd.DataFrame, treatment: pd.Series, arms: list[str]) ->
 
 def predict_cate(model: UpliftModel, X: pd.DataFrame) -> pd.DataFrame:
     """고객별 CATE(각 처치 vs T0). 열은 항상 T1~T4, 학습 불가 처치군은 NaN."""
+    with _threads():
+        return _predict_cate(model, X)
+
+
+def _predict_cate(model: UpliftModel, X: pd.DataFrame) -> pd.DataFrame:
     Xp = _prep_X(X, model.columns)
     out = pd.DataFrame(np.nan, index=X.index, columns=list(TREATED))
     if model.method == "s_learner":
@@ -290,8 +312,10 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
     binary = bool(set(np.unique(y.to_numpy())) <= {0.0, 1.0})
     ate = {a: ate_with_ci(y[treatment == a], y[treatment == CONTROL]) for a in TREATED}
 
-    idx_tr, idx_te = train_test_split(np.arange(len(X)), test_size=test_size,
-                                      random_state=seed, stratify=treatment.to_numpy())
+    # 층화 분할 — 표본 1 개뿐인 처치군이 있으면 층화가 불가능하므로 단순 무작위로 내린다(기록).
+    stratified = min(arms_n[a] for a in ARMS if arms_n[a] > 0) >= 2
+    idx_tr, idx_te = train_test_split(np.arange(len(X)), test_size=test_size, random_state=seed,
+                                      stratify=treatment.to_numpy() if stratified else None)
     X_tr, X_te = X.iloc[idx_tr], X.iloc[idx_te]
     t_tr, t_te = treatment.iloc[idx_tr], treatment.iloc[idx_te]
     y_tr, y_te = y.iloc[idx_tr], y.iloc[idx_te]
@@ -330,7 +354,7 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
                      "models": [{k: v for k, v in r.items() if k != "qini_curve"} for r in rows_for(a, False)]}
     return {
         "n": int(len(X)), "n_train": int(len(idx_tr)), "n_test": int(len(idx_te)),
-        "seed": seed, "test_size": test_size,
+        "seed": seed, "test_size": test_size, "split": "stratified_by_arm" if stratified else "random",
         "outcome_kind": "binary" if binary else "continuous",
         "arms": arms_n, "primary_arm": primary_arm,
         "not_evaluable_arms": [a for a in TREATED if a not in usable],

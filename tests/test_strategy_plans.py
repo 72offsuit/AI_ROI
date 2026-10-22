@@ -6,7 +6,7 @@ import unittest
 from importlib.util import find_spec
 
 from src.decision.roi import summarize_all, summarize_strategy
-from src.decision.strategies import NotComputable, STRATEGY_NAMES, plan, planning_costs
+from src.decision.strategies import NotComputable, STRATEGY_NAMES, plan, plan_summary, planning_costs
 
 DEPS = all(find_spec(m) for m in ("numpy", "pandas"))
 REASON = "BLOCKED: numpy/pandas/scikit-learn 미설치"
@@ -83,6 +83,14 @@ class TestPlans(unittest.TestCase):
         self.assertEqual(set(d.index[(d >= 28) & (d <= 90)]), set(a))
 
 
+class TestPlanSummary(unittest.TestCase):
+    def test_counts(self) -> None:
+        self.assertEqual({"n_targeted": 3, "treatment_mix": {"T1": 1, "T3": 2}},
+                         plan_summary({"C1": "T3", "C2": "T1", "C3": "T3"}))
+        with self.assertRaises(ValueError):
+            plan_summary({"C1": "T0"})
+
+
 class TestRoi(unittest.TestCase):
     BASE = {"id": "S1", "revenue": 1000.0, "marketing_cost": 100.0, "contribution_profit": 300.0, "churn_rate": 0.2}
 
@@ -115,6 +123,9 @@ class TestRoi(unittest.TestCase):
         rows = summarize_all({"S1": self.BASE, "S0": {"marketing_cost": 0.0, "contribution_profit": 250.0}})
         self.assertEqual(["S0", "S1"], [r["id"] for r in rows])
         self.assertAlmostEqual(-50.0, rows[0]["incremental_profit_vs_S1"])
+        self.assertEqual("무처치", rows[0]["name"])
+        self.assertAlmostEqual(0.0, rows[1]["incremental_profit_vs_S1"])
+        self.assertIsNone(rows[1]["roi"])
 
 
 if __name__ == "__main__":

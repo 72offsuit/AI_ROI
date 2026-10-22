@@ -20,6 +20,8 @@ from __future__ import annotations
 import math
 from typing import Any, Mapping
 
+from .strategies import STRATEGY_NAMES
+
 ROW_KEYS = ("id", "name", "n_targeted", "treatment_mix", "revenue", "marketing_cost",
             "contribution_profit", "churn_rate")
 #: PRD §65 '마케팅 비용 폭증' 판정 — 기준선 대비 비용 증가율이 이 값 이상이면 경고.
@@ -46,6 +48,8 @@ def summarize_strategy(metrics: Mapping[str, Any], baseline_metrics: Mapping[str
                        ai_investment_cost: float | None = None) -> dict[str, Any]:
     """전략 요약 행 1개. ``baseline_metrics`` 가 None 이면 증분 지표는 전부 계산 불가."""
     row: dict[str, Any] = {k: metrics.get(k) for k in ROW_KEYS}
+    if row["name"] is None and row["id"] in STRATEGY_NAMES:
+        row["name"] = STRATEGY_NAMES[row["id"]]
     base = baseline_metrics or {}
     inc = _sub(metrics.get("contribution_profit"), base.get("contribution_profit")) if baseline_metrics else None
     dcost = _sub(metrics.get("marketing_cost"), base.get("marketing_cost")) if baseline_metrics else None
@@ -90,7 +94,8 @@ def interpretation_flags(metrics: Mapping[str, Any], base: Mapping[str, Any]) ->
 
 def summarize_all(metrics_by_id: Mapping[str, Mapping[str, Any]], baseline_id: str = "S1",
                   ai_investment_cost: float | None = None) -> list[dict[str, Any]]:
-    """S0~S5 집계 → 요약 행 목록. 기준선(S1) 행의 증분값은 0 이 아니라 정의상 0 이다."""
+    """S0~S5 집계 → 요약 행 목록. S1 행의 증분값은 자기 자신과의 차이라 정의상 0 이고,
+    그 ROI 는 분모(추가 마케팅비)가 0 이라 계산 불가다. AI 투자비는 AI 전략(S2~S5)에만 붙인다."""
     base = metrics_by_id.get(baseline_id)
     rows = []
     for sid in sorted(metrics_by_id):

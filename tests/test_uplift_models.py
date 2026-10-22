@@ -22,7 +22,7 @@ if DEPS:
     )
 
 
-def synthetic(n=4000, seed=0, arms=("T0", "T1", "T3"), probs=(0.4, 0.3, 0.3)):
+def synthetic(n=2500, seed=0, arms=("T0", "T1", "T3"), probs=(0.4, 0.3, 0.3)):
     """x1>0 인 고객에게만 T3 효과 +0.25, T1 은 모두에게 +0.05, 일부에 역효과는 없음."""
     rng = np.random.default_rng(seed)
     idx = [f"C{i:08d}" for i in range(n)]
@@ -108,14 +108,14 @@ class TestMetaLearners(unittest.TestCase):
 class TestEvaluate(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
-        cls.X, cls.t, cls.y, cls.true = synthetic(n=5000, seed=1)
+        cls.X, cls.t, cls.y, cls.true = synthetic(n=3000, seed=1)
         rng = np.random.default_rng(9)
         cls.churn = pd.Series(rng.random(len(cls.X)), index=cls.X.index)
         cls.res = evaluate_uplift_models(cls.X, cls.t, cls.y, seed=0, churn_p=cls.churn)
 
     def test_shape(self) -> None:
         r = self.res
-        self.assertEqual(5000, r["n"])
+        self.assertEqual(3000, r["n"])
         self.assertEqual("T3", r["primary_arm"])
         self.assertEqual(["T2", "T4"], r["not_evaluable_arms"])
         names = [m["name"] for m in r["models"]]
@@ -140,6 +140,13 @@ class TestEvaluate(unittest.TestCase):
         row = [m for m in r["models"] if m["name"] == "churn_risk_targeting"][0]
         self.assertEqual("not_run", row["status"])
         self.assertIsNone(row["qini"])
+
+    def test_singleton_arm_falls_back_to_random_split(self) -> None:
+        t = self.t.iloc[:1500].copy()
+        t.iloc[0] = "T2"                       # 표본 1 개 처치군 — 층화 불가
+        r = evaluate_uplift_models(self.X.iloc[:1500], t, self.y.iloc[:1500], seed=0, methods=("t_learner",))
+        self.assertEqual("random", r["split"])
+        self.assertIn("T2", r["not_evaluable_arms"])
 
     def test_benchmark_binary(self) -> None:
         df = self.X.copy()

@@ -309,3 +309,13 @@ def plan(strategy_id: str, scores: Mapping[str, Any], budget_krw: int | None,
     if strategy_id not in _PLANNERS:
         raise KeyError(f"알 수 없는 전략: {strategy_id!r} (S0~S5)")
     return _PLANNERS[strategy_id](scores, budget_krw, costs)
+
+
+def plan_summary(assignment: Mapping[str, str]) -> dict[str, Any]:
+    """배정 결과 → 요약 행의 ``n_targeted`` · ``treatment_mix``. 표준 라이브러리만 쓴다."""
+    mix: dict[str, int] = {}
+    for t in assignment.values():
+        if t not in TREATMENTS:
+            raise ValueError(f"배정에 처치 어휘 밖의 값이 있다: {t!r}")
+        mix[t] = mix.get(t, 0) + 1
+    return {"n_targeted": len(assignment), "treatment_mix": dict(sorted(mix.items()))}
