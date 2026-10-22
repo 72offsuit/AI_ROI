@@ -62,6 +62,7 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 | `docs/model_report.md` | `src/simulator/**` (`api.py` 포함) |
 | `docs/uplift_analysis.md` | `src/diagnostics/**` |
 | `docs/ab_test_report.md` | |
+| `docs/sprint1_report.md` (스프린트 1 결과 보고 — 모델 리포트) | |
 
 **가장 위험한 누수는 코드가 파일을 훔쳐보는 것이 아니다.** AI 성능이 낮다는 이유로 시뮬레이터를 고치는 것이다 (PRD §80 Risk 1). 사람도 에이전트도 이 유혹에 빠진다.
 

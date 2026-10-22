@@ -13,3 +13,4 @@
 원칙: AI 성능 지표(AUC · Qini 등)는 이 근거에 쓰지 않는다. 비교 기준값은 결과를 보기 전에 고정한다(§4).
 | `reference_stats.md` · `reference_stats.json` | 공개 실데이터 4종(UCI Online Retail II · Hillstrom · Lenta · X5) 직접 집계 — 구매 간격·객단가 분포 적합, Pareto·지니, 이탈 비율, 처치 ATE·CI, 세그먼트별 음수 ATE 탐색 |
 | `../../scripts/research/compute_reference_stats.py` | 위 집계 재현 (입력 경로 인자, 약 1분) |
+| `realism_report.md` · `realism_report.json` | 실현 데이터 ↔ stylized fact F1~F17 판정 (`scripts/research/realism_check.py`). ⚠ **F16 은 ground truth(잠재결과 4분면) 집계값**이다 — 시스템 팀은 F16 을 모델 개발 근거로 쓰지 않는다 |

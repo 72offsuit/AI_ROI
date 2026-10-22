@@ -18,6 +18,9 @@ export default async function StrategyPage() {
   const st = await loadSprint("strategy_comparison");
   const rows = st.kind === "ok" ? (st.artifact.strategies ?? []) : [];
   const label = (s: (typeof rows)[number]) => `${s.id} ${typeof s.name === "string" ? s.name : ""}`.trim();
+  // 증분이익의 계산 근거(DG-13). 실측 기여이익이 없으면 roi.py 가 매출 기준 대체 계산에 이 플래그를 붙인다.
+  const revenueFallback = (s: (typeof rows)[number]) => (s.flags ?? []).includes("PROFIT_FALLBACK_REVENUE_BASED");
+  const anyFallback = rows.some(revenueFallback);
 
   return (
     <div className="flex flex-col gap-lg">
@@ -100,6 +103,9 @@ export default async function StrategyPage() {
                       </td>
                       <td className={TDR}>
                         <Val text={fmtKrw(s.incremental_profit_vs_S1, true)} />
+                        {revenueFallback(s) ? (
+                          <span className="block whitespace-nowrap text-text-secondary">매출 기준 대체 · COGS 미차감</span>
+                        ) : null}
                       </td>
                       <td className={TDR}>
                         <Val text={fmtDec(s.roi, 2)} />
@@ -112,7 +118,14 @@ export default async function StrategyPage() {
           </Section>
 
           <div className="flex flex-col gap-base">
-            <Section title="증분이익 (vs S1)" note="0 선 왼쪽은 S1 보다 손해입니다.">
+            <Section
+              title="증분이익 (vs S1)"
+              note={
+                anyFallback
+                  ? "0 선 왼쪽은 S1 보다 손해입니다. ⚠ 실측 공헌이익이 없어 Δ(매출 − 마케팅 비용) 대체 계산입니다 — 원가(COGS)를 빼지 않아 과대평가될 수 있습니다 (이슈 #169)."
+                  : "0 선 왼쪽은 S1 보다 손해입니다."
+              }
+            >
               <BarChart
                 ariaLabel="전략별 S1 대비 증분이익"
                 rows={rows.map((s) => ({

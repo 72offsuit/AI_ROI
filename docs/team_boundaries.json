@@ -16,7 +16,8 @@
         "src/decision/**",
         "docs/model_report.md",
         "docs/uplift_analysis.md",
-        "docs/ab_test_report.md"
+        "docs/ab_test_report.md",
+        "docs/sprint1_report.md"
       ],
       "must_not_read_why": "AI 성능을 보고 시뮬레이터를 조정하는 것이 이 프로젝트에서 가장 위험한 누수다 (PRD §80 Risk 1). 코드가 파일을 훔쳐보는 것보다 사람이 결과를 본 뒤 파라미터를 고치는 쪽이 위험하다."
     },

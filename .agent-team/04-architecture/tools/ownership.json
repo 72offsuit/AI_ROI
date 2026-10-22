@@ -495,6 +495,16 @@
       "pattern": "requirements-ml.txt",
       "owner": "phillip",
       "why": "선택 의존성(torch, Churn GRU · #144). CI 비대상 — requirements.txt · requirements-dev.txt 와 같은 소유자"
+    },
+    {
+      "pattern": "docs/limitations.md",
+      "owner": "team",
+      "why": "DOC 6종 중 한계 문서 (스프린트 1 #142, D12). 시스템 팀이 쓰고 근거 수치는 공개 산출물에서만 옮긴다"
+    },
+    {
+      "pattern": "docs/sprint1_report.md",
+      "owner": "timothy",
+      "why": "스프린트 1(#142) 결과 보고 — 리드 소유 모델 리포트. 시뮬레이터 팀 must_not_read"
     }
   ],
   "planned": [
