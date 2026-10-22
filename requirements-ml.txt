@@ -1,0 +1,10 @@
+# 선택 의존성 — 딥러닝(Churn GRU, src/decision/churn_dl.py). 이슈 #144 스프린트 1.
+#
+# ★ CI 비대상. 어떤 워크플로우도 이 파일을 설치하지 않는다. torch 가 없으면
+#   tests/test_churn_sprint.py 의 GRU 테스트가
+#   "BLOCKED: 선택 의존성 torch 없음 (requirements-ml.txt, CI 비대상)" 로 skip 된다.
+#   skip 은 통과가 아니다 — GRU 결과를 보고할 때는 torch 를 설치한 환경에서 돌린 것만 쓴다.
+#
+# 설치: pip install -r requirements.txt -r requirements-ml.txt
+# 버전은 스프린트 venv(Python 3.12)가 실제로 돌린 값이다.
+torch==2.14.1
