@@ -49,7 +49,8 @@ class W0LiteralTests(unittest.TestCase):
 
 
 @unittest.skipUnless(AVAILABLE and DEPENDENCIES,
-                     "BLOCKED: 로컬 W0 계약 미제공 또는 jsonschema/referencing 미설치")
+                     "BLOCKED: Git 제외된 로컬 W0 검토 계약 미제공" if not AVAILABLE
+                     else "BLOCKED: jsonschema/referencing 미설치")
 class W0SchemaTests(unittest.TestCase):
     def setUp(self):
         from jsonschema import Draft202012Validator, FormatChecker

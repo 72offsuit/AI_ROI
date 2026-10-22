@@ -400,6 +400,96 @@
       "pattern": "e2e/**",
       "owner": "matthias",
       "why": "W6 QA 독립 E2E 하네스. dashboard/e2e/(Andrew 소유, 스크린샷 증거용)와 별개 — 실행 중인 앱을 밖에서 재검증한다. 재생성물은 e2e/.gitignore 가 제외"
+    },
+    {
+      "pattern": "tests/test_feature*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_churn*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_uplift*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_clv*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_segment*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_strategy*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_budget*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_experiment*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_orchestration*.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "docs/feature_dictionary.md",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "docs/model_report.md",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "docs/uplift_analysis.md",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "docs/ab_test_report.md",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "docs/retention_strategy.md",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_behavior*.py",
+      "owner": "team",
+      "why": "C2 시뮬레이터 팀 테스트 (docs/team_boundaries.json owned.sim). 스프린트 1(#142)"
+    },
+    {
+      "pattern": "tests/test_diagnostics*.py",
+      "owner": "team",
+      "why": "C2 시뮬레이터 팀 테스트 (docs/team_boundaries.json owned.sim). 스프린트 1(#142)"
+    },
+    {
+      "pattern": "docs/research/**",
+      "owner": "team",
+      "why": "스프린트 1(#148) 데이터 근거 — 모수↔외부 근거 대조표와 실데이터 기준 통계. 리드 소유"
+    },
+    {
+      "pattern": "scripts/research/**",
+      "owner": "team",
+      "why": "스프린트 1(#148) 실데이터 기준 통계 재현 스크립트. 리드 소유"
     }
   ],
   "planned": [
