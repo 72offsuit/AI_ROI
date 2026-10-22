@@ -26,7 +26,7 @@ export default async function StrategyPage() {
     <div className="flex flex-col gap-lg">
       <SprintHeader
         title="전략·ROI"
-        description="같은 기간·같은 고객에 대해 처치 전략 S0~S5 를 비교합니다. 증분이익은 S1(전체 일괄 쿠폰) 대비입니다."
+        description="같은 기간·같은 고객에 대해 처치 전략 S0~S5 를 비교합니다. 증분이익은 S1(Rule 기준선 — 28~90일 미구매 · 구매 2회 이상 고객에게 윈백 쿠폰 T3) 대비입니다."
         source={source}
         header={st.kind === "ok" ? st.artifact : null}
       />
