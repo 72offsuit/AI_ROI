@@ -1,0 +1,5 @@
+Womens E-Mail 21387 visit 0.1514 conv 0.0088 spend/cust 1.077
+No E-Mail 21306 visit 0.1062 conv 0.0057 spend/cust 0.653
+Mens E-Mail 21307 visit 0.1828 conv 0.0125 spend/cust 1.423
+ATE Mens E-Mail visit +0.0766 conv +0.0068 spend +0.770
+ATE Womens E-Mail visit +0.0452 conv +0.0031 spend +0.424

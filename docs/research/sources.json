@@ -1,0 +1,811 @@
+[
+  {
+    "id": "S01",
+    "title": "Instacart Online Grocery Shopping Dataset 2017 (Kaggle 'Instacart Market Basket Analysis') — 원자료 직접 계산(HF 미러 attik/Instacart-Market-Basket-Analysis, orders.csv 108,968,645 bytes)",
+    "url": "https://huggingface.co/datasets/attik/Instacart-Market-Basket-Analysis",
+    "year": 2017,
+    "type": "dataset(직접 계산)",
+    "quoted_figures": [
+      "orders 3,421,083건 / 고객 206,209명 / 간격 관측 3,214,874건",
+      "days_since_prior_order 평균 11.115, sd 9.207, p25 4, 중앙값 7, p75 15, p90 30(30일 절단, 30인 비율 11.49%), 7일인 비율 9.97%",
+      "고객별 평균 간격 중앙값 15.0일(p25 9.81, p75 20.62), ln-sd 0.527",
+      "고객 안 간격 CV 중앙값 0.571(주문 5회 이상 162,631명)",
+      "주문율 Gamma shape 근사 1.72(4~100회 주문 고객만 포함된 표본)",
+      "상위 20% 고객이 주문의 52.57%",
+      "order_products__train: 재주문 품목 59.86%, 주문당 10.55품목(131,209주문)",
+      "order_dow 0·1 = 17.56%·17.17%, 9~16시 주문 64.9%"
+    ],
+    "used_for": [
+      "purchase_cycle",
+      "purchase_cycle σ",
+      "구매율 이질성",
+      "Pareto 집중도",
+      "brand_loyalty",
+      "이탈 정의",
+      "요일 패턴",
+      "§4 F1·F2·F3·F5·F6·F10"
+    ]
+  },
+  {
+    "id": "S02",
+    "title": "dunnhumby / 84.51° The Complete Journey 2.0 (R 패키지 completejourney 데이터) — 원자료 직접 계산",
+    "url": "https://cran.r-project.org/web/packages/completejourney/vignettes/completejourney.html ; https://github.com/bradleyboehmke/completejourney/tree/master/data",
+    "year": 2017,
+    "type": "dataset(직접 계산)",
+    "quoted_figures": [
+      "2,469가구, 1년(2017-01-01~2018-01-01), 거래 1,469,307행, 장바구니 155,370개",
+      "가구당 주 1.20회(중앙값 0.82), 가구별 방문율 Gamma shape 0.82(CV 1.107)",
+      "장바구니 금액 중앙값 $17.61, 평균 $29.58, 전체 ln-sd 1.227; $20 이상 장바구니 ln-sd 0.591",
+      "가구 평균 장바구니 CV 0.650, 가구 중앙값 장바구니 ln-sd 0.720",
+      "방문일 간격 중앙값 3, p90 13, p95 21, p99 51일; $20 이상 방문 간격 p95 36일",
+      "1년 중 42일 이상 공백 뒤 복귀한 가구 43.5%",
+      "42일 무구매 라벨: 180일 활성 가구 10.7%/13.1%/11.4%(T0=7/1·9/1·11/1), 최근 구매 14일 이상 전 가구 28.6%/31.8%/28.9%",
+      "상위 20% 가구 매출 54.5%, 상위 10% 35.0%",
+      "표적 캠페인(가구×캠페인 6,589쌍) 중 쿠폰 사용 12.02%(Type A 16.6%, B 6.5%, C 5.9%); 표적 가구 1,559 중 1년간 1회 이상 사용 26.3%"
+    ],
+    "used_for": [
+      "구매율 이질성",
+      "base_order_value σ",
+      "Pareto 집중도",
+      "이탈 정의",
+      "생성 이탈률 가드레일",
+      "쿠폰 사용률 가드레일",
+      "coupon_sensitivity",
+      "P1·P5 구성비(간접)",
+      "§4 F3·F5·F6·F7·F12·F13"
+    ]
+  },
+  {
+    "id": "S03",
+    "title": "Baymard Institute — Cart Abandonment Rate Statistics",
+    "url": "https://baymard.com/lists/cart-abandonment-rate",
+    "year": 2025,
+    "type": "industry_benchmark",
+    "quoted_figures": [
+      "\"70.22%\" average documented cart abandonment rate (50 studies, last updated September 22, 2025)",
+      "abandonment reasons (excl. just browsing): extra costs (shipping, tax, fees) 40%, slow delivery 20%",
+      "42% of US online shoppers: 'just browsing / not ready to buy'"
+    ],
+    "used_for": [
+      "cart_abandonment_propensity",
+      "shipping_fee_sensitivity",
+      "search_propensity",
+      "퍼널"
+    ]
+  },
+  {
+    "id": "S04",
+    "title": "Dynamic Yield eCommerce Benchmarks — Conversion Rate",
+    "url": "https://marketing.dynamicyield.com/benchmarks/conversion-rate/",
+    "year": 2026,
+    "type": "industry_benchmark",
+    "quoted_figures": [
+      "Food & Beverage 4.56% (past twelve months)",
+      "global average 2.68%; mobile 2.86%, desktop 2.23%"
+    ],
+    "used_for": [
+      "base_purchase_probability",
+      "퍼널 방문→구매"
+    ]
+  },
+  {
+    "id": "S05",
+    "title": "Dynamic Yield eCommerce Benchmarks — Add-to-cart / Cart abandonment",
+    "url": "https://marketing.dynamicyield.com/benchmarks/add-to-cart-rate/ ; https://marketing.dynamicyield.com/benchmarks/cart-abandonment-rate/",
+    "year": 2026,
+    "type": "industry_benchmark",
+    "quoted_figures": [
+      "\"The average add-to-cart rate globally is 6.04%\"",
+      "\"The average shopping cart abandonment rate globally is 77.38%\" (% of items left in carts)"
+    ],
+    "used_for": [
+      "퍼널 장바구니 담기율",
+      "cart_abandonment_propensity"
+    ]
+  },
+  {
+    "id": "S06",
+    "title": "Dynamic Yield eCommerce Benchmarks 출시 보도 (Enterprise Times / DestinationCRM)",
+    "url": "https://www.enterprisetimes.co.uk/2020/11/24/dynamic-yield-launches-ecommerce-benchmarks-a-free-tool-to-unlocking-industry-metrics/",
+    "year": 2020,
+    "type": "industry_benchmark(2차)",
+    "quoted_figures": [
+      "Food & Beverage add-to-cart 5월 약 13%, 이후 약 11%(코로나 시기, 검색 요약으로 확인)"
+    ],
+    "used_for": [
+      "퍼널 장바구니 담기율"
+    ]
+  },
+  {
+    "id": "S07",
+    "title": "Stripe — Cart abandonment statistics: How rates vary by industry (업종 수치는 digitalapplied.com 인용)",
+    "url": "https://stripe.com/resources/more/cart-abandonment-statistics",
+    "year": 2026,
+    "type": "industry_benchmark(2차)",
+    "quoted_figures": [
+      "\"Grocery and food: 50.03%.\"",
+      "\"rates average about 70% across ecommerce\" (Last updated July 29, 2026)"
+    ],
+    "used_for": [
+      "cart_abandonment_propensity",
+      "§4 F9"
+    ]
+  },
+  {
+    "id": "S08",
+    "title": "McCarthy & Winer (2019) The Pareto rule in marketing revisited: is it 80/20 or 70/20? Marketing Letters 30(2):139-150",
+    "url": "https://ideas.repec.org/a/kap/mktlet/v30y2019i2d10.1007_s11002-019-09490-y.html",
+    "year": 2019,
+    "type": "academic(초록)",
+    "quoted_figures": [
+      "339개 비CPG 상장사 평균 Pareto ratio .67(제품 .67, 서비스 .66)",
+      "비구독 .68, 구독 .59"
+    ],
+    "used_for": [
+      "Pareto 집중도"
+    ]
+  },
+  {
+    "id": "S09",
+    "title": "Kim, Singh & Winer (2017) The Pareto rule for frequently purchased packaged goods. Marketing Letters 28(4):491-507",
+    "url": "https://ideas.repec.org/a/kap/mktlet/v28y2017i4d10.1007_s11002-017-9442-5.html",
+    "year": 2017,
+    "type": "academic(초록, DR 인용)",
+    "quoted_figures": [
+      "CPG 브랜드 수준 평균 Pareto ratio 0.73"
+    ],
+    "used_for": [
+      "Pareto 집중도"
+    ]
+  },
+  {
+    "id": "S10",
+    "title": "Sharp, Romaniuk & Graham (2019) Marketing's 60/20 Pareto Law (Ehrenberg-Bass)",
+    "url": "https://openresearch.lsbu.ac.uk/item/88vw1",
+    "year": 2019,
+    "type": "academic(검색 요약)",
+    "quoted_figures": [
+      "브랜드 최다 구매 20%의 매출 비중은 대체로 \"not much more than half\""
+    ],
+    "used_for": [
+      "Pareto 집중도"
+    ]
+  },
+  {
+    "id": "S11",
+    "title": "Fader, Hardie & Lee (2005) 'Counting Your Customers' the Easy Way: BG/NBD. Marketing Science 24(2):275-284",
+    "url": "https://ideas.repec.org/a/inm/ormksc/v24y2005i2p275-284.html",
+    "year": 2005,
+    "type": "academic",
+    "quoted_figures": [
+      "CDNOW r=0.243, α=4.414 (clvkit 재현 페이지로 확인); a=0.793, b=2.426 (DR-S2-hidden-trait-dist 의 2차 인용, 원 표 미확인)"
+    ],
+    "used_for": [
+      "구매율 이질성",
+      "분포족(Gamma·Beta)"
+    ]
+  },
+  {
+    "id": "S12",
+    "title": "Fader & Hardie (2013) The Gamma-Gamma Model of Monetary Value (note)",
+    "url": "https://www.brucehardie.com/notes/025/gamma_gamma.pdf",
+    "year": 2013,
+    "type": "academic(DR 인용)",
+    "quoted_figures": [
+      "CDNOW p=6.25, q=3.74, γ=15.44(2차) → 고객 평균 거래액 CV 약 0.76(DR 계산)"
+    ],
+    "used_for": [
+      "base_order_value σ"
+    ]
+  },
+  {
+    "id": "S13",
+    "title": "쿠폰·가격 민감도 방향 문헌: Narasimhan (1984) Marketing Science 3(2); Lichtenstein, Netemeyer & Burton (1990) JM 54(3), (1995) JCR 22(3)",
+    "url": "https://ideas.repec.org/a/inm/ormksc/v3y1984i2p128-147.html",
+    "year": 1984,
+    "type": "academic(DR 인용, 초록)",
+    "quoted_figures": [
+      "쿠폰 사용자가 비사용자보다 가격탄력적(방향)",
+      "쿠폰 성향과 가치 의식은 별개 구성개념",
+      "딜 성향은 영역 특수적"
+    ],
+    "used_for": [
+      "price_sensitivity",
+      "coupon_sensitivity"
+    ]
+  },
+  {
+    "id": "S14",
+    "title": "UPS Pulse of the Online Shopper (보도 인용; 판·연도 미확인)",
+    "url": "https://www.jckonline.com/editorial-article/should-you-be-offering-free-shipping-online",
+    "year": null,
+    "type": "industry_survey(2차)",
+    "quoted_figures": [
+      "\"52 percent have added items to their cart ... to qualify for free shipping\"",
+      "\"45 percent have abandoned a cart when the order value didn't qualify for free shipping\"",
+      "판에 따라 58%·60%(2015 comScore 판) 보도도 있음"
+    ],
+    "used_for": [
+      "shipping_fee_sensitivity",
+      "무료배송 임계 효과",
+      "§4 F8"
+    ]
+  },
+  {
+    "id": "S15",
+    "title": "Lewis (2006) The effect of shipping fees on customer acquisition, customer retention, and purchase quantities. Journal of Retailing 82(1):13-23",
+    "url": "https://doi.org/10.1016/j.jretai.2005.11.005",
+    "year": 2006,
+    "type": "academic(2차 요약)",
+    "quoted_figures": [
+      "무료배송에서 구매 발생은 높고 주문 크기는 작다(Shehu 외 2020 의 요약)",
+      "502일간 여러 배송비 스케줄 실험"
+    ],
+    "used_for": [
+      "shipping_fee_sensitivity",
+      "무료배송 임계 효과"
+    ]
+  },
+  {
+    "id": "S16",
+    "title": "Lewis, Singh & Fay (2006) An Empirical Study of the Impact of Nonlinear Shipping and Handling Fees on Purchase Incidence and Expenditure Decisions. Marketing Science 25(1):51-64",
+    "url": "https://ideas.repec.org/a/inm/ormksc/v25y2006i1p51-64.html",
+    "year": 2006,
+    "type": "academic(초록)",
+    "quoted_figures": [
+      "비부패성 식료품·드럭스토어 온라인 소매 데이터",
+      "소비자는 배송비에 highly responsive; 무료배송 프로모션은 매출을 올리나 일부 세그먼트 무반응으로 수익성은 낮음"
+    ],
+    "used_for": [
+      "shipping_fee_sensitivity",
+      "무료배송 임계 효과"
+    ]
+  },
+  {
+    "id": "S17",
+    "title": "Buckinx & Van den Poel (2005) Customer base analysis: partial defection of behaviourally loyal clients in a non-contractual FMCG retail setting. EJOR 164(1):252-268",
+    "url": "https://ideas.repec.org/a/eee/ejores/v164y2005i1p252-268.html",
+    "year": 2005,
+    "type": "academic(초록)",
+    "quoted_figures": [
+      "비계약 FMCG 소매에서 완전 이탈 대신 '부분 이탈'을 대리 지표로 씀"
+    ],
+    "used_for": [
+      "이탈 정의"
+    ]
+  },
+  {
+    "id": "S18",
+    "title": "Brick Meets Click · Mercatus — eGrocery Performance Benchmark 2023",
+    "url": "https://www.mercatus.com/newsroom/egrocery-performance-benchmark-2023/",
+    "year": 2023,
+    "type": "industry_benchmark",
+    "quoted_figures": [
+      "12주 창에 1회 이상 주문한 고객 수 전년 대비 -19.8%",
+      "최장기 코호트 AOV \"nearly 30% higher\", 주문 \"twice as many\" (신규 대비)",
+      "신규 고객의 약 30%만 이탈한 장기 고객 수준으로 성장"
+    ],
+    "used_for": [
+      "객단가 페르소나 격차",
+      "생성 이탈률 가드레일",
+      "P6"
+    ]
+  },
+  {
+    "id": "S19",
+    "title": "NHN데이터 「이커머스 성장을 위한 데이터 인사이트 보고서」 (바이라인네트워크 보도)",
+    "url": "https://byline.network/2022/10/1004_02",
+    "year": 2022,
+    "type": "korea_industry(2차)",
+    "quoted_figures": [
+      "\"국내 쇼핑몰들의 재구매 고객 비중이 22%에 불과\"",
+      "\"이커머스 분야의 평균 재구매 주기는 32.4일\"",
+      "매출 상위 10% VIP 중 \"59.4%는 5개월 내 추가 구매가 없는 것\""
+    ],
+    "used_for": [
+      "repurchase_propensity",
+      "purchase_cycle(일반 이커머스 대조)"
+    ]
+  },
+  {
+    "id": "S20",
+    "title": "오픈서베이 「온라인 식료품 구매 트렌드 리포트 2023」 (바이라인네트워크·아주경제 보도)",
+    "url": "https://byline.network/2023/01/30_0976",
+    "year": 2023,
+    "type": "korea_survey(2차)",
+    "quoted_figures": [
+      "컬리 월 2.5회, 1회 44,800원",
+      "쿠팡 월 4.88회, 38,600원 / 이마트몰·SSG 2.99회, 57,300원 / 네이버 3.6회, 39,800원",
+      "주이용 채널 쿠팡 32.7%, 컬리 8.4%"
+    ],
+    "used_for": [
+      "구매 빈도",
+      "base_order_value",
+      "purchase_cycle",
+      "§4 F3·F4"
+    ]
+  },
+  {
+    "id": "S21",
+    "title": "오픈서베이 「온라인 식료품 구매 트렌드 리포트 2025」 (오픈서베이 블로그 원문 + 이투데이·위키트리 보도)",
+    "url": "https://blog.opensurvey.co.kr/trendreport/online-grocery-2025/ ; https://www.etoday.co.kr/news/view/2444070",
+    "year": 2025,
+    "type": "korea_survey",
+    "quoted_figures": [
+      "온라인 식료품 구매 빈도 월평균 4.53회(원문), 오프라인 6.72회",
+      "월평균 구매 횟수 쿠팡 3.72회, 컬리 2.66회, 이마트·SSG 2.84회(보도)",
+      "1회 평균 금액 SSG 5만9,400원, 쿠팡 3만5,400원(보도); 컬리 금액 미확인",
+      "주로 구매하는 플랫폼 쿠팡 55.4%, 컬리 8.6%(보도)"
+    ],
+    "used_for": [
+      "구매 빈도",
+      "base_order_value",
+      "§4 F4"
+    ]
+  },
+  {
+    "id": "S22",
+    "title": "컬리 공식 상품 상세 페이지(배송 조건)",
+    "url": "https://www.kurly.com/goods/1000668010",
+    "year": 2026,
+    "type": "korea_company(원문)",
+    "quoted_figures": [
+      "배송비 \"3,000원 (4만원 이상 무료)\" (2026-10-22 조회)"
+    ],
+    "used_for": [
+      "배송비·무료배송 임계값"
+    ]
+  },
+  {
+    "id": "S23",
+    "title": "컬리멤버스 보도 (위키트리 2026-02-19, 비즈워치 2026-03-12)",
+    "url": "https://www.wikitree.co.kr/articles/1119026 ; https://news.bizwatch.co.kr/article/consumer/2026/03/11/0040",
+    "year": 2026,
+    "type": "korea_news(2차)",
+    "quoted_figures": [
+      "월 이용료 1,900원, 2만원 이상 무료배송 쿠폰 월 31개",
+      "비멤버 4만원 미만 3,000원 배송비",
+      "유효 가입자 140만명(2025년 말), 2025년 60만명 증가"
+    ],
+    "used_for": [
+      "배송비·무료배송 임계값",
+      "P6(간접)"
+    ]
+  },
+  {
+    "id": "S24",
+    "title": "한국경제 2026-05-27 컬리 매출총이익률 보도",
+    "url": "https://www.hankyung.com/article/202605272197g",
+    "year": 2026,
+    "type": "korea_news(2차)",
+    "quoted_figures": [
+      "\"컬리의 매출총이익률은 2022년 27.6%에서 2023년 29.7%, 2024년 31.8%, 2025년 33.3%로 상승했다.\""
+    ],
+    "used_for": [
+      "상품 기여마진율(economic_config)"
+    ]
+  },
+  {
+    "id": "S25",
+    "title": "한국농촌경제연구원(KREI) 2025 식품소비행태조사 결과 보도(노컷뉴스) 및 설문지",
+    "url": "https://www.nocutnews.co.kr/news/6442474 ; https://www.krei.re.kr/foodSurvey/board/atchDown.do?no=113681",
+    "year": 2025,
+    "type": "korea_survey(2차)",
+    "quoted_figures": [
+      "\"'식료품을 주로 온라인에서 구입한다'는 응답은 16.3%로 1년 전 9.7%에 비해 6.6%포인트 높아졌다.\"",
+      "온라인 구입 빈도·1회 금액 결과값은 미확인(문항만 확인)"
+    ],
+    "used_for": [
+      "구성비(근거 없음 확인)",
+      "시장 맥락"
+    ]
+  },
+  {
+    "id": "S26",
+    "title": "국가데이터처 「2025년 12월 및 연간 온라인쇼핑동향」 보도자료(PDF 원문)",
+    "url": "https://mods.go.kr/boardDownload.es?bid=241&list_no=443337&seq=1",
+    "year": 2026,
+    "type": "korea_official(원문)",
+    "quoted_figures": [
+      "2025년 온라인쇼핑 거래액 272조398억원(+4.9%), 모바일 211조1,448억원(+6.5%)",
+      "식품 소계 52조2,967억원(+10.4%): 음·식료품 37조8,184억원(+9.5%), 농축수산물 14조4,783억원(+12.9%)",
+      "12월 모바일 비중 음·식료품 80.8%, 농축수산물 78.8%",
+      "주의: 같은 자료의 2024년 비교치(259.4조)가 2025-02 최초 발표(242.1조)와 다름 — 개정 사유 미확인"
+    ],
+    "used_for": [
+      "시장 맥락",
+      "P6(유입률 자릿수)"
+    ]
+  },
+  {
+    "id": "S27",
+    "title": "컬리 2025 연간 실적 보도(시사경제 2026-03-04)",
+    "url": "https://sateconomy.co.kr/news/view/1065591756041953",
+    "year": 2026,
+    "type": "korea_news(2차)",
+    "quoted_figures": [
+      "매출 2조3,671억원(+7.8%), 영업이익 131억원, 거래액 3조5,340억원(+13.5%)"
+    ],
+    "used_for": [
+      "P6(유입률 자릿수)",
+      "시장 맥락"
+    ]
+  },
+  {
+    "id": "S28",
+    "title": "KREI 2024 가공식품 소비자 태도 조사(이코노미스트 2025-05-06 보도)",
+    "url": "https://economist.co.kr/article/view/ecn202505060014",
+    "year": 2025,
+    "type": "korea_survey(2차)",
+    "quoted_figures": [
+      "\"지난해 온라인으로 가공식품을 산 가구는 72.3%\"",
+      "주 1회 이상 온라인 가공식품 구매 가구 2019년 16.4% → 2024년 37.8%"
+    ],
+    "used_for": [
+      "고빈도 고객 비중(비교불가 확인)"
+    ]
+  },
+  {
+    "id": "S29",
+    "title": "모바일인덱스 인용 보도(CEO스코어데일리 2026-01-06) 등 앱 이용 지표",
+    "url": "https://www.ceoscoredaily.com/page/view/2026010613013974822",
+    "year": 2026,
+    "type": "korea_news(2차)",
+    "quoted_figures": [
+      "쿠팡 DAU 12월 1일 1,798만명 → 12월 27일 1,480만명",
+      "컬리·오아시스 1인당 월 사용일수: 미확인"
+    ],
+    "used_for": [
+      "base_visit_frequency(근거 없음 확인)"
+    ]
+  },
+  {
+    "id": "S30",
+    "title": "컬리 재구매율 보도(벤처스퀘어 2020-04-03, 아시아경제 2023-01-04)",
+    "url": "https://www.venturesquare.net/806256/ ; https://core.asiae.co.kr/article/2023010310523087533",
+    "year": 2020,
+    "type": "korea_news(2차, 회사 발표)",
+    "quoted_figures": [
+      "\"지난해 가입 고객 재구매율은 61.2%이다\"",
+      "재구매율 \"2019년 61.2%, 2020년 65.2%, 2021년에는 75%\"",
+      "비교치 홈쇼핑·인터넷 쇼핑 업계 평균 28.8%(원출처 미기재)"
+    ],
+    "used_for": [
+      "repurchase_propensity",
+      "§4 F11"
+    ]
+  },
+  {
+    "id": "S31",
+    "title": "Mailchimp 이메일 벤치마크(2015 데이터, 검색 요약 2차)",
+    "url": "https://www.smartbugmedia.com/blog/every-email-marketing-benchmark-you-will-ever-need",
+    "year": 2015,
+    "type": "industry_benchmark(2차)",
+    "quoted_figures": [
+      "Agriculture and Food Services 구독해지율 0.28%, 전체 0.27%(발송당)"
+    ],
+    "used_for": [
+      "marketing_fatigue(근거 없음 확인)"
+    ]
+  },
+  {
+    "id": "S32",
+    "title": "Macha 블로그 — Support tickets per order by ecommerce vertical (Gorgias 데이터 인용)",
+    "url": "https://www.getmacha.com/blog/support-tickets-per-order-by-ecommerce-vertical",
+    "year": 2026,
+    "type": "industry_benchmark(2차, 벤더)",
+    "quoted_figures": [
+      "주문 100건당 문의 19~46건, 14개 업종 중앙값 25건($10M GMV 구간, 2026년 3월)"
+    ],
+    "used_for": [
+      "cs_contact_propensity"
+    ]
+  },
+  {
+    "id": "S33",
+    "title": "Shopify Engineering — How Shopify Merchants Can Measure Retention",
+    "url": "https://shopify.engineering/how-shopify-merchants-can-measure-retention",
+    "year": 2017,
+    "type": "industry_practice",
+    "quoted_figures": [
+      "\"Far too often businesses define churn as no purchases after N days; typically N is a multiple of 7 or 30 days.\""
+    ],
+    "used_for": [
+      "이탈 정의"
+    ]
+  },
+  {
+    "id": "S34",
+    "title": "Indeed Engineering — Defining Churn (Dapaa & Adegoke)",
+    "url": "https://engineering.indeedblog.com/blog/2020/01/defining-churn/",
+    "year": 2020,
+    "type": "industry_practice",
+    "quoted_figures": [
+      "\"choosing an optimal percentile (90th, 95th, 99th, etc) is difficult.\"",
+      "\"the chosen threshold for the length of the lapse period is often too high.\""
+    ],
+    "used_for": [
+      "이탈 정의"
+    ]
+  },
+  {
+    "id": "S35",
+    "title": "Clemente-Císcar, San Matías & Giner-Bosch (2014) A methodology based on profitability criteria for defining the partial defection of customers in non-contractual settings. EJOR 239(1):276-285",
+    "url": "https://riunet.upv.es/handle/10251/51314",
+    "year": 2014,
+    "type": "academic(초록)",
+    "quoted_figures": [
+      "비계약 소매에서 이탈 정의를 리텐션 캠페인의 경제적 효율로 고른다(스페인 소매 데이터)"
+    ],
+    "used_for": [
+      "이탈 정의"
+    ]
+  },
+  {
+    "id": "S40",
+    "title": "Hillstrom MineThatData E-Mail Analytics Challenge (2008) — 원자료 직접 계산",
+    "url": "http://www.minethatdata.com/Kevin_Hillstrom_MineThatData_E-MailAnalytics_DataMiningChallenge_2008.03.20.csv ; https://blog.minethatdata.com/2008/03/minethatdata-e-mail-analytics-and-data.html",
+    "year": 2008,
+    "type": "dataset(직접 계산)",
+    "quoted_figures": [
+      "64,000명, 2주 추적",
+      "방문 Mens 18.28% / Womens 15.14% / 통제 10.62% → ATE +7.66 / +4.52%p",
+      "구매 1.25% / 0.88% / 0.57% → +0.68 / +0.31%p; 1인당 지출 $1.423 / $1.077 / $0.653"
+    ],
+    "used_for": [
+      "처치 ATE 가드레일",
+      "Persuadable 상한",
+      "§4 F14"
+    ]
+  },
+  {
+    "id": "S41",
+    "title": "Radcliffe (2008) Hillstrom's MineThatData Email Analytics Challenge: An Approach Using Uplift Modelling",
+    "url": "https://www.stochasticsolutions.com/pdf/HillstromChallenge.pdf",
+    "year": 2008,
+    "type": "academic/whitepaper(원문)",
+    "quoted_figures": [
+      "Table 2 가 직접 계산과 일치(18.28% 10.62% 7.66% 등)",
+      "\"There is reasonably strong evidence of some negative effects for the last 10–20% of the population\""
+    ],
+    "used_for": [
+      "Sleeping Dog 가드레일"
+    ]
+  },
+  {
+    "id": "S42",
+    "title": "Criteo Uplift Prediction Dataset v2.1 (Diemert et al. 2018/2021) — 원자료 직접 계산(조사 보조자)",
+    "url": "https://ailab.criteo.com/criteo-uplift-prediction-dataset/ ; https://huggingface.co/datasets/criteo/criteo-uplift",
+    "year": 2021,
+    "type": "dataset(직접 계산)",
+    "quoted_figures": [
+      "\"Rows: 13,979,592\", \"Treatment ratio: .85\", \"Average visit rate: .046992\", \"Average conversion rate: .00292\"",
+      "방문 처치 4.854% vs 통제 3.820% (+1.03%p), 전환 0.309% vs 0.194% (+0.115%p), 처치군 실제 노출 3.6%",
+      "arXiv 표의 상대 uplift 68.7/37.2 와 직접 계산 27.1/59.3 불일치 — 원인 미확인"
+    ],
+    "used_for": [
+      "처치 ATE 가드레일",
+      "Persuadable 상한"
+    ]
+  },
+  {
+    "id": "S43",
+    "title": "X5 RetailHero Uplift (2019) — 원자료 직접 계산(조사 보조자)",
+    "url": "https://www.uplift-modeling.com/en/latest/api/datasets/fetch_x5.html ; https://sklift.s3.eu-west-2.amazonaws.com/uplift_train.csv.gz",
+    "year": 2019,
+    "type": "dataset(직접 계산)",
+    "quoted_figures": [
+      "uplift_train 200,039명, 처치 50%",
+      "구매율 통제 60.33% → 처치 63.65%, ATE +3.32%p(상대 +5.5%)",
+      "처치 종류는 \"communication\"(SMS 여부 미확인)"
+    ],
+    "used_for": [
+      "처치 ATE 가드레일",
+      "Persuadable 상한",
+      "§4 F14"
+    ]
+  },
+  {
+    "id": "S44",
+    "title": "Lenta Uplift Dataset (BigTarget Hackathon 2020) — 원자료 직접 계산(조사 보조자 + 본 리서처 교차 확인)",
+    "url": "https://www.uplift-modeling.com/en/latest/api/datasets/fetch_lenta.html ; https://sklift.s3.eu-west-2.amazonaws.com/lenta_dataset.csv.gz",
+    "year": 2020,
+    "type": "dataset(직접 계산)",
+    "quoted_figures": [
+      "687,029행, 처치 75.1%",
+      "response_att 통제 10.26% → 처치 11.01%, ATE +0.75%p(두 번 독립 집계 일치)"
+    ],
+    "used_for": [
+      "처치 ATE 가드레일",
+      "Persuadable 상한"
+    ]
+  },
+  {
+    "id": "S45",
+    "title": "Ascarza (2018) Retention Futility: Targeting High-Risk Customers Might Be Ineffective. JMR 55(1):80-98",
+    "url": "https://journals.sagepub.com/doi/10.1509/jmr.16.0163",
+    "year": 2018,
+    "type": "academic(초록)",
+    "quoted_figures": [
+      "\"customers identified as having the highest risk of churning are not necessarily the best targets for proactive churn programs\"",
+      "워킹페이퍼 초록: 제안 방식이면 \"a further reduction of up to seven percentage points in churn rate\"",
+      "실험별 ATE·음의 효과 비율: 미확인(본문 접근 실패)"
+    ],
+    "used_for": [
+      "Sleeping Dog(질적)",
+      "처치 반응 이질성"
+    ]
+  },
+  {
+    "id": "S46",
+    "title": "Ascarza, Iyengar & Schleicher (2016) The Perils of Proactive Churn Prevention Using Plan Recommendations. JMR 53(1):46-60",
+    "url": "https://drupalgsb-test.paas.cc.columbia.edu/sites/default/files-efs/pubfiles/12782/Perils_Ascarza.pdf",
+    "year": 2016,
+    "type": "academic(원문)",
+    "quoted_figures": [
+      "\"whereas only 6.4% of customers in the control group left ... 10.0% did so in the treatment group (p < .001)\"",
+      "통제 10,058명 / 처치 54,089명",
+      "인센티브 수락 828/54,089 = 1.53%(계산)",
+      "Fréchet 경계 Sleeping Dog ∈ [3.6%, 10.0%](계산)"
+    ],
+    "used_for": [
+      "처치 ATE 가드레일(역효과)",
+      "쿠폰 사용률 가드레일",
+      "Sleeping Dog 가드레일",
+      "생성 이탈률(통제군 참고)"
+    ]
+  },
+  {
+    "id": "S47",
+    "title": "Radcliffe & Surry (2011) Real-World Uplift Modelling with Significance-Based Uplift Trees",
+    "url": "https://stochasticsolutions.com/pdf/sig-based-up-trees.pdf",
+    "year": 2011,
+    "type": "academic/whitepaper(원문)",
+    "quoted_figures": [
+      "\"A mobile churn reduction initiative actually increased churn from 9% to 10%\"",
+      "\"an uplift model was able to identify 25% of the population where the activity was marginal or counterproductive\"",
+      "부정 효과는 \"where customers targeted are already unhappy with the supplier\" 에서 많다"
+    ],
+    "used_for": [
+      "Sleeping Dog 가드레일",
+      "marketing_fatigue(손잡이 방향)"
+    ]
+  },
+  {
+    "id": "S48",
+    "title": "Radcliffe (2007) Identifying who can be saved and who will be driven away by retention activity",
+    "url": "https://www.stochasticsolutions.com/pdf/SavedAndDrivenAway.pdf",
+    "year": 2007,
+    "type": "whitepaper(원문)",
+    "quoted_figures": [
+      "Operator 1 이탈 통제 30% / 처치 25%; Operator 2 통제 9% / 처치 10%",
+      "Operator 2 \"somewhat negative effect for 70% of the population, though this may be misleading\"",
+      "Sleeping Dogs / Lost Causes / Sure Things / Persuadables 정의"
+    ],
+    "used_for": [
+      "처치 ATE 가드레일",
+      "Sleeping Dog 가드레일",
+      "Persuadable 상한",
+      "생성 이탈률(통제군 참고)"
+    ]
+  },
+  {
+    "id": "S49",
+    "title": "Devriendt, Moldovan & Verbeke (2018) A Literature Survey and Experimental Evaluation of the State-of-the-Art in Uplift Modeling. Big Data 6(1):13-41",
+    "url": "https://doi.org/10.1089/big.2017.0104",
+    "year": 2018,
+    "type": "academic(초록)",
+    "quoted_figures": [
+      "uplift 모형은 \"frequently observed to be unstable\"",
+      "데이터셋별 처치효과 크기: 미확인"
+    ],
+    "used_for": [
+      "처치 반응 이질성(질적)"
+    ]
+  },
+  {
+    "id": "S50",
+    "title": "Gubela, Lessmann & Jaroszewicz (2020) Response Transformation and Profit Decomposition for Revenue Uplift Modeling. EJOR",
+    "url": "https://arxiv.org/pdf/1911.08729",
+    "year": 2020,
+    "type": "academic(원문)",
+    "quoted_figures": [
+      "세션 내 10% 할인 쿠폰: 전환 처치 7.35% vs 통제 7.19%, uplift 0.16%",
+      "NCH 인용: \"coupon redemption rates in grocery retailing are only 0.6% in the US\""
+    ],
+    "used_for": [
+      "처치 ATE 가드레일",
+      "쿠폰 사용률 가드레일"
+    ]
+  },
+  {
+    "id": "S51",
+    "title": "Sahni, Zou & Chintagunta (2017) Do Targeted Discount Offers Serve as Advertising? Evidence from 70 Field Experiments. Management Science 63(8):2688-2705",
+    "url": "https://pubsonline.informs.org/doi/10.1287/mnsc.2016.2450",
+    "year": 2017,
+    "type": "academic(초록)",
+    "quoted_figures": [
+      "\"average expenditure to increase significantly, by $3.03 (a 37.2% increase)\"",
+      "\"the redemption rate of these offers is low. Importantly, 90% of these gains are not through redemption of the offers.\"",
+      "효과는 직전 1년 무거래 고객에서 더 큼"
+    ],
+    "used_for": [
+      "쿠폰 사용률 가드레일",
+      "처치 효과 경로",
+      "§4 F17"
+    ]
+  },
+  {
+    "id": "S52",
+    "title": "Venkatesan & Farris (2012) Measuring and Managing Returns from Retailer-Customized Coupon Campaigns. Journal of Marketing 76(1) (Darden 보도 2차)",
+    "url": "https://news.darden.virginia.edu/2012/04/27/coupons-make-money/",
+    "year": 2012,
+    "type": "academic(2차)",
+    "quoted_figures": [
+      "\"only about 1 percent are ever used\"(업계 수치 인용)",
+      "쿠폰을 받고 쓰지 않은 고객이 sales lift 의 60%"
+    ],
+    "used_for": [
+      "쿠폰 사용률 가드레일",
+      "처치 효과 경로"
+    ]
+  },
+  {
+    "id": "S53",
+    "title": "NCH/Inmar — Cashing in Coupons (AMA Marketing News, Inmar 호스팅 PDF)",
+    "url": "https://www.inmar.com/-/Document/Cashing_in_Coupons.pdf",
+    "year": 2011,
+    "type": "industry(2차)",
+    "quoted_figures": [
+      "\"the overall redemption rate for FSI coupons for CPG products was 0.7% in 2010\"",
+      "\"amongst digital coupons for CPG products printed by consumers, 15.8% are redeemed\"",
+      "Kahala 디지털 14% vs 인쇄 0.02%"
+    ],
+    "used_for": [
+      "쿠폰 사용률 가드레일"
+    ]
+  },
+  {
+    "id": "S54",
+    "title": "Omnisend 2023 Email, SMS and Push Report",
+    "url": "https://www.omnisend.com/wp-content/uploads/2024/02/2023-email-sms-and-push-report.pdf",
+    "year": 2024,
+    "type": "industry_benchmark(원문)",
+    "quoted_figures": [
+      "Lapsed purchase 자동화: open 31.6%, click 1.9%, conversion 0.50%(발송 대비 귀속 주문)",
+      "Push: campaigns 0.04%, automation 0.38%"
+    ],
+    "used_for": [
+      "쿠폰 사용률 가드레일",
+      "marketing_responsiveness(참고)"
+    ]
+  },
+  {
+    "id": "S55",
+    "title": "Klaviyo Email Marketing Benchmarks",
+    "url": "https://www.klaviyo.com/products/email-marketing/benchmarks",
+    "year": 2026,
+    "type": "industry_benchmark(원문)",
+    "quoted_figures": [
+      "업종별 이메일 주문률 예: Clothing campaigns 0.97%, flows 1.62%; Home and garden 1.34% / 2.17% (183,000+ 고객사)",
+      "윈백 flow 단독 수치 없음"
+    ],
+    "used_for": [
+      "쿠폰 사용률 가드레일(참고)"
+    ]
+  },
+  {
+    "id": "S56",
+    "title": "통계청 「2024년 12월 및 연간 온라인쇼핑동향」 최초 발표(PDF 원문)",
+    "url": "https://mods.go.kr/boardDownload.es?bid=241&list_no=434934&seq=1",
+    "year": 2025,
+    "type": "korea_official(원문)",
+    "quoted_figures": [
+      "2024년 온라인쇼핑 거래액 242조897억원(+5.8%)",
+      "식품 소계 47조360억원(+15.6%), 음·식료품 34조2,584억원(+14.8%)"
+    ],
+    "used_for": [
+      "시장 맥락"
+    ]
+  }
+]
