@@ -155,11 +155,8 @@ class StageLog:
         missing = [r for r in requires if not self.ok(r)]
         if missing:
             self.record(name, "not_run", f"선행 단계가 ok 가 아니다: {', '.join(missing)}")
-            yield_skip = True
-        else:
-            yield_skip = False
-        if yield_skip:
-            # contextmanager 는 반드시 한 번 yield 해야 하므로 본문을 NotRun 으로 막는다.
+            # contextmanager 는 본문을 건너뛸 수 없다. `requires` 를 둔 본문은 첫 줄에서
+            # `skip_if_not_run` 을 불러 `_SkipBody` 로 빠져나오고, 여기서 삼킨다.
             try:
                 yield
             except _SkipBody:

@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import ast
 import contextlib
 import importlib.util
 import io
@@ -388,6 +389,25 @@ class TestHelpers(unittest.TestCase):
         pd.testing.assert_frame_equal(whole, chunked)
         self.assertIsNotNone(whole["timestamp"].dt.tz)
         self.assertEqual(0, len(rs.frame_from_stream(iter([]))))
+
+    def test_every_guarded_stage_body_starts_with_skip(self) -> None:
+        """`requires` 를 둔 단계 본문은 첫 줄이 `skip_if_not_run` 이어야 선행 실패 시 실행되지 않는다."""
+        tree = ast.parse(Path(rs.__file__).read_text(encoding="utf-8"))
+        offenders, guarded = [], 0
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.With):
+                continue
+            call = node.items[0].context_expr
+            if not (isinstance(call, ast.Call) and isinstance(call.func, ast.Attribute)
+                    and call.func.attr == "stage" and any(k.arg == "requires" for k in call.keywords)):
+                continue
+            guarded += 1
+            first = node.body[0]
+            if not (isinstance(first, ast.Expr) and isinstance(first.value, ast.Call)
+                    and getattr(first.value.func, "id", None) == "skip_if_not_run"):
+                offenders.append(node.lineno)
+        self.assertGreater(guarded, 10)
+        self.assertEqual([], offenders)
 
     def test_decision_fn_reports_missing_module(self) -> None:
         with mock.patch.dict(sys.modules, {"src.decision.churn": None}):
