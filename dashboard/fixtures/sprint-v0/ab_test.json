@@ -1,0 +1,66 @@
+{
+  "sprint": "sprint-v0",
+  "sealed": false,
+  "run_id": "mock-20261022-0001",
+  "generated_at": "2026-10-22T14:00:00+09:00",
+  "mock": true,
+  "srm": {
+    "chi2": 0.84,
+    "p": 0.84,
+    "ok": true
+  },
+  "arms": [
+    {
+      "arm": "T0",
+      "n": 5000,
+      "rate": 0.284,
+      "diff_vs_control": null,
+      "ci95": null,
+      "p_raw": null,
+      "p_holm": null
+    },
+    {
+      "arm": "T1",
+      "n": 5000,
+      "rate": 0.263,
+      "diff_vs_control": -0.021,
+      "ci95": [
+        -0.039,
+        -0.003
+      ],
+      "p_raw": 0.012,
+      "p_holm": 0.024
+    },
+    {
+      "arm": "T2",
+      "n": 5000,
+      "rate": 0.25,
+      "diff_vs_control": -0.034,
+      "ci95": [
+        -0.052,
+        -0.016
+      ],
+      "p_raw": 0.0002,
+      "p_holm": 0.0006
+    },
+    {
+      "arm": "T3",
+      "n": 5000,
+      "rate": 0.278,
+      "diff_vs_control": -0.006,
+      "ci95": [
+        -0.024,
+        0.012
+      ],
+      "p_raw": 0.51,
+      "p_holm": 0.51
+    }
+  ],
+  "power": {
+    "alpha": 0.05,
+    "target_power": 0.8,
+    "mde_abs": 0.026,
+    "n_per_arm": 5000,
+    "achieved_power": 0.83
+  }
+}

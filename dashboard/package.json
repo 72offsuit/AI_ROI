@@ -12,6 +12,7 @@
     "predev": "npm run tokens:generate",
     "prebuild": "npm run tokens:generate",
     "dev": "next dev --port 3001 --hostname 127.0.0.1",
+    "dev:sprint-mock": "AIROI_SPRINT_SOURCE=mock npm run dev",
     "build": "next build",
     "start": "next start --port 3001 --hostname 127.0.0.1",
     "lint": "eslint",
