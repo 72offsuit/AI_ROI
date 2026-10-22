@@ -59,8 +59,12 @@ class TestChurnEvaluation(unittest.TestCase):
         self.assertIn(r["importance_method"], ("shap", "permutation"))
         self.assertTrue(r["shap_top"])
         self.assertTrue(all(set(t) == {"feature", "mean_abs"} for t in r["shap_top"]))
-        features = set(self.X.columns)
+        from src.decision.features.sprint_table import ALIASES, model_columns
+
+        features = set(model_columns(self.X))
         self.assertTrue(all(t["feature"] in features for t in r["shap_top"]))
+        self.assertEqual(len(features), r["n_features"])  # 별칭 열은 모델 입력이 아니다
+        self.assertFalse(set(ALIASES) & {t["feature"] for t in r["shap_top"]})
 
     def test_models_beat_chance_on_signal_fixture(self) -> None:
         """신호가 있는 픽스처에서 우연(0.5)보다 낫다 — 파이프라인이 정보를 버리지 않았다는 뜻만."""
@@ -109,6 +113,39 @@ class TestChurnEvaluation(unittest.TestCase):
             self.assertEqual("temporal_holdout", out["scheme"])
             for metric in ("roc_auc", "pr_auc", "f1", "lift_at_10"):
                 self.assertIn(metric, out)
+
+    def test_temporal_holdout_binds_by_name_like_orchestration(self) -> None:
+        """#154 `call_by_name` 과 같은 방식(시그니처의 이름만 골라 키워드로)으로 부를 수 있다."""
+        import inspect
+
+        import pandas as pd
+
+        from src.decision.churn import evaluate_temporal_holdout, fit_best_churn
+        from src.decision.features.sprint_table import build_feature_table, build_outcomes
+
+        earlier = pd.Timestamp(FIXTURE_T0) - pd.Timedelta(days=42)
+        X_tr = build_feature_table(self.events, earlier)
+        y_tr = build_outcomes(self.events, earlier)["churn"]
+        fitted = fit_best_churn(X_tr, y_tr, seed=11)
+
+        def call_by_name(fn, pool):
+            params = inspect.signature(fn).parameters
+            missing = [n for n, p in params.items() if n not in pool and p.default is p.empty
+                       and p.kind not in (p.VAR_POSITIONAL, p.VAR_KEYWORD)]
+            self.assertEqual([], missing)
+            return fn(**{n: pool[n] for n in params if n in pool})
+
+        pool = {"model": fitted, "X_train": X_tr, "y_train": y_tr, "X_test": self.X,
+                "y_test": self.y["churn"], "seed": 11}
+        given = call_by_name(evaluate_temporal_holdout, pool)
+        self.assertEqual("given_fitted_model (재학습 없음)", given["model_source"])
+        self.assertEqual(fitted.name, given["name"])
+        with_name = call_by_name(evaluate_temporal_holdout, {**pool, "model_factory": "hist_gb"})
+        self.assertEqual(given["roc_auc"], with_name["roc_auc"])  # model 이 우선
+        refit = call_by_name(evaluate_temporal_holdout, {**pool, "model": None, "model_factory": "hist_gb"})
+        self.assertEqual("refit_on_X_train", refit["model_source"])
+        # 학습된 hist_gb 를 그대로 쓴 것과 같은 seed 로 다시 학습한 것은 같은 점수를 낸다
+        self.assertAlmostEqual(given["roc_auc"], refit["roc_auc"], places=10)
 
     def test_label_mismatch_is_refused(self) -> None:
         from src.decision.churn import evaluate_churn_models

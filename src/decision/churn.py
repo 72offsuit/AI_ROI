@@ -24,7 +24,7 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
-from src.decision.features.sprint_table import LABEL_DEF, make_preprocessor
+from src.decision.features.sprint_table import LABEL_DEF, make_preprocessor, model_columns
 
 BASELINES = ("rule_recency", "logistic_regression")
 PROPOSED = ("random_forest", "hist_gb")
@@ -176,7 +176,7 @@ def _prepare(X: pd.DataFrame, y) -> tuple[pd.DataFrame, np.ndarray]:
     values = y.astype(int).to_numpy()
     if not set(np.unique(values)) <= {0, 1}:
         raise ValueError("churn 라벨은 0/1 이어야 한다")
-    return X.astype(float), values
+    return X[model_columns(X)].astype(float), values
 
 
 def fold_indices(y: np.ndarray, seed: int) -> list[tuple[np.ndarray, np.ndarray]]:
@@ -314,28 +314,47 @@ def predict_churn_proba(model: ChurnModel, X: pd.DataFrame) -> pd.Series:
     return pd.Series(proba, index=X.index, name="churn_proba")
 
 
-def evaluate_temporal_holdout(model_factory, X_train: pd.DataFrame, y_train, X_test: pd.DataFrame,
-                              y_test, *, seed: int = 0) -> dict:
-    """앞 시점(T0_a)으로 학습 → 뒤 시점(T0_b) 고객으로 **1 회** 평가.
+def evaluate_temporal_holdout(model_factory=None, X_train: pd.DataFrame | None = None, y_train=None,
+                              X_test: pd.DataFrame | None = None, y_test=None, *, model=None,
+                              seed: int = 0) -> dict:
+    """앞 시점으로 학습 → 뒤 시점 고객으로 **1 회** 평가. 시험 데이터로 아무것도 고르지 않는다.
 
-    `model_factory` 는 인자 없는 호출 가능 객체(미학습 추정기 반환) 또는 `MODEL_NAMES` 의 이름.
-    임계는 학습 데이터 내부 OOF 에서만 정한다. 시험 데이터로 아무것도 고르지 않는다.
+    모델을 주는 방법은 셋이고, 이름 바인딩(#154 `call_by_name`)과 위치 호출을 둘 다 받는다:
+      - `model` = `fit_best_churn` 이 돌려준 **학습된** `ChurnModel` → 다시 학습하지 않고 그대로 평가한다
+        (`X_train` 으로 학습된 모델이어야 한다 — 호출자 책임. 임계도 그 모델의 학습 OOF 임계).
+        `model` 과 `model_factory` 가 함께 오면 `model` 을 쓴다 — 배치될 모델 그 자체를 평가한다.
+      - `model_factory` = `MODEL_NAMES` 의 이름, 또는 인자 없는 호출 가능 객체(미학습 추정기 반환)
+        → `X_train` 으로 학습하고 임계는 학습 데이터 내부 OOF 에서 정한다.
+      - `model` 에 이름·호출 가능 객체를 줘도 `model_factory` 와 같이 다룬다.
     """
-    name = model_factory if isinstance(model_factory, str) else getattr(model_factory, "__name__", "custom")
-    factory = (lambda: make_model(model_factory, seed)) if isinstance(model_factory, str) else model_factory
+    if X_train is None or y_train is None or X_test is None or y_test is None:
+        raise ValueError("X_train · y_train · X_test · y_test 가 모두 필요하다")
+    spec = model if model is not None else model_factory
+    if spec is None:
+        raise ValueError("model 또는 model_factory 가 필요하다")
     Xtr, ytr = _prepare(X_train, y_train)
     Xte, yte = _prepare(X_test, y_test)
-    Xte = Xte[list(Xtr.columns)]
-    model = factory().fit(Xtr, ytr)
-    if isinstance(model, RecencyRule):
-        from sklearn.metrics import f1_score
-        metrics = _metrics(yte, _score(model, Xte), 0.0)
-        metrics["f1"] = float(f1_score(yte, (model._days(Xte) >= model.threshold_days_).astype(int),
-                                       zero_division=0))
-        threshold = model.threshold_days_
+
+    if isinstance(spec, ChurnModel):
+        name, source = spec.name, "given_fitted_model (재학습 없음)"
+        threshold = spec.threshold
+        metrics = _metrics(yte, predict_churn_proba(spec, Xte).to_numpy(), threshold)
     else:
-        threshold = _threshold_from_train(factory, Xtr, ytr, seed)
-        metrics = _metrics(yte, _score(model, Xte), threshold)
-    return {"name": name, "scheme": "temporal_holdout", "n_train": int(len(ytr)), "n_test": int(len(yte)),
+        name = spec if isinstance(spec, str) else getattr(spec, "__name__", "custom")
+        factory = (lambda: make_model(spec, seed)) if isinstance(spec, str) else spec
+        source = "refit_on_X_train"
+        Xte = Xte[list(Xtr.columns)]
+        fitted = factory().fit(Xtr, ytr)
+        if isinstance(fitted, RecencyRule):
+            from sklearn.metrics import f1_score
+            metrics = _metrics(yte, _score(fitted, Xte), 0.0)
+            metrics["f1"] = float(f1_score(yte, (fitted._days(Xte) >= fitted.threshold_days_).astype(int),
+                                           zero_division=0))
+            threshold = fitted.threshold_days_
+        else:
+            threshold = _threshold_from_train(factory, Xtr, ytr, seed)
+            metrics = _metrics(yte, _score(fitted, Xte), threshold)
+    return {"name": name, "scheme": "temporal_holdout", "model_source": source,
+            "n_train": int(len(ytr)), "n_test": int(len(yte)),
             "pos_rate_train": float(ytr.mean()), "pos_rate_test": float(yte.mean()),
             "threshold": float(threshold), **metrics}
