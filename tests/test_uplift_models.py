@@ -119,6 +119,59 @@ class TestMetaLearners(unittest.TestCase):
 
 
 @unittest.skipUnless(DEPS, REASON)
+class TestDegenerateFeatureColumns(unittest.TestCase):
+    """회귀 — 전부 NaN 인 Feature 열이 HistGB 비닝을 멈추던 결함(스프린트 통합 스모크).
+
+    sklearn 1.9 에서 ``ValueError: window shape cannot be larger than input array shape``.
+    """
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        X, t, y, _ = synthetic(n=2500, seed=11)
+        X = X.copy()
+        X["all_nan"] = np.nan                                   # 전체가 결측
+        X["constant"] = 5.0                                     # 결측 없는 상수
+        X["nan_in_T3_only"] = np.random.default_rng(1).normal(size=len(X))
+        X.loc[t == "T3", "nan_in_T3_only"] = np.nan             # 한 처치군 안에서만 전부 결측
+        cls.X, cls.t, cls.y = X, t, y
+
+    def test_all_methods_fit_and_predict(self) -> None:
+        for m in ("s_learner", "t_learner", "x_learner"):
+            with self.subTest(method=m):
+                model = fit_uplift(self.X, self.t, self.y, m, seed=0)
+                self.assertEqual(["all_nan"], model.dropped_features["all_nan"])
+                self.assertEqual(["constant"], model.dropped_features["constant"])
+                self.assertNotIn("all_nan", model.columns)
+                cate = predict_cate(model, self.X)
+                self.assertFalse(cate[["T1", "T3"]].isna().any().any())
+                if m != "s_learner":
+                    self.assertIn("nan_in_T3_only", model.submodel_dropped["T3"])
+
+    def test_predict_ignores_values_that_appear_later(self) -> None:
+        """학습 때 제외한 열에 예측 시점 값이 생겨도 같은 열 집합으로 예측한다."""
+        model = fit_uplift(self.X, self.t, self.y, "t_learner", seed=0)
+        X2 = self.X.copy()
+        X2["all_nan"] = 1.0
+        pd.testing.assert_frame_equal(predict_cate(model, self.X), predict_cate(model, X2))
+
+    def test_evaluate_records_screening(self) -> None:
+        r = evaluate_uplift_models(self.X, self.t, self.y, seed=0)
+        scr = r["feature_screening"]
+        self.assertIn("all_nan", scr["train_dropped"]["all_nan"])
+        self.assertIn("constant", scr["train_dropped"]["constant"])
+        self.assertIn("t_learner", scr["submodel_extra_dropped"])
+        self.assertIsNotNone(r["best_method"])
+        json.dumps(r)
+
+    def test_every_feature_unusable_falls_back_to_arm_means(self) -> None:
+        X = pd.DataFrame({"a": np.nan, "b": 1.0}, index=self.X.index)
+        model = fit_uplift(X, self.t, self.y, "t_learner", seed=0)
+        cate = predict_cate(model, X)
+        ate = self.y[self.t == "T3"].mean() - self.y[self.t == "T0"].mean()
+        self.assertTrue(np.allclose(cate["T3"], ate))
+
+
+@unittest.skipUnless(DEPS, REASON)
 class TestEvaluate(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:

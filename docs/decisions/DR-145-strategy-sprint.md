@@ -71,6 +71,9 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
 - `summarize_strategy` 는 `sim_contribution_profit` 차이를 먼저 쓰고, 양쪽에 없으면 `Δ(매출 − 마케팅비)`
   대체 계산에 `PROFIT_FALLBACK_REVENUE_BASED` 를 붙인다. 이 대체값은 COGS 를 빼지 않아 **과대평가**다.
 - `analyze_ab` 는 이진(비율 z-검정)과 연속(Welch t) 결과를 값으로 판정해 둘 다 지원한다.
+- (결함 수정, 2026-10-22) 학습셋에서 **전부 NaN** 이거나 **결측 없는 상수**인 Feature 열은 제외하고
+  `dropped_features`·`feature_screening` 에 목록을 남긴다. 처치군별 하위 모델은 그 부분 표본에서 다시
+  거른다(`submodel_dropped`). 0 으로 채우지 않는다. 쓸 열이 하나도 없으면 하위 모델은 표본 평균을 낸다.
 
 ## 기각한 안과 기각 사유
 
