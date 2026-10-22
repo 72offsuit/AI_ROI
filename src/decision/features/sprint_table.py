@@ -124,6 +124,17 @@ SPRINT_FEATURES: tuple[SprintFeature, ...] = (
 )
 FEATURE_NAMES: tuple[str, ...] = tuple(f.name for f in SPRINT_FEATURES)
 
+#: 별칭 열 → 원 Feature. 값이 **같은 열**이다. 오케스트레이션(#154)의 S1 규칙이
+#: `days_since_last_purchase` 라는 이름을 쓰므로 테이블에 함께 싣는다 (구매 이력 없으면 NaN).
+#: 모델 입력에는 넣지 않는다 — 같은 정보를 두 번 넣으면 SHAP 이 둘로 쪼개져 해석이 흐려진다.
+ALIASES: dict[str, str] = {"days_since_last_purchase": "recency"}
+TABLE_COLUMNS: tuple[str, ...] = FEATURE_NAMES + tuple(ALIASES)
+
+
+def model_columns(X: pd.DataFrame) -> list[str]:
+    """모델 입력 열 — 별칭 열을 뺀 나머지(순서 유지)."""
+    return [c for c in X.columns if c not in ALIASES]
+
 
 def to_index_time(index_time) -> pd.Timestamp:
     """T0. tz 가 없으면 스키마 단일 타임존(KST)으로 해석한다 — 이벤트가 아니라 설정값이다."""
@@ -240,7 +251,7 @@ def _ratio(num: pd.Series, den: pd.Series) -> pd.Series:
 
 
 def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
-    """index=customer_id, 컬럼=`FEATURE_NAMES`(전부 float). T0 이전 이벤트만 쓴다.
+    """index=customer_id, 컬럼=`TABLE_COLUMNS`(= `FEATURE_NAMES` + 별칭, 전부 float). T0 이전 이벤트만 쓴다.
 
     `attrs`: `index_time`·`nan_reasons`(Feature→NaN 사유)·`incomplete_windows`
     (관측 시작보다 앞으로 뻗은 창을 쓴 Feature)·`population_scope`.
@@ -409,6 +420,9 @@ def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
     table = pd.DataFrame({name: out[name].astype(float) for name in FEATURE_NAMES}, index=ids)
     table.index.name = "customer_id"
     table = table.replace([np.inf, -np.inf], np.nan)
+    for alias, source in ALIASES.items():
+        table[alias] = table[source]
+        R[alias] = R[source]
     table.attrs.update(
         index_time=t0.isoformat(),
         nan_reasons={k: v for k, v in R.items() if table[k].isna().any()},
