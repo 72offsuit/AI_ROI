@@ -10,7 +10,7 @@ target 은 `build_outcomes(..., window_days=horizon_days)["revenue"]` — index 
 합쳐야 하고 스프린트 범위 밖이다.
 
 평가: 5-Fold OOF 예측으로 MAE · RMSE · Spearman · 상위 20% 적중률(실제 상위 20% 중 예측
-상위 20% 에 든 비율). 미래 매출 결손(NaN) 고객은 평가에서 빼고 그 수를 남긴다.
+상위 20% 에 든 비율). 미래 매출 결손(NaN)·기준선 입력 결손 고객은 평가에서 빼고 각각 그 수를 남긴다.
 """
 
 from __future__ import annotations
@@ -73,15 +73,20 @@ def evaluate_clv(X: pd.DataFrame, future_value, *, horizon_days: int = 42, seed:
     from sklearn.model_selection import KFold
 
     y = pd.Series(future_value).reindex(X.index).astype(float)
-    keep = y.notna().to_numpy()
+    base_all = baseline_clv(X, horizon_days)
+    # 두 모델을 **같은 고객**으로 비교한다. 미래 매출 결손, 또는 기준선 입력(90일 매출)이
+    # 결손(금액 결손 주문)인 고객은 빼고 각각 센다 — 0 으로 채워 넣지 않는다.
+    keep_target = y.notna().to_numpy()
+    keep = keep_target & base_all.notna().to_numpy()
     Xk, yk = X.loc[keep], y[keep].to_numpy()
     oof = np.empty(len(yk), dtype=float)
     for tr, va in KFold(n_splits, shuffle=True, random_state=seed).split(Xk):
         model = fit_clv(Xk.iloc[tr], pd.Series(yk[tr], index=Xk.index[tr]), seed=seed)
         oof[va] = predict_clv(model, Xk.iloc[va]).to_numpy()
-    base = baseline_clv(Xk, horizon_days).to_numpy()
+    base = base_all[keep].to_numpy()
     return {
-        "horizon_days": int(horizon_days), "n": int(len(yk)), "n_excluded_missing_target": int((~keep).sum()),
+        "horizon_days": int(horizon_days), "n": int(len(yk)), "n_excluded_missing_target": int((~keep_target).sum()),
+        "n_excluded_baseline_unavailable": int((keep_target & ~keep).sum()),
         "target": "index 이후 horizon 창 순매출(원) — 이익 아님",
         "cv_scheme": f"KFold(n_splits={n_splits}, shuffle=True, random_state={seed}) OOF",
         "models": [

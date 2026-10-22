@@ -60,8 +60,7 @@ SPRINT_FEATURES: tuple[SprintFeature, ...] = (
     # ── RFM ─────────────────────────────────────────────────────────────
     SprintFeature("recency", "F01", "rfm"),
     SprintFeature("frequency_90d", "F02", "rfm"),
-    SprintFeature("monetary_90d", "F03", "rfm",
-                  "주문 금액 결손 시 D1 은 계산 불가, 스프린트는 그 주문을 합에서 빼고 NaN 아님"),
+    SprintFeature("monetary_90d", "F03", "rfm"),
     SprintFeature("aov_90d", "F04", "rfm"),
     SprintFeature("avg_purchase_interval", "F05", "rfm",
                   "이력 시작=관측 시작(D1 은 H 창 + 관측 주장 필요)"),
@@ -203,8 +202,13 @@ class _Builder:
         return self._full(rows.groupby("customer_id").size()).fillna(0).astype(float)
 
     def order_sum(self, days, offset=0) -> pd.Series:
-        rows = self._in(self.orders, days, offset).dropna(subset=["_amount"])
-        return self._full(rows.groupby("customer_id")["_amount"].sum()).fillna(0).astype(float)
+        """창 안 주문 금액 합. 주문 0 건은 관측된 0, **금액 결손 주문이 하나라도 있으면 NaN.**"""
+        rows = self._in(self.orders, days, offset)
+        grouped = rows.groupby("customer_id")["_amount"]
+        has_missing = rows["_amount"].isna().groupby(rows["customer_id"]).any()
+        total = self._full(grouped.sum(min_count=1).where(~has_missing))
+        n_orders = self._full(grouped.size()).fillna(0)
+        return total.where(n_orders > 0, 0.0).astype(float)
 
     def recency(self, types, days=None) -> pd.Series:
         rows = self._in(self.frame[self.frame["event_type"].isin(types)], days)
@@ -255,8 +259,9 @@ def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
     out["frequency_90d"] = b.order_count(90)
     b._note_window("monetary_90d", 90)
     out["monetary_90d"] = b.order_sum(90)
+    R["monetary_90d"] = R["monetary_observed"] = R["monetary_change_30d"] = "AMOUNT_MISSING: 창 안 주문 금액 결손"
     out["aov_90d"] = _ratio(out["monetary_90d"], out["frequency_90d"])
-    R["aov_90d"] = "ZERO_DENOMINATOR: 90일 주문 0"
+    R["aov_90d"] = "ZERO_DENOMINATOR: 90일 주문 0 / AMOUNT_MISSING"
     mean_all, _, _ = b.gap_mean_std()
     out["avg_purchase_interval"] = mean_all
     R["avg_purchase_interval"] = "INSUFFICIENT_PURCHASE_INTERVALS: 관측 주문 < 2"

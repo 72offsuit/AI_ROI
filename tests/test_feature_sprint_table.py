@@ -263,6 +263,24 @@ class TestSprintFeatureTable(unittest.TestCase):
         self.assertAlmostEqual(200.0, row["tenure_days"])
         self.assertTrue(pd.isna(row["purchase_interval_cv_90d"]))  # 90일 간격 1 개뿐
 
+    def test_missing_order_amount_is_nan_not_dropped(self) -> None:
+        """금액 결손 주문을 합에서 조용히 빼면 매출이 적게 보인다 — NaN 으로 드러낸다."""
+        import pandas as pd
+
+        from src.decision.features.sprint_table import build_feature_table
+
+        t0 = pd.Timestamp(FIXTURE_T0)
+        events = self.events.copy()
+        past_buy = events.index[(events["event_type"] == "purchase") & (events["timestamp"] < t0)
+                               & (events["timestamp"] >= t0 - pd.Timedelta(days=30))]
+        victim = events.loc[past_buy[0], "customer_id"]
+        events.loc[past_buy[0], "order_amount"] = pd.NA
+        table = build_feature_table(events, t0)
+        self.assertTrue(pd.isna(table.loc[victim, "monetary_90d"]))
+        self.assertTrue(pd.isna(table.loc[victim, "monetary_observed"]))
+        self.assertGreaterEqual(table.loc[victim, "frequency_90d"], 1.0)  # 빈도는 그대로 계산된다
+        self.assertIn("monetary_90d", table.attrs["nan_reasons"])
+
     def test_outcomes_label_window(self) -> None:
         import pandas as pd
 
