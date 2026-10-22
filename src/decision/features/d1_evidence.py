@@ -1,7 +1,7 @@
 """Synthetic W0 I03 binding, never operational provider admission.
 
-The caller fixes every FilePin required for this request, separately from bytes
-inventory. All required pins must be verified. No paths are opened.
+The caller fixes every FilePin and all its required uses for this request,
+separately from bytes inventory. No paths are opened.
 Evidence JSON bodies equal the record excluding ``provider`` (synthetic profile).
 """
 
@@ -21,6 +21,12 @@ from .d1_serialization import require, semantic_hash, strict_json, tlv
 PROFILE = "d1-synthetic-evidence/1-proposed"
 DIRECTION = "0ddb68ca2e862ce43d98f3b2ef2468b4f6cd84053a8ab220b2a0a107b746513d"
 MEDIA = {"application/json", "application/x-ndjson", "application/vnd.apache.parquet", "application/octet-stream"}
+FILE_ROLES = frozenset({
+    "authorization.approval_records", "production.evidence_record", "production.agreement_record",
+    "ordering.evidence_record", "ordering.agreement_record", "delivery.evidence_record",
+    "delivery.agreement_record", "reception.evidence_record", "reception.agreement_record",
+    "reception.events_ref", "reception.roster_ref",
+})
 
 
 def closed(value, fields, name):
@@ -43,9 +49,27 @@ def file_pin(pin):
     require(not path.startswith("/") and "\\" not in path and
             all(p not in ("", ".", "..") for p in path.split("/")), "unsafe relative FilePin path")
     digest(pin["file_sha256"])
-    require(pin["media_type"] in MEDIA, "unsupported FilePin media type")
+    require(type(pin["media_type"]) is str and pin["media_type"] in MEDIA, "unsupported FilePin media type")
     require(type(pin["bytes"]) is int and 0 <= pin["bytes"] < 2**63, "invalid FilePin byte count")
     return pin
+
+
+def _required_files(expected_files):
+    require(type(expected_files) is dict and bool(expected_files),
+            "invalid Expected files: nonempty path map required")
+    checked = {}
+    for path, entry in expected_files.items():
+        require(type(path) is str and bool(path), "Expected path key must be a nonempty string")
+        closed(entry, "file_pin required_roles", "Expected file entry")
+        pin = file_pin(entry["file_pin"])
+        require(path == pin["path"], "Expected key/FilePin.path mismatch")
+        roles = entry["required_roles"]
+        require(type(roles) is list and bool(roles), "Expected required_roles must be a nonempty list")
+        require(all(type(role) is str for role in roles), "Expected roles must be strings")
+        require(len(set(roles)) == len(roles), "Expected duplicate roles")
+        require(set(roles) <= FILE_ROLES, "Expected unknown role")
+        checked[path] = (dict(pin), frozenset(roles))
+    return checked
 
 
 def _period(value):
@@ -140,8 +164,10 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
                     expected_files: dict, artifacts: dict) -> VerifiedEvidence:
     """Reject identity/pin errors; represent unproven completeness as unknown.
 
-    expected_files is the independently fixed, complete required path-to-FilePin
-    set for this request, not inventory. Unrelated artifacts may remain unused.
+    expected_files is the independently fixed, complete map
+    path -> {file_pin: FilePin, required_roles: nonempty unique list[str]}.
+    Every required role must be used; any other use is rejected. Legacy pin-only
+    entries are not inferred or upgraded. Unrelated artifacts may remain unused.
     Neither Expected nor the envelope is rewritten to match submitted references.
     """
     closed(envelope, "contract_id contract_version purpose authorization payload", "I03")
@@ -150,6 +176,7 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
     require(envelope["purpose"] == "synthetic", "actual input admission excluded: #126/G1/provider evidence")
     require(type(batch) is EventBatch and type(policy) is TimePolicy, "explicit batch/policy required")
     batch.guard(policy, index_date)
+    required = _required_files(expected_files)
     auth = envelope["authorization"]
     closed(auth, "direction_decision_sha256 technical_profile_status shared_contract_status provider_agreements_status approval_records", "Authorization")
     require(auth["direction_decision_sha256"] == DIRECTION and
@@ -166,23 +193,26 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
     for v in (p["production"], p["ordering"], auth["approval_records"]):
         require(type(v) is list, "evidence lists required")
     verified = {}
+    verified_uses = set()
 
-    def pin_bytes(pin, media=None):
+    def pin_bytes(pin, *, role, media=None):
         file_pin(pin)
         path = pin["path"]
-        require(path in expected_files and expected_files[path] == pin, "external FilePin mismatch")
+        require(path in required and required[path][0] == pin, "external FilePin mismatch")
+        require(role in required[path][1], f"external FilePin role mismatch: {path} as {role}")
         data = artifacts.get(path)
         require(type(data) is bytes and len(data) == pin["bytes"] and
                 hashlib.sha256(data).hexdigest() == pin["file_sha256"], "artifact byte/hash mismatch")
         require(media is None or pin["media_type"] == media, "artifact media type mismatch")
         verified[path] = dict(pin)
+        verified_uses.add((path, role))
         return data
 
     for ref in auth["approval_records"]:
-        pin_bytes(ref)
+        pin_bytes(ref, role="authorization.approval_records")
     producer_roles = {"S4"} if batch.source == "simulator" else {"commerce_exporter"}
 
-    def provider(record, roles):
+    def provider(record, roles, *, evidence_role, agreement_role):
         pv = record["provider"]
         closed(pv, "provider_role provider_account agreement_status agreement_record evidence_record input_value_sha256 available_as_of assertion_version", "ProviderEvidence")
         require(pv["provider_role"] in roles, "evidence provider role mismatch")
@@ -192,10 +222,10 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
         text(pv["assertion_version"])
         available = None if pv["available_as_of"] is None else timestamp(pv["available_as_of"])
         if pv["agreement_record"] is not None:
-            pin_bytes(pv["agreement_record"])
+            pin_bytes(pv["agreement_record"], role=agreement_role)
         ref = pv["evidence_record"]
         if ref is not None:
-            body = strict_json(pin_bytes(ref, "application/json"))
+            body = strict_json(pin_bytes(ref, role=evidence_role, media="application/json"))
             require(tlv(body) == tlv({k: v for k, v in record.items() if k != "provider"}), "synthetic evidence body mismatch")
         # File existence proves binding, not operational truth or approval.
         return ref is not None and available is not None and policy.permits(available)
@@ -216,7 +246,8 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
         gaps = tuple(_period(g) for g in c["gaps"])
         require(c["state"] in ("complete", "incomplete", "unknown", "unsupported") and
                 all(start <= a < b <= end for a, b in gaps) and not (c["state"] == "complete" and gaps), "invalid observation state/gaps")
-        usable = provider(c, producer_roles)
+        usable = provider(c, producer_roles, evidence_role="production.evidence_record",
+                          agreement_role="production.agreement_record")
         ref = c["provider"]["evidence_record"]
         if ref is not None:
             production_refs.append(ref)
@@ -237,7 +268,8 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
     for name in ("preserves_order", "preserves_precision"):
         require(delivery[name] is None or type(delivery[name]) is bool, "delivery preservation must be boolean/null")
     require(delivery["failure_reason"] is None or type(delivery["failure_reason"]) is str and bool(delivery["failure_reason"]), "failure reason")
-    delivery_usable = provider(delivery, {"S1", "commerce_exporter"})
+    delivery_usable = provider(delivery, {"S1", "commerce_exporter"}, evidence_role="delivery.evidence_record",
+                               agreement_role="delivery.agreement_record")
     closed(reception, "request_id state events_ref roster_ref production_evidence_refs delivery_evidence_ref input_value_sha256 provider", "Reception")
     text(reception["request_id"])
     require(reception["state"] in ("complete", "incomplete", "unknown"), "reception state")
@@ -245,14 +277,15 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
     require(type(reception["production_evidence_refs"]) is list and
             sorted(reception["production_evidence_refs"], key=tlv) == sorted(production_refs, key=tlv), "production evidence links mismatch")
     require(reception["delivery_evidence_ref"] == delivery["provider"]["evidence_record"], "delivery evidence link mismatch")
-    received = strict_json(pin_bytes(reception["roster_ref"], "application/json")) if reception["roster_ref"] is not None else None
+    received = strict_json(pin_bytes(reception["roster_ref"], role="reception.roster_ref", media="application/json")) if reception["roster_ref"] is not None else None
     require(received is None or type(received) is list, "roster file must be a customer list")
-    events = pin_bytes(reception["events_ref"], "application/x-ndjson")
+    events = pin_bytes(reception["events_ref"], role="reception.events_ref", media="application/x-ndjson")
     records = [strict_json(line) for line in events.splitlines() if line.strip()]
     rebuilt = EventBatch(source=batch.source, entity_namespace=batch.entity_namespace, start=batch.start,
                          records=records, roster=received)
     require(rebuilt.input_value_sha256 == batch.input_value_sha256, "received artifact input identity mismatch")
-    reception_usable = provider(reception, {"D9"})
+    reception_usable = provider(reception, {"D9"}, evidence_role="reception.evidence_record",
+                                agreement_role="reception.agreement_record")
     window = policy.window(index_date, None)
     covers = ds <= window.start and (upper > window.end if window.end_inclusive else upper >= window.end)
     transport_state = "complete"
@@ -283,7 +316,8 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
             require(type(item["event_id"]) is str and check_identifier("event_id", item["event_id"]), "invalid order event ID")
             require(type(item["ordinal"]) is int and 0 <= item["ordinal"] < 2**63, "invalid ordinal")
             entries.append((item["event_id"], item["ordinal"]))
-        usable = provider(c, {"S1", "commerce_exporter"})
+        usable = provider(c, {"S1", "commerce_exporter"}, evidence_role="ordering.evidence_record",
+                          agreement_role="ordering.agreement_record")
         if (entity, at) in needed:
             good = (usable and delivery["preserves_order"] is True and
                     len({e[0] for e in entries}) == len(entries) == len({e[1] for e in entries}) and
@@ -300,5 +334,8 @@ def verify_evidence(envelope, *, batch: EventBatch, policy: TimePolicy, index_da
     require(p["ordering_value_sha256"] == order_hash, "ordering semantic hash mismatch")
     require(set(verified) == set(expected_files), "required external FilePins not verified: " +
             ", ".join(sorted(set(expected_files) - set(verified))))
+    required_uses = {(path, role) for path, (_, roles) in required.items() for role in roles}
+    require(verified_uses == required_uses, "required external FilePin roles not verified: " +
+            ", ".join(path+"@"+role for path, role in sorted(required_uses - verified_uses)))
     return VerifiedEvidence(batch, policy, index_date, tuple(observations), tuple(orders), observation_hash,
                             order_hash, tuple(verified[k] for k in sorted(verified)))

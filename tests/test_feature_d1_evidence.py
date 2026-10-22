@@ -5,6 +5,7 @@ from datetime import timedelta
 import hashlib
 import json
 import unittest
+from unittest.mock import patch
 
 from src.decision.features.d1_evidence import DIRECTION, evidence_hashes, verify_evidence
 from src.decision.features.d1_raw_sequence import generate_raw_sequences
@@ -52,10 +53,17 @@ class SyntheticEvidenceFixture:
     def payload(self):
         return self.envelope["payload"]
 
-    def pin(self, path, data, media="application/json"):
+    def expect_pin(self, pin, *, role):
+        """Explicit caller preparation, never inferred from submitted references."""
+        roles = list(self.expected.get(pin["path"], {}).get("required_roles", []))
+        if role not in roles:
+            roles.append(role)
+        self.expected[pin["path"]] = dict(file_pin=dict(pin), required_roles=roles)
+
+    def pin(self, path, data, media="application/json", *, role):
         pin = dict(path=path, file_sha256=hashlib.sha256(data).hexdigest(), media_type=media, bytes=len(data))
         self.artifacts[path] = data
-        self.expected[path] = dict(pin)
+        self.expect_pin(pin, role=role)
         return pin
 
     def add_order(self, records, entries=None):
@@ -75,19 +83,19 @@ class SyntheticEvidenceFixture:
         for name in ("production", "ordering"):
             for i, record in enumerate(p[name]):
                 body = {k: v for k, v in record.items() if k != "provider"}
-                record["provider"]["evidence_record"] = self.pin(f"{prefix}/{name}-{i}.json", json_bytes(body))
+                record["provider"]["evidence_record"] = self.pin(f"{prefix}/{name}-{i}.json", json_bytes(body), role=name+".evidence_record")
         delivery = p["delivery"]
-        delivery["provider"]["evidence_record"] = self.pin(f"{prefix}/delivery.json", json_bytes({k: v for k, v in delivery.items() if k != "provider"}))
+        delivery["provider"]["evidence_record"] = self.pin(f"{prefix}/delivery.json", json_bytes({k: v for k, v in delivery.items() if k != "provider"}), role="delivery.evidence_record")
         reception = p["reception"]
         records = [dict(e, timestamp=e["timestamp"].isoformat()) for e in self.batch.events]
         if reverse_events:
             records.reverse()
-        reception["events_ref"] = self.pin(f"{prefix}/events.jsonl", b"".join(json_bytes(e)+b"\n" for e in records), "application/x-ndjson")
-        reception["roster_ref"] = (self.pin(f"{prefix}/roster.json", json_bytes([e.customer_id for e in self.batch.entities]))
+        reception["events_ref"] = self.pin(f"{prefix}/events.jsonl", b"".join(json_bytes(e)+b"\n" for e in records), "application/x-ndjson", role="reception.events_ref")
+        reception["roster_ref"] = (self.pin(f"{prefix}/roster.json", json_bytes([e.customer_id for e in self.batch.entities]), role="reception.roster_ref")
                                     if self.batch.population_scope == "explicit_roster" else None)
         reception["production_evidence_refs"] = [c["provider"]["evidence_record"] for c in p["production"] if c["provider"]["evidence_record"] is not None]
         reception["delivery_evidence_ref"] = delivery["provider"]["evidence_record"]
-        reception["provider"]["evidence_record"] = self.pin(f"{prefix}/reception.json", json_bytes({k: v for k, v in reception.items() if k != "provider"}))
+        reception["provider"]["evidence_record"] = self.pin(f"{prefix}/reception.json", json_bytes({k: v for k, v in reception.items() if k != "provider"}), role="reception.evidence_record")
         self.hashes()
 
     def verify(self):
@@ -144,7 +152,7 @@ class EvidenceTests(unittest.TestCase):
     def test_resealed_wrong_received_values_rejected_at_input_reconstruction(self):
         f = SyntheticEvidenceFixture()
         record = event("search")
-        f.payload["reception"]["events_ref"] = f.pin("fixture/other-events.jsonl", json_bytes(record)+b"\n", "application/x-ndjson")
+        f.payload["reception"]["events_ref"] = f.pin("fixture/other-events.jsonl", json_bytes(record)+b"\n", "application/x-ndjson", role="reception.events_ref")
         with self.assertRaisesRegex(D1ContractError, "received artifact input identity mismatch"):
             f.verify()
 
@@ -153,7 +161,7 @@ class EvidenceTests(unittest.TestCase):
         c = f.payload["production"][0]
         wrong = {k: v for k, v in c.items() if k != "provider"}
         wrong["state"] = "unknown"
-        c["provider"]["evidence_record"] = f.pin("fixture/production-0.json", json_bytes(wrong))
+        c["provider"]["evidence_record"] = f.pin("fixture/production-0.json", json_bytes(wrong), role="production.evidence_record")
         with self.assertRaisesRegex(D1ContractError, "synthetic evidence body mismatch"):
             f.verify()
 
@@ -183,7 +191,7 @@ class EvidenceTests(unittest.TestCase):
                     c["provider"]["evidence_record"] = None
                     f.payload["reception"]["production_evidence_refs"] = []
                     r = f.payload["reception"]
-                    r["provider"]["evidence_record"] = f.pin("fixture/reception.json", json_bytes({k:v for k,v in r.items() if k != "provider"}))
+                    r["provider"]["evidence_record"] = f.pin("fixture/reception.json", json_bytes({k:v for k,v in r.items() if k != "provider"}), role="reception.evidence_record")
                     f.expected.pop(unrequired)
                     self.assertIn(unrequired, f.artifacts)
                 else:
@@ -355,22 +363,22 @@ class RequiredPinTests(unittest.TestCase):
 
     def test_138_omitting_either_conflicting_proof_is_rejected_after_hash_reseal(self):
         for omitted in (0, 1):
-            f = self.conflicting()
-            envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
-            p = envelope["payload"]
-            removed = p["ordering"].pop(omitted)["provider"]["evidence_record"]["path"]
-            self.assertIn(removed, expected)
-            self.assertIn(removed, artifacts)
-            p["ordering_value_sha256"] = evidence_hashes(p, batch=f.batch, policy=f.policy, index_date=INDEX)[1]
-            self.assertNotEqual(p["ordering_value_sha256"], f.payload["ordering_value_sha256"])
-            with self.subTest(omitted=omitted), self.assertRaisesRegex(
-                    D1ContractError, "required external FilePins not verified: ") as caught:
-                self.verify_unchanged(f, envelope, expected, artifacts)
-            self.assertEqual(str(caught.exception), "required external FilePins not verified: " + removed)
+            with self.subTest(omitted=omitted):
+                f = self.conflicting()
+                envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                p = envelope["payload"]
+                removed = p["ordering"].pop(omitted)["provider"]["evidence_record"]["path"]
+                self.assertIn(removed, expected)
+                self.assertIn(removed, artifacts)
+                p["ordering_value_sha256"] = evidence_hashes(p, batch=f.batch, policy=f.policy, index_date=INDEX)[1]
+                self.assertNotEqual(p["ordering_value_sha256"], f.payload["ordering_value_sha256"])
+                with self.assertRaisesRegex(D1ContractError, "required external FilePins not verified: ") as caught:
+                    self.verify_unchanged(f, envelope, expected, artifacts)
+                self.assertEqual(str(caught.exception), "required external FilePins not verified: " + removed)
 
     def test_138_valid_unreferenced_required_pin_is_rejected(self):
         f = SyntheticEvidenceFixture()
-        extra = f.pin("fixture/required-unsubmitted.json", json_bytes(dict(required=True)))
+        extra = f.pin("fixture/required-unsubmitted.json", json_bytes(dict(required=True)), role="authorization.approval_records")
         envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
         with self.assertRaisesRegex(D1ContractError,
                 "required external FilePins not verified: ") as caught:
@@ -419,6 +427,11 @@ class RequiredPinTests(unittest.TestCase):
 
     def test_138_pin_order_repeated_references_and_unrelated_inventory_are_allowed(self):
         f = SyntheticEvidenceFixture()
+        production = f.payload["production"][0]["provider"]["evidence_record"]
+        delivery = f.payload["delivery"]["provider"]["evidence_record"]
+        # The caller explicitly requires the extra uses before freezing Expected.
+        f.expect_pin(production, role="authorization.approval_records")
+        f.expect_pin(delivery, role="authorization.approval_records")
         envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
         production = deepcopy(envelope["payload"]["production"][0]["provider"]["evidence_record"])
         delivery = deepcopy(envelope["payload"]["delivery"]["provider"]["evidence_record"])
@@ -441,3 +454,288 @@ class RequiredPinTests(unittest.TestCase):
         raw, c = f.raw()
         self.assertEqual([row["state"] for row in raw.rows], ["VALID", "UNKNOWN", "UNKNOWN"])
         self.assertEqual({pin["path"] for pin in c.verified_files}, set(f.expected))
+
+
+class RoleExpectedTests(unittest.TestCase):
+    """#138 R-1/G-1: exact pins must be used in every independently fixed role."""
+
+    conflicting = RequiredPinTests.conflicting
+    verify_unchanged = RequiredPinTests.verify_unchanged
+    destinations = (
+        ("approval", "authorization.approval_records"),
+        ("production", "production.agreement_record"),
+        ("ordering", "ordering.agreement_record"),
+        ("delivery", "delivery.agreement_record"),
+        ("reception", "reception.agreement_record"),
+    )
+
+    @staticmethod
+    def single():
+        records = [event("search", number=2), event("page_view", number=1)]
+        f = SyntheticEvidenceFixture(records)
+        f.add_order(records)
+        f.seal()
+        return f
+
+    @staticmethod
+    def move_reference(envelope, pin, destination):
+        if destination == "approval":
+            envelope["authorization"]["approval_records"].append(pin)
+        else:
+            record = envelope["payload"][destination]
+            if destination in ("production", "ordering"):
+                record = record[0]
+            record["provider"]["agreement_record"] = pin
+
+    @staticmethod
+    def add_support_files(f, prefix="support"):
+        # Trusted caller preparation before Expected is frozen. Roles are fixed
+        # here, rather than copied from submitted provider_role or file names.
+        approval = f.pin(prefix+"/approval.json", json_bytes(dict(approval="synthetic")),
+                         role="authorization.approval_records")
+        f.envelope["authorization"]["approval_records"] = [approval, deepcopy(approval)]
+        for stage, role in (("production", "production.agreement_record"),
+                            ("ordering", "ordering.agreement_record"),
+                            ("delivery", "delivery.agreement_record"),
+                            ("reception", "reception.agreement_record")):
+            pin = f.pin(prefix+"/"+stage+".json", json_bytes(dict(agreement=stage)), role=role)
+            record = f.payload[stage][0] if stage in ("production", "ordering") else f.payload[stage]
+            record["provider"]["agreement_record"] = pin
+
+    def raw(self, c):
+        return generate_raw_sequences([c.batch], index_date=INDEX, policy=c.policy,
+            observation_claims=c.observation_claims, order_claims=c.order_claims, generated_at=ORIGIN)
+
+    def test_138_role_relocation_ten_resealed_cases_are_rejected_at_role_check(self):
+        for omitted in (0, 1):
+            for destination, role in self.destinations:
+                with self.subTest(omitted=omitted, destination=destination):
+                    f = self.conflicting()
+                    envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                    p = envelope["payload"]
+                    pin = p["ordering"].pop(omitted)["provider"]["evidence_record"]
+                    self.move_reference(envelope, pin, destination)
+                    p["ordering_value_sha256"] = evidence_hashes(
+                        p, batch=f.batch, policy=f.policy, index_date=INDEX)[1]
+                    self.assertNotEqual(p["ordering_value_sha256"], f.payload["ordering_value_sha256"])
+                    self.assertEqual(expected[pin["path"]]["required_roles"], ["ordering.evidence_record"])
+                    with self.assertRaises(D1ContractError) as caught:
+                        self.verify_unchanged(f, envelope, expected, artifacts)
+                    self.assertEqual(str(caught.exception),
+                        "external FilePin role mismatch: "+pin["path"]+" as "+role)
+                    self.assertEqual((expected, artifacts), (f.expected, f.artifacts))
+
+    def test_138_null_order_proof_moved_to_five_roles_is_rejected(self):
+        for destination, role in self.destinations:
+            with self.subTest(destination=destination):
+                f = self.single()
+                envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                p = envelope["payload"]
+                provider = p["ordering"][0]["provider"]
+                pin = provider["evidence_record"]
+                provider["evidence_record"] = None
+                self.move_reference(envelope, pin, destination)
+                p["ordering_value_sha256"] = evidence_hashes(
+                    p, batch=f.batch, policy=f.policy, index_date=INDEX)[1]
+                # Physical references are excluded from meaning. No stale-hash
+                # error can substitute for the intended role rejection.
+                self.assertEqual(p["ordering_value_sha256"], f.payload["ordering_value_sha256"])
+                with self.assertRaises(D1ContractError) as caught:
+                    self.verify_unchanged(f, envelope, expected, artifacts)
+                self.assertEqual(str(caught.exception),
+                    "external FilePin role mismatch: "+pin["path"]+" as "+role)
+                self.assertEqual((expected, artifacts), (f.expected, f.artifacts))
+
+    def test_138_required_multiple_roles_are_AND_not_any_one_use(self):
+        for missing in ("ordering.evidence_record", "authorization.approval_records"):
+            with self.subTest(missing=missing):
+                f = self.conflicting()
+                pin = f.payload["ordering"][0]["provider"]["evidence_record"]
+                f.expect_pin(pin, role="authorization.approval_records")
+                f.envelope["authorization"]["approval_records"] = [deepcopy(pin)]
+                # First establish that the complete, explicitly allowed request works.
+                c = self.verify_unchanged(f, *deepcopy((f.envelope, f.expected, f.artifacts)))
+                self.assertEqual(self.raw(c).rows[0]["state"], "UNKNOWN")
+                envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                if missing == "ordering.evidence_record":
+                    envelope["payload"]["ordering"].pop(0)
+                    envelope["payload"]["ordering_value_sha256"] = evidence_hashes(
+                        envelope["payload"], batch=f.batch, policy=f.policy, index_date=INDEX)[1]
+                else:
+                    envelope["authorization"]["approval_records"] = []
+                with self.assertRaises(D1ContractError) as caught:
+                    self.verify_unchanged(f, envelope, expected, artifacts)
+                self.assertEqual(str(caught.exception),
+                    "required external FilePin roles not verified: "+pin["path"]+"@"+missing)
+
+    def test_138_extra_unrequired_role_rejected_even_when_original_role_is_present(self):
+        f = self.single()
+        envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+        pin = envelope["payload"]["production"][0]["provider"]["evidence_record"]
+        envelope["authorization"]["approval_records"] = [deepcopy(pin)]
+        with self.assertRaises(D1ContractError) as caught:
+            self.verify_unchanged(f, envelope, expected, artifacts)
+        self.assertEqual(str(caught.exception),
+            "external FilePin role mismatch: "+pin["path"]+" as authorization.approval_records")
+
+    def test_138_normal_approval_and_four_agreements_preserve_meaning_and_flat_pins(self):
+        f = self.single()
+        before, before_context = f.raw()
+        self.add_support_files(f)
+        c = self.verify_unchanged(f, *deepcopy((f.envelope, f.expected, f.artifacts)))
+        self.assertEqual(self.raw(c), before)
+        self.assertEqual((c.observation_value_sha256, c.ordering_value_sha256),
+                         (before_context.observation_value_sha256, before_context.ordering_value_sha256))
+        self.assertIs(type(c.verified_files), tuple)
+        self.assertEqual(c.verified_files,
+                         tuple(f.expected[p]["file_pin"] for p in sorted(f.expected)))
+        self.assertTrue(all(set(pin) == {"path", "file_sha256", "media_type", "bytes"}
+                            for pin in c.verified_files))
+        self.assertEqual(len(c.verified_files), len(before_context.verified_files)+5)
+
+    def test_138_explicit_shared_roles_repeats_role_order_and_inventory_are_accepted(self):
+        f = self.single()
+        before, _ = f.raw()
+        pin = f.pin("support/shared.json", json_bytes(dict(shared="synthetic")), role="delivery.agreement_record")
+        f.expect_pin(pin, role="reception.agreement_record")
+        f.expect_pin(pin, role="authorization.approval_records")
+        f.payload["delivery"]["provider"]["agreement_record"] = deepcopy(pin)
+        f.payload["reception"]["provider"]["agreement_record"] = deepcopy(pin)
+        f.envelope["authorization"]["approval_records"] = [deepcopy(pin), deepcopy(pin)]
+        envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+        for entry in expected.values():
+            entry["required_roles"].reverse()
+        expected = dict(reversed(list(expected.items())))
+        artifacts["inventory/unrelated.bin"] = b"not a required proof"
+        c = self.verify_unchanged(f, envelope, expected, artifacts)
+        self.assertEqual(self.raw(c), before)
+        self.assertEqual(len(c.verified_files), len(expected))
+        self.assertEqual(sum(p["path"] == pin["path"] for p in c.verified_files), 1)
+
+    def test_138_shared_agreement_missing_each_required_use_is_rejected(self):
+        for missing in ("delivery.agreement_record", "reception.agreement_record", "authorization.approval_records"):
+            with self.subTest(missing=missing):
+                f = self.single()
+                pin = f.pin("support/shared.json", json_bytes(dict(shared=True)), role="delivery.agreement_record")
+                f.expect_pin(pin, role="reception.agreement_record")
+                f.expect_pin(pin, role="authorization.approval_records")
+                f.payload["delivery"]["provider"]["agreement_record"] = deepcopy(pin)
+                f.payload["reception"]["provider"]["agreement_record"] = deepcopy(pin)
+                f.envelope["authorization"]["approval_records"] = [deepcopy(pin)]
+                self.verify_unchanged(f, *deepcopy((f.envelope, f.expected, f.artifacts)))
+                envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                if missing == "authorization.approval_records":
+                    envelope["authorization"]["approval_records"] = []
+                else:
+                    stage = missing.split(".")[0]
+                    envelope["payload"][stage]["provider"]["agreement_record"] = None
+                with self.assertRaises(D1ContractError) as caught:
+                    self.verify_unchanged(f, envelope, expected, artifacts)
+                self.assertEqual(str(caught.exception),
+                    "required external FilePin roles not verified: "+pin["path"]+"@"+missing)
+
+    def test_138_swapped_different_agreement_kinds_are_rejected(self):
+        f = self.single()
+        self.add_support_files(f)
+        envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+        d, r = (envelope["payload"][stage]["provider"] for stage in ("delivery", "reception"))
+        d["agreement_record"], r["agreement_record"] = r["agreement_record"], d["agreement_record"]
+        with self.assertRaises(D1ContractError) as caught:
+            self.verify_unchanged(f, envelope, expected, artifacts)
+        self.assertEqual(str(caught.exception),
+            "external FilePin role mismatch: support/reception.json as delivery.agreement_record")
+
+    def test_138_new_request_republication_preserves_meaning_but_old_expected_is_rejected(self):
+        f = self.single()
+        self.add_support_files(f)
+        before, a = f.raw()
+        old_expected = deepcopy(f.expected)
+        f.payload["reception"]["request_id"] = "new-role-bound-request"
+        f.seal(prefix="republished", reverse_events=True)
+        self.add_support_files(f, prefix="republished-support")
+        c = self.verify_unchanged(f, *deepcopy((f.envelope, f.expected, f.artifacts)))
+        after = self.raw(c)
+        # Exact raw reproducibility refs intentionally change; logical channels do not.
+        for name in ("state", "reasons", "customer_id", "index_date", "tokens", "mask", "relative_gap_ms", "gap_mask"):
+            self.assertEqual(after.rows[0][name], before.rows[0][name], name)
+        self.assertEqual((c.batch.input_value_sha256, c.observation_value_sha256, c.ordering_value_sha256),
+                         (a.batch.input_value_sha256, a.observation_value_sha256, a.ordering_value_sha256))
+        self.assertNotEqual(c.verified_files, a.verified_files)
+        self.assertTrue(set(old_expected).isdisjoint(f.expected))
+        self.assertTrue(set(old_expected) <= set(f.artifacts))
+        with self.assertRaisesRegex(D1ContractError, "^external FilePin mismatch$"):
+            self.verify_unchanged(f, deepcopy(f.envelope), old_expected, deepcopy(f.artifacts))
+
+    def test_138_malformed_expected_twenty_shapes_raise_contract_error(self):
+        names = ("root-none", "root-list", "root-empty", "legacy", "nonstring-key", "empty-key", "alias-key",
+                 "entry-missing", "entry-extra", "entry-none", "roles-empty", "roles-string", "roles-tuple",
+                 "roles-none", "roles-duplicate", "roles-unknown", "role-integer", "role-bool", "role-list", "media-list")
+        for name in names:
+            with self.subTest(malformed=name):
+                f = self.single()
+                envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                path = next(iter(expected))
+                entry = expected[path]
+                reason = "Expected file entry: closed fields required"
+                if name.startswith("root-"):
+                    expected = {"root-none": None, "root-list": [], "root-empty": {}}[name]
+                    reason = "invalid Expected files: nonempty path map required"
+                elif name == "legacy":
+                    expected = {p: e["file_pin"] for p, e in expected.items()}
+                elif name in ("nonstring-key", "empty-key", "alias-key"):
+                    key = {"nonstring-key": 7, "empty-key": "", "alias-key": "alias/other.json"}[name]
+                    expected[key] = expected.pop(path)
+                    reason = "Expected key/FilePin.path mismatch" if name == "alias-key" else "Expected path key must be a nonempty string"
+                elif name == "entry-missing":
+                    entry.pop("required_roles")
+                elif name == "entry-extra":
+                    entry["additional"] = True
+                elif name == "entry-none":
+                    expected[path] = None
+                elif name == "media-list":
+                    entry["file_pin"]["media_type"] = []
+                    reason = "unsupported FilePin media type"
+                else:
+                    role = entry["required_roles"][0]
+                    entry["required_roles"] = {
+                        "roles-empty": [], "roles-string": role, "roles-tuple": (role,), "roles-none": None,
+                        "roles-duplicate": [role, role], "roles-unknown": ["not.a.fixed.role"],
+                        "role-integer": [1], "role-bool": [True], "role-list": [[role]],
+                    }[name]
+                    reason = ("Expected duplicate roles" if name == "roles-duplicate" else
+                              "Expected unknown role" if name == "roles-unknown" else
+                              "Expected roles must be strings" if name.startswith("role-") else
+                              "Expected required_roles must be a nonempty list")
+                with self.assertRaises(D1ContractError) as caught:
+                    self.verify_unchanged(f, envelope, expected, artifacts)
+                self.assertEqual(str(caught.exception), reason)
+
+    def test_138_expected_filepins_keep_existing_type_and_boundary_guards(self):
+        for field, value, reason in (("path", "../unsafe", "unsafe relative FilePin path"),
+            ("path", 1, "nonempty text required"), ("file_sha256", "bad", "invalid SHA256"),
+            ("media_type", {}, "unsupported FilePin media type"), ("bytes", True, "invalid FilePin byte count"),
+            ("bytes", 0.0, "invalid FilePin byte count"), ("bytes", -1, "invalid FilePin byte count"),
+            ("bytes", 2**63, "invalid FilePin byte count")):
+            with self.subTest(field=field, value=value):
+                f = self.single()
+                envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                expected[next(iter(expected))]["file_pin"][field] = value
+                with self.assertRaises(D1ContractError) as caught:
+                    self.verify_unchanged(f, envelope, expected, artifacts)
+                self.assertEqual(str(caught.exception), reason)
+
+    def test_138_T1_red_control_runs_both_omissions_without_AttributeError(self):
+        case = RequiredPinTests("test_138_omitting_either_conflicting_proof_is_rejected_after_hash_reseal")
+        result = unittest.TestResult()
+        with patch(__name__+".verify_evidence", return_value=None) as verifier:
+            case.run(result)
+        self.assertEqual(verifier.call_count, 2)
+        self.assertEqual((result.testsRun, len(result.failures), len(result.errors)), (1, 2, 0))
+        self.assertEqual([str(t).split("(omitted=")[-1] for t, _ in result.failures], ["0)", "1)"])
+        for _, failure in result.failures:
+            self.assertIn("D1ContractError not raised", failure)
+            self.assertNotIn("AttributeError", failure)
+        # No legacy/new API shape error supplies the red: the fake accepts both.
+        for call in verifier.call_args_list:
+            self.assertTrue(all(set(entry) == {"file_pin", "required_roles"}
+                                for entry in call.kwargs["expected_files"].values()))

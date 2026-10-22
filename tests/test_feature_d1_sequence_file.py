@@ -15,7 +15,7 @@ from src.decision.features.d1_sequence_file import (
     numeric_tokens, sequence_value_hash, validate_sequence_rows,
 )
 from src.decision.features.d1_serialization import D1ContractError
-from tests.test_feature_d1_evidence import SyntheticEvidenceFixture
+from tests.test_feature_d1_evidence import SyntheticEvidenceFixture, json_bytes
 from tests.test_feature_d1_calculation import INDEX, ORIGIN, event
 
 ARROW = find_spec("pyarrow") is not None
@@ -31,6 +31,75 @@ def three_states():
 
 
 class SequenceProjectionTests(unittest.TestCase):
+    def test_138_role_relocation_stops_before_raw_and_adapter(self):
+        destinations = (("approval", "authorization.approval_records"),
+            ("production", "production.agreement_record"), ("ordering", "ordering.agreement_record"),
+            ("delivery", "delivery.agreement_record"), ("reception", "reception.agreement_record"))
+        for omitted in (0, 1, "null"):
+            for destination, role in destinations:
+                with self.subTest(omitted=omitted, destination=destination):
+                    records = [event("search", number=2), event("page_view", number=1)]
+                    f = SyntheticEvidenceFixture(records)
+                    f.add_order(records)
+                    if omitted != "null":
+                        f.add_order(records, entries=[dict(event_id=r["event_id"], ordinal=i)
+                                                     for i, r in enumerate(reversed(records))])
+                    f.seal()
+                    envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+                    p = envelope["payload"]
+                    if omitted == "null":
+                        pin = p["ordering"][0]["provider"]["evidence_record"]
+                        p["ordering"][0]["provider"]["evidence_record"] = None
+                    else:
+                        pin = p["ordering"].pop(omitted)["provider"]["evidence_record"]
+                    if destination == "approval":
+                        envelope["authorization"]["approval_records"] = [pin]
+                    else:
+                        record = p[destination][0] if destination in ("production", "ordering") else p[destination]
+                        record["provider"]["agreement_record"] = pin
+                    p["ordering_value_sha256"] = evidence_hashes(
+                        p, batch=f.batch, policy=f.policy, index_date=INDEX)[1]
+                    before = deepcopy((envelope, expected, artifacts))
+                    with patch(__name__+".generate_raw_sequences", wraps=generate_raw_sequences) as raw_call, \
+                         patch(__name__+".adapt_sequences", wraps=adapt_sequences) as adapter_call:
+                        with self.assertRaises(D1ContractError) as caught:
+                            context = verify_evidence(envelope, batch=f.batch, policy=f.policy, index_date=INDEX,
+                                expected_files=expected, artifacts=artifacts)
+                            raw = generate_raw_sequences([context.batch], index_date=INDEX, policy=context.policy,
+                                observation_claims=context.observation_claims, order_claims=context.order_claims,
+                                generated_at=ORIGIN)
+                            adapt_sequences(raw, contexts=(context,))
+                        self.assertEqual(str(caught.exception),
+                            "external FilePin role mismatch: "+pin["path"]+" as "+role)
+                        raw_call.assert_not_called()
+                        adapter_call.assert_not_called()
+                    self.assertEqual((envelope, expected, artifacts), before)
+
+    def test_138_approval_and_agreement_roles_preserve_sequence_value_hash(self):
+        records = [event("search", number=2), event("page_view", number=1)]
+        f = SyntheticEvidenceFixture(records)
+        f.add_order(records)
+        f.seal()
+        raw, context = f.raw()
+        rows = adapt_sequences(raw, contexts=(context,))
+        before_value = sequence_value_hash(rows, contexts=(context,))
+        approval = f.pin("support/approval.json", json_bytes(dict(approval=True)), role="authorization.approval_records")
+        f.envelope["authorization"]["approval_records"] = [approval, deepcopy(approval)]
+        for stage, role in (("production", "production.agreement_record"), ("ordering", "ordering.agreement_record"),
+                            ("delivery", "delivery.agreement_record"), ("reception", "reception.agreement_record")):
+            record = f.payload[stage][0] if stage in ("production", "ordering") else f.payload[stage]
+            record["provider"]["agreement_record"] = f.pin("support/"+stage+".json", json_bytes(dict(stage=stage)), role=role)
+        envelope, expected, artifacts = deepcopy((f.envelope, f.expected, f.artifacts))
+        before_inputs = deepcopy((envelope, expected, artifacts))
+        c = verify_evidence(envelope, batch=f.batch, policy=f.policy, index_date=INDEX,
+                            expected_files=expected, artifacts=artifacts)
+        after_raw = generate_raw_sequences([c.batch], index_date=INDEX, policy=c.policy,
+            observation_claims=c.observation_claims, order_claims=c.order_claims, generated_at=ORIGIN)
+        after_rows = adapt_sequences(after_raw, contexts=(c,))
+        self.assertEqual(after_rows, rows)
+        self.assertEqual(sequence_value_hash(after_rows, contexts=(c,)), before_value)
+        self.assertEqual((envelope, expected, artifacts), before_inputs)
+
     def test_138_missing_required_proof_stops_pipeline_before_raw_and_adapter(self):
         records = [event("search", number=2), event("page_view", number=1)]
 

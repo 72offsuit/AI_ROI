@@ -78,6 +78,70 @@ N-1 전용 회귀9개는 의존성/무의존 Python3.12에서 각각9 PASS다. W
 
 이번 실행 로그는 plans/D1-evidence-required-pins-138-verification-20261022.log, 수정 전 snapshot 대비 diff와 새 보고서는 같은 접두어의 산출물이다. 과거 W1 로그/보고서는 바꾸지 않는다. (a)의 로컬 구현·명시 반례 회귀를 완료했으며 전체 인수·이슈 종료는 별도다.
 
+### 2026-10-22 · #138 R-1·T-1: 역할을 고정한 내부 Expected
+
+착수 HEAD/origin은 b0bbca73bab09a5cd03f74ceb6f1fb6441adf16d이며 W1 파일은 추적 상태다. 위 f8359c7/미추적·실행 수치는 당시 기록으로 보존한다. 최신 #138 추가 절(2026-10-22T02:59:13Z, 댓글0)의 사용자 승인 방향과 독립 검토 원문을 대조했다. 수정 전 R-1의5슬롯×2삭제방향은 모두 VALID, 단일 근거 null 이동5건은 UNKNOWN으로 수용됐다. 같은 위협 모델의 잔여 경로이며 새 회귀가 아니다. T-1의 의도적 무예외 검증기 실험은1방향만 호출·FAIL1·ERROR1(AttributeError)이었다. 아래 계약을 제품 수정 전에 기록한다.
+
+**승인한 내부 API:** expected_files는 정확한 dict이며 비어 있지 않은 path → {file_pin: FilePin, required_roles: [역할 문자열,...]}다. entry는 두 필드만 허용한다. key는 정확한 비어 있지 않은 str이고 안전한 file_pin.path와 같아야 한다. FilePin은 기존 닫힌4필드와 정확한 SHA256/media type/비음수 Int64 bytes 규칙을 유지한다. required_roles는 정확한 비어 있지 않은 list[str]이며 중복·미지 역할·잘못된 타입을 거부한다. 역할 순서는 의미가 없고 **모든 역할을 충족하는 AND 집합**이다. 역할 없는 옛 path→FilePin은 변환하지 않고 D1ContractError로 거부한다. 제출 내용/파일명/provider_role에서 Expected를 추론하지 않는다.
+
+| 고정 코드 위치 | required_roles의 정확한 어휘 |
+|---|---|
+| authorization.approval_records의 각 ref | authorization.approval_records |
+| production provider evidence_record | production.evidence_record |
+| production provider agreement_record | production.agreement_record |
+| ordering provider evidence_record | ordering.evidence_record |
+| ordering provider agreement_record | ordering.agreement_record |
+| delivery provider evidence_record | delivery.evidence_record |
+| delivery provider agreement_record | delivery.agreement_record |
+| reception provider evidence_record | reception.evidence_record |
+| reception provider agreement_record | reception.agreement_record |
+| reception.events_ref | reception.events_ref |
+| reception.roster_ref(존재할 때) | reception.roster_ref |
+
+각 pin_bytes 호출은 위 실제 코드 위치의 역할을 필수 인자로 전달한다. provider 공용 함수에도 evidence/agreement 역할을 고정 호출부에서 각각 전달하며 제출된 provider_role로 역할을 만들지 않는다. 사용한 (path,role)이 해당 외부 필수 집합에 없으면 external FilePin role mismatch로 즉시 요청 거부한다. 기존 exact pin/bytes/크기/media type·본문·고객/source/input 검사는 그대로 둔다. 성공 반환 전에 기존 전체 path 집합 검사와 새 전체 (path,role) 집합 일치를 모두 요구한다. 이미 사용한 파일이라도 다른 필수 역할이 빠지면 required external FilePin roles not verified로 거부한다. 누락 경로·역할을 정렬해 메시지에 남긴다. 반복 참조는 횟수가 아닌 집합이고 외부에서 명시한 여러 역할은 모두 요구한다. artifacts의 무관 재고는 허용한다.
+
+Expected 모양/키/역할 오류는 Expected 식별자가 있는 D1ContractError로, 실제 pin/역할 사용 불일치는 기존 external FilePin mismatch 또는 새 role mismatch로 분리한다. FilePin media type의 잘못된 컨테이너 타입도 새 Expected 검사에서 TypeError로 새지 않도록 동일 FilePin 규칙으로 거부한다. 호출 중 envelope/Expected/artifacts를 수정하지 않는다. VerifiedEvidence.verified_files는 기존 FilePin tuple 그대로이며, 새 역할 정보/물리 pin을 input/observation/ordering/sequence 의미 hash에 넣지 않는다. I03·공유 FilePin Schema·시퀀스 consumer를 바꾸지 않는다.
+
+대안·기각: 승인/합의 슬롯 하나만 차단하면 나머지 역할 이동이 남는다. “필수 역할 중 하나라도 사용”은 나머지 주장을 숨기므로 기각한다. D9 본문에 ordering refs를 추가하는 (b), 별도 외부 의미 hash API, envelope 기반 옛 Expected 자동 변환은 이번 승인 밖이므로 기각한다. 합성 fixture와 허용된 호출부는 명시적인 준비 단계에서 역할을 지정하고 동결 후 공격에서는 Expected를 재작성하지 않는다.
+
+T-1은 외부 subTest 안에 assertRaises와 caught.exception 비교를 모두 둔다. 같은 실제 시험 메서드를 의도적으로 예외를 내지 않는 검증기로 실행해 두 방향이 각각 “D1ContractError not raised”로 red이고 AttributeError가0인지 검사한다. 이 제어 실험은 옛/새 Expected 형식 불일치의 앞선 오류를 사용하지 않는다. 최종 정상 검증기의 green과 구별해 기록한다.
+
+반증 조건: 역할 이동10건/근거 null 이동5건의 수용, 역할 중 하나만으로 성공, 미지/추가/빈/중복 역할·잘못된 Expected의 수용 또는 원시 예외, 정상 여러 역할/반복 참조/무관 재고/재게시의 오거부, 입력 수정, 정상 값/hash·verified_files 형식 변경, T-1 두 번째 방향 미실행이면 실패다. 실제 입력 인수·#126·#135–#137·SD/Q 선택·공유 계약·전체 Store/loader/CURRENT·학습은 이 수정으로 해제하지 않는다. 별도 근본 원인은 추가 수정 없이 재현·보고한다.
+
+### #138 G-1 후속 회귀·기록 보완 계획 (실행 전)
+
+독립 재검토 b4ec4ea9 원문은 제품의 R-1·T-1 수정을 확인했지만 새 역할 검사를 제거해도 기존 evidence/sequence 시험44개가 모두 통과하는 G-1과 이번 회차 결과 기록 부재를 지적했다. 후속 착수도 b0bbca73이며 제품 SHA256 acdd8400721f27d3c48e527b24bb5a35c48b9a232531e6a491356931989d274a를 보존한다. 새 제품 설계나 agreement 인스턴스별 결합을 추가하지 않는다.
+
+기존 시험 모듈 안에 고정 Expected/bytes를 유지한 역할 이동10건·null 이동5건, 추가 역할 즉시 거부, 필수 다중 역할의 일부만 사용했을 때 최종 집합 거부, 닫힌 Expected의 타입/역할 오류와 정상4종 agreement/승인·반복·다중 역할·순서 변경·재게시를 고정한다. 예외 타입뿐 아니라 경로와 역할을 포함한 정확한 사유를 확인한다. 정상·거부 모두 입력 불변성을 확인하고 역할 실패가 raw/adapter 이전에 발생하는 통합 반례를 둔다. 대안인 소스 문자열 존재 검사는 기각한다. 관측 가능한 결과와 오류 계약을 검사해야 방어가 빠졌을 때 실패한다.
+
+G-1 반증 실험은 실제 제품 파일을 수정하지 않고 메모리에서 즉시 역할 검사/최종 역할 집합 검사/둘 다 제거한다. 기존 공개 VerifiedEvidence 클래스를 그대로 유지해 어댑터 타입 오류와 목표 회귀를 혼동하지 않는다. T-1은 실제 생략 시험을 무예외 검증기로 실행해 두 방향 FAIL2/ERROR0을 확인한다. 이 의도된 red와 최종 원본 suite green을 별도로 기록한다. 시험·기록만 보완하고 I-1의 같은 종류 agreement 인스턴스 교환과 I-2의 FilePin 오류 출처 표현은 정보성 한계로 남긴다. 이전 (a) 산출물은 보존하며 이번 회차의 새 보고서·로그·diff와 실행 결과를 이어 기록한다.
+
+### #138 R-1·G-1·T-1 실제 검증 결과 (2026-10-22 후속)
+
+제품 역할 검사의 독립 확인 뒤 미완료 회귀·기록을 마쳤다. 이번 후속은 시험2개 모듈과 이 DR만 수정했다. 제품 SHA256은 착수·최종 모두 acdd8400721f27d3c48e527b24bb5a35c48b9a232531e6a491356931989d274a다. 테스트 파일은 evidence 60443ff63debe2272a2fd2e9abac67230c3fd6e9c6a85fc72cb0b3cd90b1e237 → bf59bccc2839f5b2e9b7121a1606b840216f1fde91930ce999666db5a40b6eb5, sequence_file 1ab5ccdcc9649e2e47848fb42263b462a6074f3c72810b64b3bd570a457fbcfb → 0f60e020a978daf9215271c645ea380533d7b1f3f5fa53e329b5ad5732d9b1e6다. DR 자체 hash와 R-1 착수 이전부터의 전체 diff는 자기참조 없이 외부 보고서에 기록한다.
+
+새 RoleExpectedTests 12개와 SequenceProjectionTests의 통합2개는 두 Python3.12.13 환경에서 각각14 PASS/FAIL0/ERROR0/SKIP0이다. 내부 사례는 이동10·null 이동5·필수 다중 역할 누락2·공유 합의의 역할 누락3·잘못된 Expected20·FilePin 경계8 등을 포함한다. 이동은 외부 Expected/bytes를 동결하고 ordering 선언 hash만 재계산했으며 정확한 external FilePin role mismatch 경로/역할에서 거부됐다. 허용된 다른 용도로 파일을 이미 검증했어도 필수 역할이 빠지면 required external FilePin roles not verified에서 거부한다. 통합 반례15건은 VerifiedEvidence를 반환하지 않아 raw/adapter 호출이0이다.
+
+R-1 이전 제품·시험 snapshot을 메모리에서 복원해 두 환경에서 다시 실행한 결과, 역할 이동10건은 VALID·null 이동5건은 UNKNOWN으로 잘못 수용됐고 T-1 무예외 control은 호출1/FAIL1/ERROR1(AttributeError)이었다. 옛 API는 신뢰한 fixture 준비 단계에서 path→FilePin으로 고정한 뒤 사용했다. 현재 control은 두 방향을 모두 실행해 FAIL2/ERROR0이며 AttributeError가 없다. 이 의도된 red는 최종 원본 suite 실패와 구별한다.
+
+| 검증 (실제 명령은 새 로그) | 의존성 Python3.12.13 | 무의존 Python3.12.13 |
+|---|---|---|
+| 새 회귀14개 | PASS14 · FAIL0 · ERROR0 · SKIP0 | PASS14 · FAIL0 · ERROR0 · SKIP0 |
+| W0/W1 관련65개 | PASS65 · FAIL0 · ERROR0 · SKIP0 | PASS55 · FAIL0 · ERROR0 · SKIP10 |
+| 기존 D1 174개 | PASS174 · FAIL0 · ERROR0 · SKIP0 | PASS112 · FAIL0 · ERROR0 · SKIP62 |
+| 전체1034개 | PASS1031 · FAIL0 · ERROR0 · SKIP3 | PASS860 · FAIL0 · ERROR0 · SKIP174 |
+| 정상6개 시나리오의 값/hash/키/토큰/gap/flat pins·입력 불변 | 동일 | 동일 |
+
+G-1 메모리 변이는 같은 원본 context 클래스를 유지하고 evidence/sequence58개를 실행했다. 원본은 FAIL0/ERROR0, 즉시 검사 제거는 실패32건, 최종 집합 검사 제거는 실패5건, 둘 다 제거는 실패37건이며 ERROR는 모두0이다. 실패 건수에는 subTest별 실패를 센다. 두 환경에서 동일하고 무의존만 기존 Parquet5개가 SKIP다. 즉시 검사 누락은 정확한 역할 오류 계약 회귀가, 최종 검사 누락은 필수 다중 역할 누락 회귀가 검출한다. 소스 문자열 존재 시험은 추가하지 않았다. 진단 첫 실행은 context 클래스를 새로 만들어 타입 검사에 먼저 걸렸으므로 무효로 보존하고, 스크립트를 고쳐 위 유효 실험을 재실행했다. 제품 파일은 변이하지 않았다.
+
+입력/관측/순서/SequenceRow 의미 hash와 정상 single-full·conflicting·3상태·미제공 생산·승인/4종 합의·재게시 결과를 이전 제품 snapshot과 대조해 두 환경에서 모두 같았다. single-full 시퀀스 hash b143e3cb566c574e6c6804517cea17746ae3400fb9de52b8826851a27a703145, 3상태 b67b1c90481bc48ea242c9752227ad4640ea52f11cc33fb1c10fe0a450dfccf5도 과거 고정 결과와 같았다. 물리 재게시의 exact pins는 달라지고 옛 Expected 연결은 거부한다. 역할·승인/합의 파일을 의미 hash에 새로 넣지 않았다.
+
+내부 API 이관: SyntheticEvidenceFixture.expect_pin/pin/seal은 신뢰한 준비 단계에서 고정 역할을 지정한다. fixture.verify와 RequiredPinTests.verify_unchanged, sequence-file 통합 호출은 새 Expected를 전달하며 성공/거부 후 원본을 보존한다. 새 RoleExpectedTests 및 승인/4종 agreement 통합 시험도 같은 API를 명시한다. 읽기 허용 경로의 실제 제품 호출처는 여전히 verify_evidence 정의 외에 없으며 외부 소비자/실제 제공자 이관을 완료했다고 주장하지 않는다. I03/FilePin Schema와 VerifiedEvidence.verified_files의 기존4필드 tuple·시퀀스 소비자 제품은 변경하지 않았다.
+
+경계/DR39 PASS, git diff --check PASS다. 전체 SKIP 사유와 무의존 Schema/Parquet 미설치를 새 로그에 보존한다. Python3.10은 PATH·프로젝트/uv/pyenv·일반 설치 위치에서 실행기를 찾지 못해 BLOCKED이며 설치하지 않았다. 소유검사는 기존13건 미등록으로 FAIL이고 신규 시험 파일은0개다. 91개 시작 snapshot 중 이번 대상3개 이외는 바이트가 같고, .gitignore·개인 요구사항·HTML·이전 plans/로그도 보존했다. HEAD/origin b0bbca73와 빈 index를 유지했다.
+
+새 기록은 plans/D1-evidence-roles-138-review-20261022.md · plans/D1-evidence-roles-138-verification-20261022.log · plans/D1-evidence-roles-138-changes-20261022.diff다. 이전 (a) 기록을 덮어쓰지 않았다. #138 R-1·G-1·T-1의 로컬 수정·회귀 기록 보완 완료로 한정하며 독립 재검토·이슈 종료·D1 전체 인수는 별도다. I-1 같은 종류 agreement의 인스턴스별 교환은 현재 결과 영향이 없는 정보성 한계이며 향후 의미가 생기면 별도 결합 계약 검토가 필요하다. I-2 FilePin 오류 메시지의 Expected/제출 출처 미구분도 정보성 사항으로 남긴다. #126·#135–#137·SD/Q 선택·실제 입력 인수·전체 Store/loader/CURRENT·학습을 바꾸지 않았고 브랜치/스테이징/커밋/푸시/GitHub 쓰기/다른 에이전트·채팅 실행도 하지 않았다.
+
 **근거:** SD/Q 방향을 적용하는 내부 구현이며 실제 제공자 근거 없이도 합성 정상/거부를 검증할 수 있다. 새 profile의 의미/단위/한계를 먼저 기록하고 구현한다. 설정·사용자 승인값을 새로 추론하지 않는다.
 
 ## 기각한 안과 기각 사유
