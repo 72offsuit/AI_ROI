@@ -35,7 +35,7 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
     # S4~S6(#143): Trait 이 방문·퍼널·이탈을 구동하고 구매·카탈로그(240개)가 생겨 이벤트가 바뀐다(DR-S4-S6-sprint).
     "sim-0.4": (
         "ebb112f6c20ae0101059c98edba8f7f2ca11b14a7416373a237edde392796d52",
-        "d55c436240ab3b488bc87fc9ec90103edc5e5cbc733acb25f9c3f21a49fa61b4",
+        "2e08fd6a6627ad35920ef3a296c9ecb86e8c62033a3c36f4cc1e1e308f128243",
         861,
     ),
 }

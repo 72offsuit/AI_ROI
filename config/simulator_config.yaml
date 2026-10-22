@@ -372,7 +372,7 @@
       "window_days": 42,
       "negative_scale_pct": 40,
       "positive_scale_pct": 100,
-      "coupon_click_scale_pct": 45,
+      "coupon_click_scale_pct": 50,
       "message_cost_krw": 30,
       "negative_effect": {
         "visit_penalty_pct": 30,
@@ -413,9 +413,9 @@
         "T4": {
           "sensitivity": "repurchase_propensity",
           "visit_boost_pct": 20,
-          "intent_boost_pct": 20,
-          "onset_protect_pct": 40,
-          "recovery_ppm": 25000,
+          "intent_boost_pct": 25,
+          "onset_protect_pct": 50,
+          "recovery_ppm": 30000,
           "coupon": null
         }
       }

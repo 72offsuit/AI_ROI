@@ -346,12 +346,19 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
     customers = world["customers"]
     ordered = {cid: assignments[cid] for cid in sorted(assignments)}
     try:
-        rows = _treatment.potential_outcomes(world, list(ordered))
-        for row in rows:
-            row["assigned"] = ordered[row["customer_id"]]
+        # 같은 시작 상태(스냅샷에서 갈라진 전략 분기)의 반사실은 배정과 무관하게 같다 — 고객별로 재사용한다.
+        if _PO_CACHE.get("before") != before:
+            _PO_CACHE.clear()
+            _PO_CACHE["before"] = before
+        cache: dict[str, dict[str, object]] = _PO_CACHE.setdefault("rows", {})
+        missing = [cid for cid in ordered if cid not in cache]
+        for row in _treatment.potential_outcomes(world, missing):
+            cache[str(row["customer_id"])] = row
+        rows = [{**cache[cid], "assigned": tid} for cid, tid in ordered.items()]
+        assignment_digest = _wd.digest(_rng_json(ordered))
         _storage.write_ground_truth(
             _storage.ground_truth_root(session.hidden_root),
-            f"po-{world['world_id']}-{now}-{before[:16]}", rows,
+            f"po-{world['world_id']}-{now}-{before[:16]}-{assignment_digest[:16]}", rows,
         )
     except OSError as error:
         raise SimulatorError(f"참 효과 기록을 쓰지 못했다: {_reason(error)} — 배정을 적지 않았다") from error
@@ -602,6 +609,14 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
         "customers": len(customers),
         "generated_at": stamp,
     }
+
+
+# 반사실 결과 캐시 — {"before": 배정 전 상태 다이제스트, "rows": {customer_id: 행}}. 시작 상태가 바뀌면 비운다.
+_PO_CACHE: dict[str, object] = {}
+
+
+def _rng_json(value: object) -> bytes:
+    return _wd.canonical_json(value)
 
 
 # config 오류의 자세한 사유(키·모수 값·페르소나 id)는 __cause__ 에만 둔다. 공개 메시지에는 숨은 필드의
