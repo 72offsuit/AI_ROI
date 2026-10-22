@@ -21,14 +21,16 @@
 입력
 - `--events`      Sink 루트 (`<root>/events/date=*/part-*`, parquet · jsonl.gz · jsonl)
 - `--exchange`    (선택) 교환 묶음 디렉터리 — `customers`·`orders`·`order_items` (F10·F11)
-- `--assignments` (선택) 처치 배정 기록 JSON — `apply_treatment` 를 부른 쪽이 남긴다 (F14·F15·F17)
-                  `[{"assigned_at": "<ISO8601+오프셋>", "assignments": {"C00000001": "T3", …}}, …]`
+- `--assignments` (선택) 처치 배정 기록 — `apply_treatment` 를 부른 쪽이 남긴다 (F14·F15·F17)
+                  JSON 파일 하나 또는 `*.json` 이 든 디렉터리(T0 마다 파일 하나). 각 파일은 배치 하나
+                  `{"assigned_at": "<ISO8601+오프셋>", "assignments": {"C00000001": "T3", …}}` 또는 그 목록.
+                  `assignments` 는 배정한 **전원**(T0 통제군 포함)이어야 한다 — 통제군은 노출 이벤트가 없다.
                   없으면 이벤트의 `treatment_id` 태그로 추정하고 그 사실과 한계를 note 에 적는다.
 - `--guardrail`   (선택) 시뮬레이터 가드레일 리포트 JSON — ground truth 값 (F16, F14 보조)
-                  두 형식을 읽는다. ① 시뮬레이터 `python -m src.simulator guardrails` 출력(만분율):
-                  `ate_bp.T3` · `response_mix_bp.T3.{positive,negative}` · `sleeping_dog_bp`.
-                  ② 0~1 소수: `ate` · `sleeping_dog_rate` · `persuadable_rate`
-                  (최상위 또는 `guardrails`/`metrics` 아래, 값 또는 `{"value": …}`). 키가 없으면 no_data.
+                  F16 은 `potential_outcome_quadrants.T3.{persuadable, sleeping_dog, sure_thing, lost_cause, ate}`
+                  (0~1 소수, 또는 `<이름>_bp` 만분율)와 `identity_gap_pp` 만 읽는다. 없으면 no_data —
+                  반응 성향 유형(`response_mix_bp`)으로 대신하지 않는다.
+                  F14 보조 ATE 는 `ate_bp.T3`(만분율) 또는 `ate`(소수). 키가 없으면 no_data.
 
 사용
     python scripts/research/realism_check.py --events <sink_root> \
@@ -270,9 +272,14 @@ def load_assignments(path: Path | str | None) -> pd.DataFrame | None:
     """`[{"assigned_at": iso, "assignments": {cid: tid}}]` → (customer_id, treatment_id, assigned_at)."""
     if path is None:
         return None
-    data = json.loads(Path(path).read_text(encoding="utf-8"))
-    if isinstance(data, dict):
-        data = data.get("batches", [data])
+    path = Path(path)
+    files = sorted(path.glob("*.json")) if path.is_dir() else [path]
+    data = []
+    for f in files:
+        loaded = json.loads(f.read_text(encoding="utf-8"))
+        if isinstance(loaded, dict):
+            loaded = loaded.get("batches", [loaded])
+        data.extend(loaded)
     rows = []
     for batch in data:
         at = pd.Timestamp(batch["assigned_at"]).tz_convert(TZ)
@@ -298,47 +305,38 @@ def assignments_from_events(ev: pd.DataFrame) -> pd.DataFrame | None:
     return pairs[["customer_id", "treatment_id", "assigned_at"]]
 
 
-GUARDRAIL_KEYS = {
-    "ate": ("ate", "ATE", "ate_t3"),
-    "sleeping_dog_rate": ("sleeping_dog_rate", "sleeping_dog", "sleeping_dogs"),
-    "persuadable_rate": ("persuadable_rate", "persuadable", "persuadables"),
-}
+GUARDRAIL_ATE_KEYS = ("ate", "ATE", "ate_t3")
 
 
-def _bp_value(guard: dict, name: str) -> float | None:
-    """시뮬레이터 `python -m src.simulator guardrails` 출력(만분율 bp) 형식.
-
-    `ate_bp.T3` · `response_mix_bp.T3.{positive,negative}` 를 같은 모집단(활성 고객, T3)의 값으로 읽는다
-    — 항등식 P − D = ATE 는 같은 모집단·같은 처치에서만 뜻이 있다.
-    """
-    def frac(v: object) -> float | None:
-        return v / 10_000 if isinstance(v, (int, float)) and not isinstance(v, bool) else None
-    if name == "ate" and isinstance(guard.get("ate_bp"), dict):
-        return frac(guard["ate_bp"].get("T3"))
-    mix = guard.get("response_mix_bp", {}).get("T3") if isinstance(guard.get("response_mix_bp"), dict) else None
-    if isinstance(mix, dict):
-        if name == "sleeping_dog_rate":
-            return frac(mix.get("negative"))
-        if name == "persuadable_rate":
-            return frac(mix.get("positive"))
+def guardrail_ate(guard: dict | None) -> float | None:
+    """F14 보조용 ground truth ATE(0~1). 시뮬레이터 guardrails 의 `ate_bp.T3`(만분율) 또는 `ate`(소수)."""
+    if not guard:
+        return None
+    if isinstance(guard.get("ate_bp"), dict):
+        v = guard["ate_bp"].get("T3")
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v / 10_000
+    scopes = [guard] + [guard[k] for k in ("guardrails", "metrics", "ground_truth") if isinstance(guard.get(k), dict)]
+    for scope in scopes:
+        for key in GUARDRAIL_ATE_KEYS:
+            v = scope.get(key)
+            if isinstance(v, dict):
+                v = v.get("value")
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
+                return float(v)
     return None
 
 
-def guardrail_value(guard: dict | None, name: str) -> float | None:
-    if not guard:
-        return None
-    bp = _bp_value(guard, name)
-    if bp is not None:
-        return bp
-    scopes = [guard] + [guard[k] for k in ("guardrails", "metrics", "ground_truth") if isinstance(guard.get(k), dict)]
-    for scope in scopes:
-        for key in GUARDRAIL_KEYS[name]:
-            if key in scope:
-                v = scope[key]
-                if isinstance(v, dict):
-                    v = v.get("value")
-                if isinstance(v, (int, float)) and not isinstance(v, bool):
-                    return float(v)
+QUADRANTS = ("persuadable", "sleeping_dog", "sure_thing", "lost_cause")
+QUADRANT_ARM = "T3"
+
+
+def _quadrant_fraction(q: dict, name: str) -> float | None:
+    """`<name>` 은 0~1 소수, `<name>_bp` 는 만분율. 둘 다 받는다(단위를 이름으로 구분)."""
+    for key, scale in ((name, 1.0), (f"{name}_bp", 10_000.0)):
+        v = q.get(key)
+        if isinstance(v, (int, float)) and not isinstance(v, bool):
+            return v / scale
     return None
 
 
@@ -655,6 +653,15 @@ def f11(ctx: Context) -> Result:
                   f"신규 기준: {basis}. 관측 끝에서 잘린 추적(중앙 {int(follow.median())}일)이라 컬리의 '같은 해' 재구매율처럼 하한 쪽이다.")
 
 
+def _signup_dates(ctx: Context) -> tuple[pd.Series, str]:
+    """고객별 가입일. 교환 묶음 `customers.signup_date` 가 정본이고, 없으면 첫 이벤트 날짜로 대신한다."""
+    ex = ctx.exchange or {}
+    cust = ex.get("customers")
+    if cust is not None and "signup_date" in getattr(cust, "columns", []):
+        return pd.to_datetime(cust.set_index("customer_id")["signup_date"]), "교환 묶음 customers.signup_date"
+    return _first_seen(ctx), "첫 이벤트 날짜(교환 묶음 없음 — 관측 시작 전 가입 고객의 가입 60일 조건이 과소 충족될 수 있다)"
+
+
 def f12(ctx: Context) -> Result:
     o = ctx.orders
     if o.empty:
@@ -663,6 +670,7 @@ def f12(ctx: Context) -> Result:
     if ctx.assignments is not None and len(ctx.assignments):
         treated = set(ctx.assignments.loc[ctx.assignments["treatment_id"] != "T0", "customer_id"])
     o = o[~o["customer_id"].isin(treated)]
+    signup, signup_basis = _signup_dates(ctx)
     t0s = []
     t = ctx.start + pd.Timedelta(days=56)
     last = ctx.end - pd.Timedelta(days=CHURN_DAYS)
@@ -673,31 +681,41 @@ def f12(ctx: Context) -> Result:
         return no_data(f"관측 {ctx.span_days}일 — 사전 창 56일 + 라벨 창 42일(98일)이 안 된다")
     rows = []
     for T0 in t0s:
+        T0_ts = pd.Timestamp(T0).tz_localize(TZ)
+        before = o[o["date"] < T0]
+        lastbuy = before.groupby("customer_id")["date"].max()
+        # ① 정본 — docs/data_spec.html §4.1 eligible · §5 ② 라벨 (T0, T0+42]
+        tenure = (T0 - signup.reindex(lastbuy.index)).dt.days
+        e41 = set(lastbuy.index[(tenure >= 60) & ((T0 - lastbuy).dt.days >= 14)])
+        post41 = set(o[(o["timestamp"] > T0_ts) & (o["timestamp"] <= T0_ts + pd.Timedelta(days=CHURN_DAYS))]["customer_id"])
+        # ② 참고 — cj_label.py (180일 활성 · [T0, T0+42) 날짜)
         lb = min(180, (T0 - ctx.start).days)
-        pre = o[(o["date"] < T0) & (o["date"] >= T0 - pd.Timedelta(days=lb))]
+        pre = before[before["date"] >= T0 - pd.Timedelta(days=lb)]
         elig = set(pre["customer_id"])
-        if not elig:
-            continue
         post = set(o[(o["date"] >= T0) & (o["date"] < T0 + pd.Timedelta(days=CHURN_DAYS))]["customer_id"])
-        lastbuy = pre.groupby("customer_id")["date"].max()
-        e14 = set(lastbuy.index[(T0 - lastbuy).dt.days >= 14])
-        e42 = set(lastbuy.index[(T0 - lastbuy).dt.days < CHURN_DAYS])
-        rows.append({"T0": str(T0.date()), "lookback_days": lb, "eligible": len(elig),
-                     "churn_pct": round(100 * (1 - len(elig & post) / len(elig)), 2),
-                     "churn14_pct": round(100 * (1 - len(e14 & post) / len(e14)), 2) if e14 else None,
-                     "churn_active42_pct": round(100 * (1 - len(e42 & post) / len(e42)), 2) if e42 else None})
-    if not rows:
-        return no_data("어느 T0 에도 사전 창 구매 고객이 없다")
-    mean = float(np.mean([r["churn_pct"] for r in rows]))
-    c14 = [r["churn14_pct"] for r in rows if r["churn14_pct"] is not None]
-    c42 = [r["churn_active42_pct"] for r in rows if r["churn_active42_pct"] is not None]
-    return Result({"churn_pct_mean": _r(mean, 2), "churn14_pct_mean": _r(np.mean(c14), 2) if c14 else None,
-                   "churn_active42_pct_mean_ref": _r(np.mean(c42), 2) if c42 else None,
-                   "by_T0": rows}, judge(mean, 15, 25),
-                  "cj_label.py 와 같은 정의: T0 이전 최대 180일(관측이 짧으면 그만큼) 구매 고객 중 [T0, T0+42일) 무구매 비율, "
-                  "30일 간격 여러 T0 평균. 비-T0 처치 고객은 제외. churn14 = 마지막 구매가 14일 이상 전인 부분집합(외부 28.6~31.8%). "
-                  "churn_active42 = 최근 42일 안 구매 고객만(시뮬레이터 guardrails 의 활성 정의) — 참고값, 판정에 쓰지 않는다. "
-                  "Eligible 정의가 PRD 에 고정돼 있지 않아 외부 집계(cj_label.py)와 같은 180일 정의로 판정한다.")
+        lb_pre = pre.groupby("customer_id")["date"].max()
+        e14 = set(lb_pre.index[(T0 - lb_pre).dt.days >= 14])
+        e42 = set(lb_pre.index[(T0 - lb_pre).dt.days < CHURN_DAYS])
+        pct = lambda base, hit: round(100 * (1 - len(base & hit) / len(base)), 2) if base else None
+        rows.append({"T0": str(T0.date()), "eligible_spec41": len(e41), "churn_spec41_pct": pct(e41, post41),
+                     "lookback_days": lb, "eligible_180d": len(elig), "churn_180d_pct": pct(elig, post),
+                     "churn14_pct": pct(e14, post), "churn_active42_pct": pct(e42, post)})
+    def mean_of(key: str) -> float | None:
+        vals = [r[key] for r in rows if r[key] is not None]
+        return _r(np.mean(vals), 2) if vals else None
+    syn = {"churn_pct_mean": mean_of("churn_spec41_pct"), "population": "data_spec §4.1 eligible",
+           "ref_churn_180d_pct_mean": mean_of("churn_180d_pct"), "ref_churn14_pct_mean": mean_of("churn14_pct"),
+           "ref_churn_active42_pct_mean": mean_of("churn_active42_pct"), "by_T0": rows}
+    note = ("모집단은 이 프로젝트 정본 정의인 docs/data_spec.html §4.1 eligible(T0 − 가입일 ≥ 60일 ∧ T0 이전 구매 ≥ 1 ∧ 마지막 구매 ≥ 14일 전, "
+            "오케스트레이션 배정 모집단과 같다)이고 라벨은 §5 ② (T0, T0+42일] 무구매다. 30일 간격 여러 T0 평균, 비-T0 처치 고객 제외. "
+            f"가입일 근거: {signup_basis}. 첫판은 PRD 에 정의가 없다고 보고 외부 집계(cj_label.py)의 180일 정의로 판정했으나, "
+            "정본 정의가 data_spec §4.1 에 있어 모집단을 그것으로 맞췄다 — 통과 띠 15~25% 는 바꾸지 않았다. "
+            "참고값(판정에 쓰지 않음): 180일 활성(cj_label.py 정의) · 그중 마지막 구매 14일+ 전 · 최근 42일 활성(시뮬레이터 guardrails 정의). "
+            "외부 참조: dunnhumby 180일 활성 가구 10.7~13.1%, 최근 구매 14일+ 전 가구 28.6~31.8% — §4.1 은 14일+ 조건을 포함하므로 "
+            "외부에서 가장 가까운 비교는 뒤쪽 값이다. 관측 시작 전 구매 이력은 로그에 없어 초기 T0 는 eligible 이 작게 잡힌다.")
+    if syn["churn_pct_mean"] is None:
+        return no_data("어느 T0 에도 §4.1 eligible 고객이 없다", syn)
+    return Result(syn, judge(syn["churn_pct_mean"], 15, 25), note)
 
 
 def f13(ctx: Context) -> Result:
@@ -769,7 +787,7 @@ def _ate_from_logs(ctx: Context) -> tuple[dict | None, str]:
 
 def f14(ctx: Context) -> Result:
     obs, reason = _ate_from_logs(ctx)
-    gt = guardrail_value(ctx.guardrail, "ate")
+    gt = guardrail_ate(ctx.guardrail)
     if obs is not None:
         syn = dict(obs, basis="log_itt", ground_truth_ate_pp=_r(100 * gt, 2) if gt is not None else None)
         return Result(syn, judge(obs["ate_pp"], 3, 6),
@@ -800,29 +818,40 @@ def f15(ctx: Context) -> Result:
 
 
 def f16(ctx: Context) -> Result:
-    d = guardrail_value(ctx.guardrail, "sleeping_dog_rate")
-    p = guardrail_value(ctx.guardrail, "persuadable_rate")
-    ate = guardrail_value(ctx.guardrail, "ate")
-    syn = {"sleeping_dog_pct": _r(100 * d, 2) if d is not None else None,
-           "persuadable_pct": _r(100 * p, 2) if p is not None else None,
-           "ate_pp": _r(100 * ate, 2) if ate is not None else None, "identity_gap_pp": None}
-    if ctx.guardrail is None:
-        return no_data("가드레일 리포트(--guardrail)가 없다 — 4분면 유형은 ground truth 에만 있다", syn)
-    missing = [k for k, v in (("sleeping_dog_rate", d), ("persuadable_rate", p), ("ate", ate)) if v is None]
+    """ground truth 잠재결과 4분면 — 가드레일 JSON `potential_outcome_quadrants.<arm>` 만 읽는다.
+
+    반응 성향 유형(`response_mix_bp`)은 4분면과 정의가 달라 대신 쓰지 않는다(리드 지시, #158).
+    """
+    guard = ctx.guardrail
+    if guard is None:
+        return no_data("가드레일 리포트(--guardrail)가 없다 — 잠재결과 4분면은 ground truth 에만 있다")
+    quads = guard.get("potential_outcome_quadrants")
+    if not isinstance(quads, dict) or not isinstance(quads.get(QUADRANT_ARM), dict):
+        return no_data(f"잠재결과 4분면 미제공 — 가드레일 JSON 에 potential_outcome_quadrants.{QUADRANT_ARM} 가 없다"
+                       " (response_mix 등 반응 성향 유형으로 대신 판정하지 않는다)")
+    q = quads[QUADRANT_ARM]
+    vals = {k: _quadrant_fraction(q, k) for k in QUADRANTS + ("ate",)}
+    syn = {"arm": QUADRANT_ARM, **{f"{k}_pct": _r(100 * v, 2) if v is not None else None for k, v in vals.items()},
+           "identity_gap_pp": None, "identity_gap_pp_reported": q.get("identity_gap_pp"),
+           "other_arms": sorted(k for k in quads if k != QUADRANT_ARM)}
+    missing = [k for k, v in vals.items() if v is None]
     if missing:
-        return no_data("가드레일 리포트에 키가 없다: " + ", ".join(missing), syn)
+        return no_data(f"potential_outcome_quadrants.{QUADRANT_ARM} 에 키가 없다: " + ", ".join(missing), syn)
+    total = sum(vals[k] for k in QUADRANTS)
+    syn["quadrant_sum"] = _r(total, 4)
+    if abs(total - 1) > 0.005:
+        return no_data(f"4분면 합이 {total:.4f} — 1 이 아니다. 단위(소수 / _bp)나 정의를 확인해야 판정할 수 있다", syn)
+    p, d, ate = vals["persuadable"], vals["sleeping_dog"], vals["ate"]
     gap = 100 * (p - d - ate)
     syn["identity_gap_pp"] = _r(gap, 3)
-    pop = ctx.guardrail.get("sleeping_dog_bp") if isinstance(ctx.guardrail, dict) else None
-    basis = ""
-    if isinstance(ctx.guardrail.get("response_mix_bp"), dict):
-        syn["population_sleeping_dog_pct_ref"] = _r(pop / 100, 2) if isinstance(pop, (int, float)) else None
-        basis = (" 시뮬레이터 guardrails 출력(bp)에서 T3 의 반응 유형 positive/negative 와 ate_bp.T3(같은 활성 고객 모집단)을 읽었다."
-                 " 반응 '성향' 유형이 잠재결과 4분면(처치 때만 구매 / 처치 때만 미구매)과 같은 정의가 아니면 항등식은 성립하지 않는다 —"
-                 " 그 경우 실패는 정의 불일치를 뜻한다. 전 고객 Sleeping Dog(sleeping_dog_bp)은 참고값.")
     parts = {"sleeping_dog": judge(100 * d, 8, 15), "persuadable": judge(100 * p, 11, 21),
              "identity": "pass" if abs(gap) <= 0.5 else "fail"}
-    return Result(syn, worst(list(parts.values())), "ground truth 유형 비율. 항등식 P − D = ATE 를 ±0.5%p 로 검사." + basis, parts)
+    note = (f"ground truth 잠재결과 4분면({QUADRANT_ARM}). P = 처치 때만 구매, D = 처치 때만 미구매. "
+            "항등식 P − D = ATE 를 ±0.5%p 로 검사(값은 이 스크립트가 다시 계산하고, 리포트의 identity_gap_pp 는 함께 싣는다).")
+    rep = q.get("identity_gap_pp")
+    if isinstance(rep, (int, float)) and abs(rep - gap) > 0.01:
+        note += f" ★ 리포트의 identity_gap_pp({rep})가 다시 계산한 값({gap:.3f})과 다르다."
+    return Result(syn, worst(list(parts.values())), note, parts)
 
 
 def f17(ctx: Context) -> Result:
@@ -983,11 +1012,11 @@ def _fmt_syn(m: dict) -> str:
         "F9": lambda s: f"{s['cart_abandonment_pct']}%",
         "F10": lambda s: f"{s.get('share')}",
         "F11": lambda s: f"{s['rate']} (n={s['n_new_buyers']})",
-        "F12": lambda s: f"{s['churn_pct_mean']}%",
+        "F12": lambda s: f"{s['churn_pct_mean']}% (§4.1) · 참고 180일 {_na(s.get('ref_churn_180d_pct_mean'))}%",
         "F13": lambda s: f"{s['share_returned_after_42d_gap']} (n={s['n_returned']})",
         "F14": lambda s: f"{s['ate_pp']}%p ({s.get('basis')})",
         "F15": lambda s: f"{s['rate_pct']}%",
-        "F16": lambda s: f"D {_na(s['sleeping_dog_pct'])}% · P {_na(s['persuadable_pct'])}% · 항등식 차 {_na(s['identity_gap_pp'])}%p",
+        "F16": lambda s: f"D {_na(s.get('sleeping_dog_pct'))}% · P {_na(s.get('persuadable_pct'))}% · 항등식 차 {_na(s.get('identity_gap_pp'))}%p",
         "F17": lambda s: f"{s.get('share_non_coupon')}",
     }[fid]
     try:

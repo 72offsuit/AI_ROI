@@ -213,19 +213,36 @@ class TestFunnelAndChurn(unittest.TestCase):
                    category="dairy", quantity=1, unit_price=1000)]
         self.assertEqual(rc.f9(ctx_of(rows)).verdict, "no_data")
 
-    def test_f12_churn_is_eligible_without_purchase_in_42_days(self):
-        rows = []
+    def _f12_rows(self):
+        rows = [ev(1, 0, "session_start", session_id="S-C00000001-0", page_type="home")]   # 관측 시작 = 0일
         for c in range(1, 11):
             rows.append(buy(c, 10))
-            if c <= 8:                                        # 8명은 T0 뒤에도 산다
+            if c <= 8:                                        # 8명은 T0 뒤에도 20일마다 산다
                 rows += [buy(c, d) for d in range(60, 160, 20)]
         rows.append(ev(1, 159.5, "session_start", session_id="S-C00000001-9", page_type="home"))
-        r = rc.f12(ctx_of(rows))
-        first = r.synthetic["by_T0"][0]
-        self.assertEqual(first["eligible"], 10)
-        self.assertEqual(first["churn_pct"], 20.0)
-        self.assertEqual(r.synthetic["churn_pct_mean"], 20.0)
-        self.assertEqual(r.verdict, "pass")
+        return rows
+
+    def test_f12_uses_data_spec_41_eligible_and_forward_label(self):
+        customers = pd.DataFrame([{"customer_id": f"C{c:08d}", "signup_date": "2024-01-01"} for c in range(1, 11)])
+        r = rc.f12(ctx_of(self._f12_rows(), exchange={"customers": customers}))
+        by = {row["T0"]: row for row in r.synthetic["by_T0"]}
+        self.assertEqual(list(by), ["2025-02-26", "2025-03-28", "2025-04-27"])   # T0 = 56·86·116일
+        self.assertEqual((by["2025-02-26"]["eligible_spec41"], by["2025-02-26"]["churn_spec41_pct"]), (10, 20.0))
+        # 86일: 8명은 마지막 구매가 6일 전(80일) → §4.1 의 14일 조건으로 빠지고 이탈 2명만 남는다
+        self.assertEqual((by["2025-03-28"]["eligible_spec41"], by["2025-03-28"]["churn_spec41_pct"]), (2, 100.0))
+        self.assertEqual(by["2025-03-28"]["eligible_180d"], 10)                  # 참고 정의는 10명 그대로
+        self.assertEqual(by["2025-03-28"]["churn_180d_pct"], 20.0)
+        self.assertAlmostEqual(r.synthetic["churn_pct_mean"], round((20 + 100 + 20) / 3, 2))
+        self.assertEqual(r.synthetic["population"], "data_spec §4.1 eligible")
+        self.assertEqual(r.verdict, "fail")
+        self.assertIn("15~25%", r.note)
+        self.assertIn("28.6~31.8%", r.note)
+
+    def test_f12_tenure_below_60_days_is_not_eligible(self):
+        customers = pd.DataFrame([{"customer_id": f"C{c:08d}", "signup_date": "2025-01-05"} for c in range(1, 11)])
+        r = rc.f12(ctx_of(self._f12_rows(), exchange={"customers": customers}))
+        self.assertEqual(r.synthetic["by_T0"][0]["eligible_spec41"], 0)          # 56일 시점 가입 52일
+        self.assertIsNone(r.synthetic["by_T0"][0]["churn_spec41_pct"])
 
     def test_f13_detects_return_after_long_gap(self):
         rows = [buy(1, d) for d in (0, 10, 70)] + [buy(2, d) for d in (0, 10, 20)]
@@ -335,30 +352,68 @@ class TestTreatmentFacts(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_DEPS, "BLOCKED: numpy/pandas 미설치")
 class TestGuardrailFacts(unittest.TestCase):
+    @staticmethod
+    def quads(**t3):
+        base = {"persuadable": 0.15, "sleeping_dog": 0.10, "sure_thing": 0.55, "lost_cause": 0.20,
+                "ate": 0.05, "identity_gap_pp": 0.0}
+        base.update(t3)
+        return {"potential_outcome_quadrants": {"T3": base, "T2": dict(base)}}
+
     def test_identity_holds(self):
-        g = {"ate": 0.05, "sleeping_dog_rate": 0.10, "persuadable_rate": 0.152}
-        r = rc.f16(ctx_of([buy(1, 0)], guardrail=g))
-        self.assertEqual(r.synthetic["identity_gap_pp"], 0.2)
+        r = rc.f16(ctx_of([buy(1, 0)], guardrail=self.quads()))
+        self.assertEqual(r.synthetic["identity_gap_pp"], 0.0)
+        self.assertEqual(r.synthetic["quadrant_sum"], 1.0)
+        self.assertEqual(r.synthetic["other_arms"], ["T2"])
         self.assertEqual(r.verdict, "pass")
 
     def test_identity_broken_fails(self):
-        g = {"guardrails": {"ate": {"value": 0.05}, "sleeping_dog_rate": 0.10, "persuadable_rate": 0.20}}
-        self.assertEqual(rc.f16(ctx_of([buy(1, 0)], guardrail=g)).parts["identity"], "fail")
+        r = rc.f16(ctx_of([buy(1, 0)], guardrail=self.quads(ate=0.03)))
+        self.assertEqual(r.parts["identity"], "fail")
+        self.assertEqual(r.synthetic["identity_gap_pp"], 2.0)
+        self.assertIn("identity_gap_pp(0.0)", r.note)        # 리포트 값과 재계산 값이 다르면 적는다
 
-    def test_simulator_bp_format(self):
+    def test_bp_suffix_is_read_as_basis_points(self):
+        q = {"persuadable_bp": 1500, "sleeping_dog_bp": 1000, "sure_thing_bp": 5500, "lost_cause_bp": 2000, "ate_bp": 500}
+        r = rc.f16(ctx_of([buy(1, 0)], guardrail={"potential_outcome_quadrants": {"T3": q}}))
+        self.assertEqual(r.synthetic["persuadable_pct"], 15.0)
+        self.assertEqual(r.verdict, "pass")
+
+    def test_response_mix_is_not_a_substitute(self):
         g = {"ate_bp": {"T3": 462}, "sleeping_dog_bp": 1100,
              "response_mix_bp": {"T3": {"positive": 1500, "neutral": 7462, "negative": 1038}}}
         r = rc.f16(ctx_of([buy(1, 0)], guardrail=g))
-        self.assertEqual(r.synthetic["persuadable_pct"], 15.0)
-        self.assertEqual(r.synthetic["sleeping_dog_pct"], 10.38)
-        self.assertEqual(r.synthetic["population_sleeping_dog_pct_ref"], 11.0)
-        self.assertEqual(r.verdict, "pass")
-
-    def test_missing_keys_are_no_data(self):
-        r = rc.f16(ctx_of([buy(1, 0)], guardrail={"ate_bp": {"T3": 462}}))
         self.assertEqual(r.verdict, "no_data")
-        self.assertIn("persuadable_rate", r.note)
+        self.assertIn("잠재결과 4분면 미제공", r.note)
         self.assertEqual(rc.f16(ctx_of([buy(1, 0)])).verdict, "no_data")
+
+    def test_quadrants_that_do_not_sum_to_one_are_no_data(self):
+        r = rc.f16(ctx_of([buy(1, 0)], guardrail=self.quads(persuadable=15)))   # 퍼센트로 잘못 적음
+        self.assertEqual(r.verdict, "no_data")
+        self.assertIn("합이", r.note)
+
+    def test_missing_quadrant_key_is_no_data(self):
+        g = self.quads()
+        del g["potential_outcome_quadrants"]["T3"]["lost_cause"]
+        r = rc.f16(ctx_of([buy(1, 0)], guardrail=g))
+        self.assertEqual(r.verdict, "no_data")
+        self.assertIn("lost_cause", r.note)
+
+
+@unittest.skipUnless(HAVE_DEPS, "BLOCKED: numpy/pandas 미설치")
+class TestAssignmentsInput(unittest.TestCase):
+    def test_file_or_directory_of_batches(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "T0-20250630.json").write_text(json.dumps(
+                {"assigned_at": "2025-06-30T09:00:00+09:00", "assignments": {"C00000001": "T3", "C00000002": "T0"}}))
+            (d / "T0-20250730.json").write_text(json.dumps(
+                [{"assigned_at": "2025-07-30T09:00:00+09:00", "assignments": {"C00000003": "T0"}}]))
+            a = rc.load_assignments(d)
+            one = rc.load_assignments(d / "T0-20250630.json")
+        self.assertEqual(len(a), 3)
+        self.assertEqual(sorted(a["treatment_id"]), ["T0", "T0", "T3"])
+        self.assertEqual(str(a["assigned_at"].iloc[0].tz), "Asia/Seoul")
+        self.assertEqual(len(one), 2)
 
 
 @unittest.skipUnless(HAVE_DEPS, "BLOCKED: numpy/pandas 미설치")
