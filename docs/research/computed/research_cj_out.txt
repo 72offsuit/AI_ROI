@@ -1,0 +1,34 @@
+households 2469 baskets 155370 span 2017-01-01 2018-01-01 weeks 52.3
+baskets/hh/week mean 1.20 median 0.82 p10 0.17 p90 2.62 CV 1.107 gamma_shape 0.82
+basket value $ median 17.61 mean 29.58 p10 2.97 p90 71.28 ln-sd(all baskets) 1.227
+hh median basket: median 19.10 ln-sd across hh 0.720
+within-hh ln-sd median 0.963
+hh mean basket CV across hh 0.650
+baskets>=$20 share 0.460 median 39.51 ln-sd 0.591
+gap(days between shopping days) mean 6.32 median 3 p75 7 p90 13 p95 21 p99 51
+share gaps >= 28: 0.0314 ; hh with any gap>=28: 0.626
+share gaps >= 42: 0.0151 ; hh with any gap>=42: 0.435
+share gaps >= 60: 0.0074 ; hh with any gap>=60: 0.283
+share gaps >= 90: 0.0031 ; hh with any gap>=90: 0.141
+hh mean gap median 8.70 ln-sd 0.893
+gap between >=$20 trips mean 10.82 median 6 p90 23 p95 36
+hh inactive >= 28 days at data end: 0.189
+hh inactive >= 42 days at data end: 0.134
+hh inactive >= 60 days at data end: 0.090
+hh inactive >= 90 days at data end: 0.058
+hh active in H1: 2393 ; of those no purchase in last 42 days: 0.126
+top20% hh share of sales 0.545 ; top10% 0.350
+targeted hh-campaign pairs 6589 ; redeemed>=1 coupon: 0.1202 ; targeted hh 1559 ; hh redeemed any 0.2630
+                   mean  size
+campaign_type                
+Type A         0.165616  3647
+Type B         0.065034  2368
+Type C         0.059233   574
+baskets with coupon_disc<0 or >0 share: 0.0632
+[폐기-집계 결함: 첫 공백만 셈, 근거로 쓰지 않음] N=28: hh reaching 28-day lapse: 1627 ; later returned within data: 1545 (0.950) ; never returned by data end: 82
+[폐기-집계 결함: 첫 공백만 셈, 근거로 쓰지 않음] N=42: hh reaching 42-day lapse: 1185 ; later returned within data: 1074 (0.906) ; never returned by data end: 111
+[폐기-집계 결함: 첫 공백만 셈, 근거로 쓰지 않음] N=60: hh reaching 60-day lapse: 819 ; later returned within data: 698 (0.852) ; never returned by data end: 121
+[폐기-집계 결함: 첫 공백만 셈, 근거로 쓰지 않음] N=90: hh reaching 90-day lapse: 465 ; later returned within data: 348 (0.748) ; never returned by data end: 117
+T0 2017-07-01 eligible(180d active) 2393 churn42 0.107 | subset last purchase>=14d ago n=725 churn42 0.286
+T0 2017-09-01 eligible(180d active) 2404 churn42 0.131 | subset last purchase>=14d ago n=741 churn42 0.318
+T0 2017-11-01 eligible(180d active) 2413 churn42 0.114 | subset last purchase>=14d ago n=720 churn42 0.289

@@ -16,6 +16,7 @@
 |---|---|---|
 | **관측** `(observability)/` | `src/measurement/` | **C1 에서 구현** — 7화면 |
 | **결과** `(results)/` | `src/decision/` | **이후 사이클.** 사이드바에 비활성으로 노출하되 **라우트 파일을 만들지 않는다.** 빈 디렉터리는 "구현했다"로 읽힌다 |
+| **스프린트 결과** `(sprint)/sprint/*` | sprint-v0 파이프라인 — `results/sprint-v0/latest/` 8종 | **이슈 147 — 중간발표용 7화면.** 위 `(results)/` 와 별개다(측정 계약 봉투가 아니라 스프린트 파일을 읽는다). 목업은 `AIROI_SPRINT_SOURCE=mock`(`npm run dev:sprint-mock`)일 때만 쓰고 화면마다 `목업` 배지가 붙는다 — **실파일이 없다고 목업으로 자동 대체하지 않는다.** 숫자 포맷은 `src/lib/format/sprint.ts` 한 곳에서만 한다(DG-3 의 문서화된 예외 — 스프린트 파일에 `*_formatted` 가 없다). `realism_report.json` 은 DG-1 때문에 `docs/research/` 가 아니라 `results/sprint-v0/latest/` 의 사본을 읽는다 |
 
 ---
 

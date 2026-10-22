@@ -641,8 +641,8 @@ revenue_treatment</pre></article>
 <dt>완전성</dt><dd>Key·라벨 결측 0%. Feature 결측률은 항목별 5% 미만(단, <code>is_short_history=1</code> 고객 제외).</dd>
 <dt>생성 이탈률</dt><dd>Generated Churn Rate가 <b>15% ≤ rate ≤ 25%</b> (SRS SIM-005). 벗어나면 GATE 1 이전에 감쇠 파라미터 <code>λ</code>를 조정한다.</dd>
 <dt>실험 균형</dt><dd>§4.2 Balance Check 전 항목 통과. <code>|SMD| &lt; 0.1</code>.</dd>
-<dt>처치 강도</dt><dd>ATE 3.0~6.0%p · 쿠폰 사용률 25~40% · Sleeping Dog 8~15% (§4.3 가드레일).</dd>
-<dt>4분면 분포</dt><dd>Persuadables 20~30% · Sure Things 30~40% · Lost Causes 20~30% · Sleeping Dogs 8~15%.</dd>
+<dt>처치 강도</dt><dd>ATE 3.0~6.0%p · 쿠폰 사용률 5~20%(분모: 쿠폰 처치군 전체 중 유효기간 내 사용 · 2026-10-22 25~40% 에서 교정, docs/research/data_grounding.md §3-1) · Sleeping Dog 8~15% (§4.3 가드레일).</dd>
+<dt>4분면 분포</dt><dd>Persuadables 11~21%(2026-10-22 교정 — 항등식 P − D = ATE, docs/research/data_grounding.md §3-2) · Sure Things 30~40% · Lost Causes 20~30% · Sleeping Dogs 8~15%.</dd>
 <dt>재현성</dt><dd>동일 seed·동일 config로 재실행 시 <code>events.parquet</code>의 SHA-256이 일치한다(NFR-001).</dd>
 </dl>
 <p>모든 검사는 <code>src/measurement/validate.py</code>에서 실행하고 <code>results/data_quality_report.json</code>에 결과를 남긴다. 하나라도 실패하면 파이프라인은 <b>중단</b>한다(경고로 넘어가지 않는다).</p>
@@ -1037,7 +1037,7 @@ for k, T0 in enumerate(campaign_index_dates):             # 1M / 6M / 12M … �
 <tr><td>20,000명 생성으로는 Eligible 기준 T/C 각 10,000명을 못 채운다</td><td>생성 고객 수를 <b>26,000명</b>으로 상향</td><td>§3.1</td></tr>
 <tr><td>Uplift에 Temporal Split을 어떻게 적용하나</td><td>단일 T0 런은 고객 분할 + Churn 한정 시점 분할. <b>다중 T0(rolling) 런에서는 Uplift에도 진짜 시점 분할</b>이 성립 — 시뮬레이터가 시간을 임의 진행할 수 있기에 가능</td><td>§10.1 · §10.4</td></tr>
 <tr><td>시뮬레이터인데 반사실을 버리고 있다</td><td>Common Random Numbers로 <code>Y(0)</code>·<code>Y(1)</code> 이중 실행 → <b>Ground-truth CATE</b> 확보. Qini<sub>oracle</sub> 대비 달성률과 PEHE를 사후 진단 지표로 추가. <b>모델 입력은 코드 레벨로 차단</b></td><td>§4.4</td></tr>
-<tr><td>처치 효과가 너무 강하면 Uplift 문제가 자명해진다 (PRD Risk 4)</td><td>ATE 3~6%p · 쿠폰 사용률 25~40% · Sleeping Dog 8~15% <b>가드레일</b>을 두고 GATE 1 이전에만 조정</td><td>§4.3 · §9</td></tr>
+<tr><td>처치 효과가 너무 강하면 Uplift 문제가 자명해진다 (PRD Risk 4)</td><td>ATE 3~6%p · 쿠폰 사용률 5~20% · Sleeping Dog 8~15% <b>가드레일</b>을 두고 GATE 1 이전에만 조정</td><td>§4.3 · §9</td></tr>
 <tr><td>운영 이탈 정의를 그대로 라벨로 쓰면 Feature가 라벨을 결정한다 (Risk 7)</td><td>라벨을 <b>전향적 42일 window</b>로 재정의해 구조적으로 차단</td><td>§5</td></tr>
 <tr><td>전체 평균 성능은 경계 구간의 실패를 가린다</td><td><b>Stress Slice 6종</b>을 Test 안에서 별도 보고</td><td>§10.3</td></tr>
 <tr><td>전략 간 시뮬레이션 잡음이 비교를 흐린다</td><td>전략 실행에도 Common Random Numbers 공유 + <code>snapshot/restore</code>로 동일 시점 분기. 차이가 타게팅에서만 오도록 고정</td><td>§13.2 · §13.4</td></tr>
