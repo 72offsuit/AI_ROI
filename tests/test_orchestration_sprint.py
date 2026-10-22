@@ -43,6 +43,7 @@ DECISION_MODULES = (
     "src.decision.strategies",
     "src.decision.roi",
     "src.decision.ab_test",
+    "src.decision.optimize",
 )
 KST = timezone(timedelta(hours=9))
 
@@ -89,7 +90,10 @@ class FakeDecision:
                 "src.decision.uplift", fit_uplift=self.fit_uplift, predict_cate=self.predict_cate,
                 evaluate_uplift_models=self.evaluate_uplift_models,
             ),
-            "src.decision.segments": module("src.decision.segments", assign_segments=self.assign_segments),
+            "src.decision.segments": module("src.decision.segments", assign_segments=self.assign_segments,
+                                            segment_stats=self.segment_stats),
+            "src.decision.optimize": module("src.decision.optimize", what_if=self.what_if,
+                                            what_if_budgets=self.what_if_budgets),
             "src.decision.strategies": module(
                 "src.decision.strategies", plan=self.plan, planning_costs=self.planning_costs,
                 s1_eligibility=self.s1_eligibility,
@@ -138,17 +142,20 @@ class FakeDecision:
     # churn -----------------------------------------------------------------
     def evaluate_churn_models(self, X, y, seed):
         self.calls.append(("evaluate_churn_models", {"n": len(y), "seed": seed}))
-        return {"models": {"fake": {"auc": None}}, "best_model": "fake"}
+        return {"label_def": "fake", "n": int(len(y)), "pos_rate": float(y.mean()),
+                "models": [{"name": "fake", "kind": "proposed", "cv": {"roc_auc": {"mean": None, "std": None}}}],
+                "best_proposed": "fake"}
 
-    def fit_best_churn(self, X, y, seed):
+    def fit_best_churn(self, X, y, seed, *, eval_result=None):
+        self.calls.append(("fit_best_churn", {"eval_result": eval_result is not None}))
         return {"kind": "fake-churn"}
 
     def predict_churn_proba(self, model, X):
         return (1.0 / (1.0 + X["n_events"])).rename("churn_p")
 
-    def evaluate_temporal_holdout(self, model, X_test, y_test):
-        self.calls.append(("evaluate_temporal_holdout", {"n": len(y_test)}))
-        return {"n": int(len(y_test))}
+    def evaluate_temporal_holdout(self, model_factory, X_train, y_train, X_test, y_test, *, seed=0):
+        self.calls.append(("evaluate_temporal_holdout", {"factory": model_factory, "n": len(y_test)}))
+        return {"name": model_factory, "scheme": "temporal_holdout", "n_test": int(len(y_test)), "roc_auc": 0.5}
 
     # clv -------------------------------------------------------------------
     def fit_clv(self, X, future_value):
@@ -174,6 +181,20 @@ class FakeDecision:
         return pd.DataFrame({t: base * (i + 1) * 0.01 for i, t in enumerate(("T1", "T2", "T3", "T4"))})
 
     # segments · strategies · roi · ab --------------------------------------
+    def segment_stats(self, segments, churn_p, cate, clv=None):
+        return [{"segment": seg, "prd_id": None, "customer_count": int((segments == seg).sum()),
+                 "ratio": float((segments == seg).mean()), "average_clv": None,
+                 "average_churn_probability": float(churn_p[segments == seg].mean()), "average_uplift": None}
+                for seg in sorted(segments.unique())]
+
+    def what_if_budgets(self, base_budget_krw, ratios=(0.5, 1.0, 2.0)):
+        return [base_budget_krw * r for r in ratios]
+
+    def what_if(self, budgets, expected_gain, cost, expected_conversion=None, expected_revenue=None,
+                objective="net"):
+        self.calls.append(("what_if", {"budgets": list(budgets), "columns": list(expected_gain.columns)}))
+        return [{"budget_krw": b, "target_count": 0} for b in budgets]
+
     def assign_segments(self, churn_p, cate, clv):
         return pd.Series(["high" if p > churn_p.median() else "low" for p in churn_p], index=churn_p.index)
 
@@ -203,11 +224,21 @@ class FakeDecision:
         return result
 
     def summarize_strategy(self, metrics, baseline_metrics):
-        return {"incremental_revenue_krw": metrics["revenue"] - baseline_metrics["revenue"]}
+        return {"id": metrics["id"], "name": metrics.get("name"), "n_targeted": metrics["n_targeted"],
+                "revenue": metrics["revenue_krw"], "marketing_cost": None, "contribution_profit": None,
+                "churn_rate": metrics["churn_rate"], "roi": None,
+                "incremental_profit_vs_S1": None,
+                "incremental_revenue_krw": metrics["revenue_krw"] - baseline_metrics["revenue_krw"]}
 
-    def analyze_ab(self, df, arm_col, outcome_col, control="T0"):
-        self.calls.append(("analyze_ab", {"outcome": outcome_col, "control": control}))
-        return {"n": int(len(df)), "arms": sorted(df[arm_col].unique().tolist())}
+    def analyze_ab(self, df, arm_col, outcome_col, control="T0", expected_ratio=None):
+        self.calls.append(("analyze_ab", {"outcome": outcome_col, "control": control,
+                                          "expected_ratio": expected_ratio}))
+        arms = {a: int((df[arm_col] == a).sum()) for a in sorted(df[arm_col].unique())}
+        return {"outcome": outcome_col, "arms": arms, "control": control, "alpha": 0.05, "power_target": 0.8,
+                "mde": None, "srm": {"chi2": 0.1, "p_value": 0.9, "srm_detected": False},
+                "comparisons": {a: {"rate_control": 0.5, "rate_treatment": 0.5, "diff": 0.0, "ci95": [-0.1, 0.1],
+                                    "p_value": 1.0, "p_value_holm": 1.0, "achieved_power": 0.05}
+                                for a in arms if a != control}}
 
 
 def _quiet():
@@ -298,11 +329,16 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         comparison = _read(self.run_dir, "strategy_comparison")
         self.assertEqual("S1", comparison["baseline"])
         for strategy in rs.STRATEGIES:
-            entry = comparison["strategies"][strategy]
+            entry = comparison["strategy_details"][strategy]
             self.assertEqual(len(self.fake.plans[strategy]), entry["n_assigned"])
             self.assertIn("summary", entry)
             self.assertEqual("ok", entry["sim_metrics"]["events_total"]["status"])
-        self.assertEqual(0, comparison["strategies"]["S1"]["summary"]["incremental_revenue_krw"])
+        self.assertEqual(0, comparison["strategy_details"]["S1"]["summary"]["incremental_revenue_krw"])
+        # 대시보드 StrategyComparison — S0~S5 순서의 행 목록, 숫자 예산, 창 끝
+        self.assertEqual(list(rs.STRATEGIES), [row["id"] for row in comparison["strategies"]])
+        self.assertTrue(all(row["status"] == "ok" for row in comparison["strategies"]))
+        self.assertIsInstance(comparison["budget_krw"], float)
+        self.assertIsNotNone(comparison["window"]["end"])
 
     def test_s1_runs_unbounded_and_its_cost_is_the_ai_budget(self) -> None:
         plans = {c[1]["strategy"]: c[1] for c in self.fake.calls if c[0] == "plan"}
@@ -310,24 +346,42 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         for key in ("days_since_last_purchase", "lifetime_order_count", "eligible"):
             self.assertIn(key, plans["S1"]["keys"])
         comparison = _read(self.run_dir, "strategy_comparison")
-        s1 = comparison["strategies"]["S1"]
+        s1 = comparison["strategy_details"]["S1"]
         self.assertGreater(s1["n_targeted"], 0, "가짜 주문으로 S1 대상이 생겨야 한다")
         self.assertEqual(s1["n_targeted"] * 7030, s1["planned_cost_krw"])
         budget = comparison["budget"]
-        self.assertIn("S1 계획 비용", budget["source"])  # sim-0.3 은 marketing_cost 를 만들지 않는다
+        self.assertIn("C_rule", budget["source"])
         self.assertEqual(s1["planned_cost_krw"], budget["planning_budget_krw"])
         for strategy in ("S2", "S3", "S4", "S5"):
             self.assertEqual(budget["planning_budget_krw"], plans[strategy]["budget"], strategy)
         self.assertEqual({"lifetime_order_count": "applied", "eligible": "applied"},
                          s1["s1_eligibility"]["conditions"])
 
-    def test_roi_metrics_use_contract_keys_without_filling(self) -> None:
-        s0 = _read(self.run_dir, "strategy_comparison")["strategies"]["S0"]["metrics"]
-        for key in ("id", "n_targeted", "treatment_mix", "revenue", "marketing_cost",
-                    "contribution_profit", "churn_rate"):
+    def test_roi_metrics_use_candidate_keys_without_filling(self) -> None:
+        s0 = _read(self.run_dir, "strategy_comparison")["strategy_details"]["S0"]["metrics"]
+        for key in ("id", "n_targeted", "treatment_mix", "sim_revenue", "sim_marketing_cost",
+                    "sim_contribution_profit", "sim_churn_rate", "revenue_krw", "churn_rate",
+                    "planned_treatment_cost_krw"):
             self.assertIn(key, s0)
-        self.assertIsNone(s0["marketing_cost"])  # 측정 계층이 만들지 않으면 None — 계획 비용으로 대신하지 않는다
-        self.assertEqual("events", s0["metric_sources"]["churn_rate"])
+        self.assertIsNone(s0["sim_marketing_cost"])  # 측정 계층이 만들지 않으면 None — 0 이 아니다
+
+    def test_dashboard_shapes(self) -> None:
+        churn = _read(self.run_dir, "churn_eval")
+        self.assertIsInstance(churn["models"], list)  # 평가 결과가 최상위에 펼쳐진다
+        self.assertEqual({"roc_auc": 0.5}, churn["models"][0]["temporal_holdout"])
+        self.assertEqual("fake", [c[1]["factory"] for c in self.fake.calls if c[0] == "evaluate_temporal_holdout"][0])
+        ab = _read(self.run_dir, "ab_test")
+        self.assertEqual({"chi2", "p", "ok"}, set(ab["srm"]))
+        self.assertEqual(["T0", "T1", "T2", "T3", "T4"], [a["arm"] for a in ab["arms"]])
+        ratio = [c[1]["expected_ratio"] for c in self.fake.calls if c[0] == "analyze_ab"][0]
+        self.assertEqual(0.5, ratio["T0"])  # 설계 비율로 SRM 을 검사한다
+        segments = _read(self.run_dir, "segments")["segments"]
+        self.assertTrue(all({"id", "name", "n", "share", "avg_churn_p"} <= set(row) for row in segments))
+        meta = _read(self.run_dir, "run_meta")
+        self.assertEqual(SMALL["num_customers"], meta["N"])
+        self.assertIsInstance(meta["simulator_version"], str)
+        self.assertEqual("ok", meta["margin_rate"]["status"])
+        self.assertEqual(3, len(_read(self.run_dir, "strategy_comparison")["what_if"]["rows"]))
 
     def test_realism_report_is_copied_next_to_results(self) -> None:
         meta = _read(self.run_dir, "run_meta")
@@ -340,7 +394,7 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         self.assertEqual(len(set(roots.values())), len(roots))
         for strategy in rs.STRATEGIES:
             self.assertTrue((Path(roots[strategy]) / "events").is_dir(), strategy)
-        self.assertEqual(0, _read(self.run_dir, "strategy_comparison")["strategies"]["S0"]["n_targeted"])
+        self.assertEqual(0, _read(self.run_dir, "strategy_comparison")["strategy_details"]["S0"]["n_targeted"])
 
     def test_primary_event_path_is_decision_loader(self) -> None:
         meta = _read(self.run_dir, "run_meta")
@@ -374,11 +428,11 @@ class TestSprintWithoutDecision(unittest.TestCase):
                 self.assertEqual("not_run", status[name]["status"], name)
                 self.assertTrue(status[name]["reason"], name)
             self.assertEqual("src.simulator.api.events", meta["event_source"])
-            s0 = _read(run_dir, "strategy_comparison")["strategies"]["S0"]
+            s0 = _read(run_dir, "strategy_comparison")["strategy_details"]["S0"]
             self.assertEqual("not_run", s0["event_outcomes"]["status"])
-            self.assertNotIn("event_revenue_krw", s0["metrics"])
+            self.assertNotIn("revenue_krw", s0["metrics"])
             # 시뮬레이터가 아직 만들지 않는 지표는 0 이 아니라 null 이다
-            self.assertIsNone(s0["metrics"]["revenue"])
+            self.assertIsNone(s0["metrics"]["sim_revenue"])
             # purchase 를 만들지 않는 판 — S1 입력을 계산하지 않고 사유를 남긴다
             self.assertFalse(meta["purchase_generated"]["value"])
             self.assertIn("events.purchase", meta["purchase_generated"]["detail"])
@@ -418,14 +472,12 @@ class TestHelpers(unittest.TestCase):
 
     def test_budget_priority(self) -> None:
         basis = rs.CostBasis({"T0": 0, "T3": 7000}, 30, 100_000)
-        s1 = {"planned_cost_krw": 70_300.0, "metrics": {"marketing_cost": None}}
+        s1 = {"planned_cost_krw": 70_300.0, "metrics": {"sim_marketing_cost": 150_000.0}}
         explicit = rs.resolve_budget(500_000, s1, basis, 2000)
-        self.assertEqual((500_000, 400_000), (explicit["budget_total_krw"], explicit["planning_budget_krw"]))
-        actual = rs.resolve_budget(None, {**s1, "metrics": {"marketing_cost": 150_000.0}}, basis, 2000)
-        self.assertEqual(50_000, actual["planning_budget_krw"])
-        self.assertIn("실측", actual["source"])
+        self.assertEqual(500_000, explicit["planning_budget_krw"])  # --budget-krw 는 plan 예산 그대로
         planned = rs.resolve_budget(None, s1, basis, 2000)
-        self.assertEqual(70_300, planned["planning_budget_krw"])
+        self.assertEqual(70_300, planned["planning_budget_krw"])  # C_rule = S1 계획 비용 합
+        self.assertEqual(150_000, planned["s1_realized_marketing_cost_krw"])  # 실측은 참고로만
         fallback = rs.resolve_budget(None, None, basis, 26_000)
         self.assertEqual(8_833_000 - 100_000, fallback["planning_budget_krw"])
         self.assertIn("설계 추정", fallback["source"])
