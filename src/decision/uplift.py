@@ -108,6 +108,46 @@ def _regressor(seed: int):
     return HistGradientBoostingRegressor(random_state=seed, **BASE_LEARNER)
 
 
+def screen_features(Xp: pd.DataFrame) -> dict[str, list[str]]:
+    """학습에 쓸 수 없는 열 — **값이 전부 NaN** 이거나 **결측 없이 한 값뿐(상수)** 인 열.
+
+    전부 NaN 인 열은 sklearn 1.9 HistGB 의 비닝에서 ``ValueError: window shape cannot be
+    larger than input array shape`` 로 학습을 멈춘다(스프린트 통합 스모크에서 발견).
+    상수 열은 정보가 없다. 둘 다 **제외하고 목록을 남긴다** — 0 으로 채우지 않는다.
+    '한 값 + 결측' 열은 결측 여부 자체가 정보이므로 남긴다.
+    """
+    all_nan = [c for c in Xp.columns if Xp[c].isna().all()]
+    constant = [c for c in Xp.columns
+                if c not in all_nan and not Xp[c].isna().any() and Xp[c].nunique() <= 1]
+    return {"all_nan": all_nan, "constant": constant}
+
+
+@dataclass
+class _SubModel:
+    """기저 학습기 1 개 + 그것이 실제로 쓴 열. 열이 하나도 없으면 학습 표본의 평균을 낸다."""
+    cols: list[str]
+    est: Any = None
+    const: float | None = None
+    dropped: list[str] = field(default_factory=list)
+
+    def predict(self, Xdf: pd.DataFrame) -> np.ndarray:
+        if self.est is None:
+            return np.full(len(Xdf), self.const, dtype=float)
+        return self.est.predict(Xdf[self.cols])
+
+
+def _fit_sub(seed: int, Xdf: pd.DataFrame, y: np.ndarray) -> _SubModel:
+    """부분 표본(처치군 하나 등)에서도 전부 NaN·상수 열을 다시 걸러 학습한다.
+
+    전체 학습셋에서는 값이 있어도 **한 처치군 안에서만** 전부 NaN 인 열이 같은 오류를 낸다."""
+    scr = screen_features(Xdf)
+    drop = set(scr["all_nan"]) | set(scr["constant"])
+    cols = [c for c in Xdf.columns if c not in drop]
+    if not cols:
+        return _SubModel(cols=[], const=float(np.mean(y)), dropped=sorted(drop))
+    return _SubModel(cols=cols, est=_regressor(seed).fit(Xdf[cols], y), dropped=sorted(drop))
+
+
 # ── 모델 ─────────────────────────────────────────────────────────────────────
 
 @dataclass
@@ -119,6 +159,10 @@ class UpliftModel:
     propensity: dict[str, float] = field(default_factory=dict)
     n_by_arm: dict[str, int] = field(default_factory=dict)
     n_outcome_missing_excluded: int = 0
+    #: 학습셋 전체에서 제외한 열(``screen_features``). ``columns`` 에는 들어 있지 않다.
+    dropped_features: dict[str, list[str]] = field(default_factory=dict)
+    #: 하위 모델(처치군별 등)에서 **추가로** 제외한 열 — 부분 표본에서만 전부 NaN·상수인 열.
+    submodel_dropped: dict[str, list[str]] = field(default_factory=dict)
 
 
 def _threads():
@@ -143,31 +187,36 @@ def _fit_uplift(X: pd.DataFrame, treatment: pd.Series, y: pd.Series,
         raise ValueError(f"method 는 {METHODS} 중 하나다: {method!r}")
     X, treatment, y, n_missing = _check_inputs(X, treatment, y)
     Xp = _prep_X(X)
+    screened = screen_features(Xp)
+    drop = set(screened["all_nan"]) | set(screened["constant"])
+    Xp = Xp[[c for c in Xp.columns if c not in drop]]
     n_by_arm = {a: int((treatment == a).sum()) for a in ARMS}
     arms = [a for a in TREATED if n_by_arm[a] >= MIN_ARM_N]
     model = UpliftModel(method=method, columns=list(Xp.columns), arms=arms, n_by_arm=n_by_arm,
-                        n_outcome_missing_excluded=n_missing)
+                        n_outcome_missing_excluded=n_missing, dropped_features=screened)
     ctrl = (treatment == CONTROL).to_numpy()
+
+    def sub(name: str, seed_: int, Xdf: pd.DataFrame, target: np.ndarray) -> _SubModel:
+        m = _fit_sub(seed_, Xdf, target)
+        if m.dropped:
+            model.submodel_dropped[name] = m.dropped
+        model.models[name] = m
+        return m
 
     if method == "s_learner":
         use = treatment.isin([CONTROL, *arms]).to_numpy()
-        Xs = _with_arm_onehot(Xp[use], treatment[use], arms)
-        m = _regressor(seed)
-        m.fit(Xs, y[use].to_numpy())
-        model.models["s"] = m
+        sub("s", seed, _with_arm_onehot(Xp[use], treatment[use], arms), y[use].to_numpy())
         return model
 
-    mu0 = _regressor(seed).fit(Xp[ctrl], y[ctrl].to_numpy())
-    model.models[CONTROL] = mu0
+    mu0 = sub(CONTROL, seed, Xp[ctrl], y[ctrl].to_numpy())
     for i, a in enumerate(arms):
         ta = (treatment == a).to_numpy()
-        mu_t = _regressor(seed + i + 1).fit(Xp[ta], y[ta].to_numpy())
-        model.models[a] = mu_t
+        mu_t = sub(a, seed + i + 1, Xp[ta], y[ta].to_numpy())
         if method == "x_learner":
             d_t = y[ta].to_numpy() - mu0.predict(Xp[ta])          # 처치군의 대체 효과
             d_c = mu_t.predict(Xp[ctrl]) - y[ctrl].to_numpy()     # 대조군의 대체 효과
-            model.models[f"tau_t:{a}"] = _regressor(seed + 100 + i).fit(Xp[ta], d_t)
-            model.models[f"tau_c:{a}"] = _regressor(seed + 200 + i).fit(Xp[ctrl], d_c)
+            sub(f"tau_t:{a}", seed + 100 + i, Xp[ta], d_t)
+            sub(f"tau_c:{a}", seed + 200 + i, Xp[ctrl], d_c)
             model.propensity[a] = n_by_arm[a] / (n_by_arm[a] + n_by_arm[CONTROL])
     return model
 
@@ -186,6 +235,7 @@ def predict_cate(model: UpliftModel, X: pd.DataFrame) -> pd.DataFrame:
 
 
 def _predict_cate(model: UpliftModel, X: pd.DataFrame) -> pd.DataFrame:
+    # 학습 때 쓴 열 집합(model.columns — 제외 열 빠짐)으로 맞춘다. 하위 모델은 그중 자기 열만 쓴다.
     Xp = _prep_X(X, model.columns)
     out = pd.DataFrame(np.nan, index=X.index, columns=list(TREATED))
     if model.method == "s_learner":
@@ -338,8 +388,10 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
     selection = _select_method(X_tr, t_tr, y_tr, methods, primary_arm, seed, stratified)
 
     cates: dict[str, pd.DataFrame] = {}
+    fitted: dict[str, UpliftModel] = {}
     for m in methods:
-        cates[m] = predict_cate(fit_uplift(X_tr, t_tr, y_tr, method=m, seed=seed), X_te)
+        fitted[m] = fit_uplift(X_tr, t_tr, y_tr, method=m, seed=seed)
+        cates[m] = predict_cate(fitted[m], X_te)
 
     def rows_for(arm: str, curve: bool) -> list[dict[str, Any]]:
         sel = t_te.isin([CONTROL, arm]).to_numpy()
@@ -374,6 +426,12 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
         "best_method_selection": selection,
         "n": int(len(X)), "n_train": int(len(idx_tr)), "n_test": int(len(idx_te)),
         "n_outcome_missing_excluded": n_missing,
+        "feature_screening": {
+            "rule": "학습셋에서 전부 NaN 이거나 결측 없는 상수인 열은 제외(0 으로 채우지 않음)",
+            "train_dropped": screen_features(_prep_X(X_tr)),
+            "submodel_extra_dropped": {m: fitted[m].submodel_dropped for m in methods
+                                       if fitted[m].submodel_dropped},
+        },
         "seed": seed, "test_size": test_size, "split": "stratified_by_arm" if stratified else "random",
         "outcome_kind": "binary" if binary else "continuous",
         "arms": arms_n, "primary_arm": primary_arm,
