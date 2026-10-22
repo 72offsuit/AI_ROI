@@ -108,3 +108,54 @@ def write_derivation(hidden_root: Path, record: dict[str, object]) -> None:
 
 def derivations(hidden_root: Path) -> list[dict[str, object]]:
     return _records(hidden_root.joinpath(DERIVATIONS_DIR))
+
+
+# ── S4~S6(#143): 주문 기록 · Ground truth ────────────────────────────────────
+#
+# 주문(품목·주문 시점 원가 포함)은 세계 상태가 아니라 실행마다 따로 남긴다 — 상태가 주문 수에 비례해
+# 커지면 advance 마다 하는 정준 직렬화·다이제스트가 느려진다. 주문은 관측 가능한 값이라 교환 묶음으로 나간다.
+ORDERS_DIR = "orders"
+GROUND_TRUTH_DIR = "ground_truth"
+
+
+def default_ground_truth_root() -> Path:
+    return Path(__file__).resolve().parents[3].joinpath("data", "ground_truth", "simulator")
+
+
+def ground_truth_root(hidden_root: Path) -> Path:
+    """기본 숨김 루트면 `data/ground_truth/simulator/`, 시험·도구가 준 루트면 그 아래 `ground_truth/`."""
+    if hidden_root == default_hidden_root():
+        return default_ground_truth_root()
+    return hidden_root.joinpath(GROUND_TRUTH_DIR)
+
+
+def _jsonl(rows: list[dict[str, object]]) -> bytes:
+    return b"".join(canonical_json(row) + b"\n" for row in rows)
+
+
+def write_orders(hidden_root: Path, run_id: str, orders: list[dict[str, object]]) -> None:
+    atomic_write(hidden_root.joinpath(ORDERS_DIR, f"{run_id}.jsonl"), _jsonl(orders))
+
+
+def read_orders(hidden_root: Path, run_id: str) -> list[dict[str, object]] | None:
+    path = hidden_root.joinpath(ORDERS_DIR, f"{run_id}.jsonl")
+    if not path.is_file():
+        return None
+    return [json.loads(line) for line in path.read_text(encoding="ascii").splitlines() if line]
+
+
+def write_ground_truth(root: Path, name: str, rows: list[dict[str, object]]) -> Path:
+    path = root.joinpath(f"{name}.jsonl")
+    atomic_write(path, _jsonl(rows))
+    return path
+
+
+def write_json(path: Path, payload: object) -> None:
+    atomic_write(path, json.dumps(payload, ensure_ascii=False, sort_keys=True, indent=2).encode("utf-8") + b"\n")
+
+
+def write_jsonl(path: Path, rows: list[dict[str, object]]) -> None:
+    atomic_write(path, b"".join(
+        json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8") + b"\n"
+        for row in rows
+    ))

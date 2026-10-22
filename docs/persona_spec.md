@@ -9,8 +9,9 @@
 > | **코드** | `src/simulator/_internal/{genconfig,traits,fixedpoint,persona,world}.py` |
 > | **설명**(이 문서) | 위 셋을 한 흐름으로 묶는다. 숫자를 새로 정하지 않는다 |
 >
-> 현재 생성 config: `sim-gen-v2` · 생성 부분 다이제스트 `49bfe06b2edaa9d45ca653d98175d7458b90e7707dca1d00f57a28f9e4d4006d` · `SIMULATOR_VERSION` `sim-0.3`
+> 현재 생성 config: `sim-gen-v3` · 생성 부분 다이제스트 `77e3ca4100cd237f4f2610bca0ed9ff4ce503eb7929c36b17a921546f0dd7873` · `SIMULATOR_VERSION` `sim-0.4`
 > (S3 #77: P6 `signup_day_range` 추가 — `docs/decisions/DR-S3-p6-signup.md`. 페르소나·Trait 값은 `sim-gen-v1` 과 같다)
+> (S4~S6 #143: `behavior`·`catalog` 블록 추가 — Trait 이 행동·이탈·처치 반응을 구동한다. `docs/decisions/DR-S4-S6-sprint.md`. 페르소나·Trait 값은 그대로다)
 
 ---
 

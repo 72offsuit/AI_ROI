@@ -27,6 +27,7 @@ from src.simulator._internal import lineage as _lineage
 from src.simulator._internal import profiles as _profiles
 from src.simulator._internal import runtime as _runtime
 from src.simulator._internal import storage as _storage
+from src.simulator._internal import treatment as _treatment
 from src.simulator._internal import world as _wd
 
 if _typing.TYPE_CHECKING:
@@ -185,9 +186,10 @@ def advance(days: int) -> RunSummary:
         fmt = _lineage.write_format(root)
     start_bytes = _wd.encode(world)
     working = _decode_own(start_bytes)
+    orders: list[dict[str, object]] = []
     try:
         sink = _sk.EventSink(root, fmt=fmt)
-        written = sink.write_events(_engine.run(working, end_ms))
+        written = sink.write_events(_engine.run(working, end_ms, orders))
         if not written:
             raise SimulatorError(
                 f"생성한 이벤트 {written.rejected}건이 측정 계약을 어겼다: {written.problems[:3]}"
@@ -201,6 +203,7 @@ def advance(days: int) -> RunSummary:
     run_id = str(manifest["run_id"])
     end_bytes = _wd.encode(working)
     try:
+        _storage.write_orders(session.hidden_root, run_id, orders)
         _storage.write_sidecar(session.hidden_root, {
             "run_id": run_id,
             "parent_run_id": session.lineage_head,
@@ -307,6 +310,10 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
     전부 검사한 뒤 하나라도 틀리면 아무것도 적지 않는다. 키는 이 세계의 `^C\\d{8}$` 고객,
     값은 `^T[0-4]$`. 적은 배정은 다음 `advance` 의 계보 기록(또는 그 전에 부른 `save_state`)에 남는다.
 
+    의미(S6 #143): 배정 시각(지금의 세계 시각)에 노출 이벤트가 다음 `advance` 의 첫 순간에 기록되고,
+    효과는 그 시각부터 42일 지속한다. 다음 `apply_treatment` 가 덮어쓴다(`T0` 은 효과를 끝낸다).
+    배정된 고객마다 처치별 참 효과를 시뮬레이터 숨김 영역에 기록한다 — 호출자에게 돌려주지 않는다.
+
     Raises:
         TypeError: `assignments` 가 `Mapping` 이 아니다.
         NotInitializedError: 활성 세계가 없다.
@@ -338,8 +345,20 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
     now = world["now_ms"]
     customers = world["customers"]
     ordered = {cid: assignments[cid] for cid in sorted(assignments)}
+    try:
+        rows = _treatment.potential_outcomes(world, list(ordered))
+        for row in rows:
+            row["assigned"] = ordered[row["customer_id"]]
+        _storage.write_ground_truth(
+            _storage.ground_truth_root(session.hidden_root),
+            f"po-{world['world_id']}-{now}-{before[:16]}", rows,
+        )
+    except OSError as error:
+        raise SimulatorError(f"참 효과 기록을 쓰지 못했다: {_reason(error)} — 배정을 적지 않았다") from error
     for cid, tid in ordered.items():
-        customers[_wd.customer_index(cid)]["assignments"].append([now, tid])
+        customer = customers[_wd.customer_index(cid)]
+        customer["assignments"].append([now, tid])
+        world["queue"].append((now, cid, _engine.next_seq(customer), "treat"))
     session.pending.append({
         "kind": "apply_treatment",
         "at_ms": now,
@@ -410,7 +429,7 @@ def metrics(start: datetime, end: datetime) -> dict[str, sc.MetricValue]:
             )
     for name in _BUSINESS_METRICS:
         result[name] = _sc.MetricValue.not_run(
-            f"시뮬레이터 {version} 은 구매·이탈을 생성하지 않아 근거 이벤트가 없다",
+            f"시뮬레이터 {version} 의 metrics 는 건수만 센다 — 비즈니스 지표는 측정 계층(publish)이 계산한다",
             reason_code=_sc.ReasonCode.PRECONDITION_MISSING,
         )
     return result
@@ -510,22 +529,78 @@ def load_state(
 
 
 def exchange_bundle(until: datetime) -> dict[str, object]:
-    """교환 묶음(주문·품목·고객·카탈로그)을 낸다. 이 판은 주문을 만들지 않아 아무것도 쓰지 않는다.
+    """교환 묶음(주문·품목·고객·카탈로그, 계약 `commerce-exchange/v1` §11)을 출력 루트의 형제
+    `simulator_exchange/` 에 전량 스냅샷으로 쓴다. 이 세계 계보의 주문 중 `ordered_at < until` 만 싣는다.
 
     Returns:
-        `{"status": "not_run", "reason_code": "PRECONDITION_MISSING", "detail": …, "path": None}`.
+        `{"status": "ok", "path": 묶음 디렉터리, "orders": 주문 수, "order_items": 품목 수,
+        "customers": 고객 수, "generated_at": until(KST)}`.
 
     Raises:
         TypeError · ValueError: `events` 의 `until` 과 같다.
         NotInitializedError: 활성 세계가 없다.
+        OutputRootError: 계보의 실행에 주문 기록이 없거나 계보가 끊겼다.
+        SimulatorError: 묶음을 쓰지 못했다.
     """
     session = _active()
-    _instant_ms("until", until, session)
+    upper = _instant_ms("until", until, session)
+    chain, _ = _verified_chain(session)
+    stamp = _clock.timestamp(upper)
+    orders: list[dict[str, object]] = []
+    for record in chain:
+        run_id = str(record["run_id"])
+        try:
+            rows = _storage.read_orders(session.hidden_root, run_id)
+        except (OSError, ValueError) as error:
+            raise OutputRootError(f"실행 {run_id} 의 주문 기록을 읽지 못했다: {type(error).__name__}") from error
+        if rows is None:
+            raise OutputRootError(f"실행 {run_id} 의 주문 기록이 없다 — 이 판 이전의 계보다")
+        orders.extend(row for row in rows if str(row["ordered_at"]) < stamp)
+    world = session.world
+    customers = [
+        {"customer_id": c["customer_id"], "signup_date": _clock.timestamp(c["signup_ms"])[:10]}
+        for c in world["customers"] if c["signup_ms"] < upper
+    ]
+    catalog = [
+        {"snapshot_at": stamp, "product_id": p["product_id"], "category": p["category"],
+         "selling_price": p["unit_price"], "unit_cost": p["unit_cost"]}
+        for p in world["catalog"]
+    ]
+    order_rows = [
+        {key: order[key] for key in (
+            "order_id", "customer_id", "ordered_at", "order_amount", "discount", "shipping_fee",
+            "shipping_charged",
+        )}
+        for order in orders
+    ]
+    items = [
+        {"order_id": order["order_id"], **item} for order in orders for item in order["items"]
+    ]
+    target = session.output_root.parent.joinpath("simulator_exchange")
+    files = {
+        "customers.jsonl": customers, "catalog.jsonl": catalog, "orders.jsonl": order_rows,
+        "order_items.jsonl": items,
+    }
+    try:
+        for name, rows in files.items():
+            _storage.write_jsonl(target.joinpath(name), rows)
+        _storage.write_json(target.joinpath("manifest.json"), {
+            "contract": "commerce-exchange/v1",
+            "source": "simulator",
+            "source_commit": world["simulator_version"],
+            "generated_at": stamp,
+            "mode": "full",
+            "files": {name: len(rows) for name, rows in files.items()},
+        })
+    except OSError as error:
+        raise SimulatorError(f"교환 묶음을 쓰지 못했다: {_reason(error)}") from error
     return {
-        "status": _sc.MetricStatus.NOT_RUN.value,
-        "reason_code": _sc.ReasonCode.PRECONDITION_MISSING.value,
-        "detail": "S4(#78) 전까지 주문을 생성하지 않는다",
-        "path": None,
+        "status": _sc.MetricStatus.OK.value,
+        "path": str(target),
+        "orders": len(order_rows),
+        "order_items": len(items),
+        "customers": len(customers),
+        "generated_at": stamp,
     }
 
 

@@ -1,5 +1,5 @@
 {
-  "config_version": "sim-gen-v2",
+  "config_version": "sim-gen-v3",
   "notes": [
     "S2(#76) 생성 config. 내용은 JSON 문법만 쓴다 — 표준 json 으로 읽어 의존성 없는 Python 3.10 에서도 생성이 돈다(사용자 확정 U2).",
     "값은 모두 정수다. ratio_bp 는 1/10000, mu_ppm 은 1/1000000, kappa_milli·shape_milli 는 1/1000, sigma_ppm 은 1/1000000 단위다. 금액은 원, 구매 주기는 밀리일, 방문 빈도는 밀리회/주다.",
@@ -7,7 +7,9 @@
     "personas 배열 순서가 곧 추첨 순서다. 순서를 바꾸면 같은 seed 의 페르소나 배정이 바뀐다.",
     "구성비(ratio_bp)와 페르소나별 모수는 docs/data_spec.html §3.2·§3.3 초안이고 외부 근거가 없다. repurchase_propensity 는 잠정값이다. 근거와 민감도: docs/decisions/DR-S2-persona-mix.md · DR-S2-hidden-trait-dist.md.",
     "생성 부분(config_version·personas·hidden_traits)을 바꾸면 config_version 을 올리고 tests/test_simulator_persona.py 의 CONFIG_PINS 에 새 다이제스트를 추가한다. 옛 상태·계보는 거부된다.",
-    "GATE 1 이후에는 AI 성능을 이유로 바꾸지 않는다(SRS FREEZE-002·003). 바꿔야 하면 Issue → 수정 → 판 상향 → Baseline 부터 재실행한다."
+    "GATE 1 이후에는 AI 성능을 이유로 바꾸지 않는다(SRS FREEZE-002·003). 바꿔야 하면 Issue → 수정 → 판 상향 → Baseline 부터 재실행한다.",
+    "S4~S6(#143) 스프린트: behavior(방문·퍼널·이탈·처치 반응)와 catalog(상품 풀) 블록을 더했다. 두 블록도 생성 부분이라 다이제스트에 든다. 값은 PRD·data_spec 기반 초안이고 외부 근거 대조는 #148 리서치 결과로 Phase 2 에 조정한다 — 근거: docs/decisions/DR-S4-S6-sprint.md.",
+    "behavior 의 단위: *_pct 는 1/100, *_ppm 은 1/1000000, *_ms 는 밀리초, *_days 는 일, 금액은 원. guardrails 블록은 검사 범위(bp = 1/10000)이고 생성에 쓰지 않으므로 다이제스트에 들지 않는다."
   ],
   "personas": [
     {
@@ -39,7 +41,10 @@
       "id": "new_customer",
       "alias": "P6",
       "ratio_bp": 1000,
-      "signup_day_range": [1, 273]
+      "signup_day_range": [
+        1,
+        273
+      ]
     }
   ],
   "hidden_traits": [
@@ -267,5 +272,173 @@
         "new_customer": 250000
       }
     }
-  ]
+  ],
+  "catalog": {
+    "note": "config/economic_config.yaml product_margin 의 JSON 사본. 의존성 없는 3.10 에서도 읽히게 둔다. 두 값의 일치는 tests/test_simulator_behavior.py 가 PyYAML 이 있을 때 대조한다.",
+    "price_sigma_ppm": 350000,
+    "price_round_krw": 100,
+    "categories": [
+      {
+        "category": "fresh_food",
+        "cost_rate_bp": 7800,
+        "median_price_krw": 8900,
+        "frequency_weight_bp": 3200,
+        "pool_size": 70
+      },
+      {
+        "category": "meal_solution",
+        "cost_rate_bp": 7000,
+        "median_price_krw": 6500,
+        "frequency_weight_bp": 2400,
+        "pool_size": 55
+      },
+      {
+        "category": "dairy",
+        "cost_rate_bp": 7500,
+        "median_price_krw": 4200,
+        "frequency_weight_bp": 1800,
+        "pool_size": 35
+      },
+      {
+        "category": "beverage",
+        "cost_rate_bp": 6800,
+        "median_price_krw": 3500,
+        "frequency_weight_bp": 1400,
+        "pool_size": 40
+      },
+      {
+        "category": "household",
+        "cost_rate_bp": 7200,
+        "median_price_krw": 12000,
+        "frequency_weight_bp": 1200,
+        "pool_size": 40
+      }
+    ]
+  },
+  "behavior": {
+    "visit": {
+      "scale_pct": 100,
+      "max_daily_ppm": 900000
+    },
+    "session": {
+      "continue_browse_ppm": 700000,
+      "continue_intent_ppm": 920000,
+      "max_actions_browse": 12,
+      "max_actions_intent": 40,
+      "action_delay_ms": [
+        1000,
+        300000
+      ],
+      "browse_weights": {
+        "page_view": 3,
+        "product_view": 4,
+        "add_to_cart": 2,
+        "remove_from_cart": 1
+      },
+      "intent_weights": {
+        "page_view": 1,
+        "product_view": 3,
+        "add_to_cart": 5,
+        "remove_from_cart": 0
+      },
+      "add_quantity": [
+        1,
+        4
+      ]
+    },
+    "purchase": {
+      "intent_scale_pct": 100,
+      "cycle_factor_min_ppm": 300000,
+      "cycle_factor_max_ppm": 1500000,
+      "basket_spread_pct": [
+        70,
+        131
+      ],
+      "abandon_scale_pct": 40,
+      "shipping_abandon_scale_pct": 30,
+      "topup_max_gap_pct": 40,
+      "free_shipping_topup_scale_pct": 60,
+      "coupon_topup_scale_pct": 80,
+      "shipping_fee_krw": 3000,
+      "free_shipping_threshold_krw": 40000
+    },
+    "churn": {
+      "onset_hazard_scale_ppm": 15000,
+      "decay_per_day_ppm": 850000,
+      "engagement_floor_ppm": 20000,
+      "recovery_hazard_ppm": 3000
+    },
+    "treatment": {
+      "window_days": 42,
+      "negative_scale_pct": 40,
+      "positive_scale_pct": 100,
+      "coupon_click_scale_pct": 45,
+      "message_cost_krw": 30,
+      "negative_effect": {
+        "visit_penalty_pct": 30,
+        "intent_penalty_pct": 30,
+        "onset_accel_pct": 100
+      },
+      "arms": {
+        "T1": {
+          "sensitivity": "shipping_fee_sensitivity",
+          "visit_boost_pct": 20,
+          "intent_boost_pct": 25,
+          "onset_protect_pct": 50,
+          "recovery_ppm": 30000,
+          "coupon": null
+        },
+        "T2": {
+          "sensitivity": "coupon_sensitivity",
+          "visit_boost_pct": 20,
+          "intent_boost_pct": 25,
+          "onset_protect_pct": 50,
+          "recovery_ppm": 30000,
+          "coupon": {
+            "discount_krw": 3000,
+            "min_order_krw": 30000
+          }
+        },
+        "T3": {
+          "sensitivity": "coupon_sensitivity",
+          "visit_boost_pct": 30,
+          "intent_boost_pct": 35,
+          "onset_protect_pct": 60,
+          "recovery_ppm": 50000,
+          "coupon": {
+            "discount_krw": 7000,
+            "min_order_krw": 50000
+          }
+        },
+        "T4": {
+          "sensitivity": "repurchase_propensity",
+          "visit_boost_pct": 20,
+          "intent_boost_pct": 20,
+          "onset_protect_pct": 40,
+          "recovery_ppm": 25000,
+          "coupon": null
+        }
+      }
+    }
+  },
+  "guardrails": {
+    "note": "S7-lite 검사 범위(bp). 생성에 쓰지 않는다. SRS SIM-005 · src/simulator/AGENTS.md 의 처치 강도 가드레일.",
+    "active_lookback_days": 42,
+    "churn_rate_bp": [
+      1500,
+      2500
+    ],
+    "ate_bp": [
+      300,
+      600
+    ],
+    "coupon_use_bp": [
+      2500,
+      4000
+    ],
+    "sleeping_dog_bp": [
+      800,
+      1500
+    ]
+  }
 }

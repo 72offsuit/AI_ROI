@@ -5,6 +5,7 @@ import argparse
 import ast
 import dataclasses
 import inspect
+import json
 import re
 import unittest
 from collections import defaultdict
@@ -18,11 +19,17 @@ from src.measurement import schema as sc
 from src.measurement import sink as sk
 from src.simulator import api
 from src.simulator._internal import profiles
-from tests.test_simulator_support import REPO_ROOT, SimulatorCase, root_digest
+from tests.test_simulator_support import REPO_ROOT, SimulatorCase, event_digest, root_digest
 
 SIMULATOR_DIR = REPO_ROOT / "src" / "simulator"
 CONTRACT_DOC = REPO_ROOT / "docs" / "simulator_api.md"
-PRODUCED = {"session_start", "page_view", "product_view", "add_to_cart", "remove_from_cart"}
+# S4(#143): 구매 퍼널(checkout_start·purchase)과 처치 노출·반응(마케팅 5종)이 더해졌다.
+MARKETING = {"campaign_exposed", "push_sent", "coupon_exposed", "coupon_clicked", "coupon_use"}
+UNTREATED = {
+    "session_start", "page_view", "product_view", "add_to_cart", "remove_from_cart",
+    "checkout_start", "purchase",
+}
+PRODUCED = UNTREATED | MARKETING
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+09:00$")
 KST = timezone(timedelta(hours=9))
 
@@ -149,7 +156,8 @@ class TestGeneratedEventsMeetTheContract(SimulatorCase):
         self.assertEqual({"simulator": len(self.records)}, manifest["sources"])
 
     def test_event_meta_and_identifiers(self) -> None:
-        self.assertEqual(PRODUCED, {r["event_type"] for r in self.records})
+        # 배정이 없는 세계는 마케팅 이벤트를 내지 않는다 — 노출은 apply_treatment 로만 생긴다.
+        self.assertEqual(UNTREATED, {r["event_type"] for r in self.records})
         self.assertEqual(len(self.records), len({r["event_id"] for r in self.records}))
         for record in self.records:
             self.assertEqual(5, record["random_seed"])
@@ -283,15 +291,40 @@ class TestArgumentRules(SimulatorCase):
             [[recorded["now_ms"], "T3"]], recorded["customers"][0]["assignments"]
         )
 
-    def test_treatment_does_not_change_s1_events(self) -> None:
+    def test_treatment_changes_only_treated_customers_and_exposes_at_assignment(self) -> None:
+        def by_customer(root: Path) -> dict[str, str]:
+            grouped: dict[str, list[dict[str, object]]] = defaultdict(list)
+            for record in sk.read_events(root):
+                grouped[str(record["customer_id"])].append(record)
+            return {cid: event_digest(rows) for cid, rows in grouped.items()}
+
         plain = self.start(customers=6)
         api.advance(3)
         api.advance(5)
         treated = self.start(customers=6)
-        api.advance(3)
-        api.apply_treatment({"C00000001": "T1", "C00000004": "T2"})
+        middle = api.advance(3).end
+        api.apply_treatment({"C00000001": "T1", "C00000004": "T2", "C00000005": "T0"})
         api.advance(5)
-        self.assertEqual(root_digest(plain), root_digest(treated))
+        before, after = by_customer(plain), by_customer(treated)
+        for cid in sorted(set(before) | set(after)):
+            with self.subTest(customer=cid):
+                if cid in ("C00000001", "C00000004"):
+                    self.assertNotEqual(before.get(cid), after.get(cid))
+                else:
+                    self.assertEqual(before.get(cid), after.get(cid))
+        stamp = middle.isoformat(timespec="milliseconds")
+        exposures = sorted(
+            (r["customer_id"], r["event_type"], r["treatment_id"], r["timestamp"])
+            for r in sk.read_events(treated)
+            if r["event_type"] in ("campaign_exposed", "push_sent", "coupon_exposed")
+        )
+        self.assertEqual([
+            ("C00000001", "campaign_exposed", "T1", stamp),
+            ("C00000001", "push_sent", "T1", stamp),
+            ("C00000004", "campaign_exposed", "T2", stamp),
+            ("C00000004", "coupon_exposed", "T2", stamp),
+            ("C00000004", "push_sent", "T2", stamp),
+        ], exposures)
 
 
 class TestMetricsAndBundle(SimulatorCase):
@@ -331,16 +364,44 @@ class TestMetricsAndBundle(SimulatorCase):
         self.assertEqual(sc.MetricStatus.OK, values["events.session_start"].status)
         self.assertEqual(0, values["events.session_start"].value)
 
-    def test_exchange_bundle_is_not_run_and_writes_nothing(self) -> None:
-        before = sorted(str(p) for p in self.tmp.rglob("*"))
+    def test_exchange_bundle_follows_contract_v1_and_matches_purchase_events(self) -> None:
+        from src.measurement import exchange as ex
+
         bundle = api.exchange_bundle(self.summary.end)
-        self.assertEqual(
-            {"status": "not_run", "reason_code": "PRECONDITION_MISSING", "path": None},
-            {k: bundle[k] for k in ("status", "reason_code", "path")},
+        self.assertEqual("ok", bundle["status"])
+        target = Path(str(bundle["path"]))
+        self.assertEqual(self.root.resolve().parent / "simulator_exchange", target)
+        loaded = ex.read_exchange(target, sk.EventSource.SIMULATOR)
+        self.assertIsNotNone(loaded)
+        purchases = {
+            r["order_id"]: r["order_amount"] for r in sk.read_events(self.root)
+            if r["event_type"] == "purchase"
+        }
+        orders = [
+            json.loads(line)
+            for line in (target / "orders.jsonl").read_text(encoding="utf-8").splitlines()
+        ]
+        self.assertEqual(bundle["orders"], len(orders))
+        self.assertEqual(purchases, {o["order_id"]: o["order_amount"] for o in orders})
+        items: dict[str, int] = defaultdict(int)
+        for line in (target / "order_items.jsonl").read_text(encoding="utf-8").splitlines():
+            item = json.loads(line)
+            self.assertIsNotNone(item["unit_cost"])
+            items[item["order_id"]] += item["unit_price"] * item["quantity"]
+        for order in orders:
+            with self.subTest(order=order["order_id"]):
+                self.assertEqual(order["order_amount"], items[order["order_id"]] - order["discount"])
+                expected_fee = 3000 if items[order["order_id"]] < 40000 else 0
+                self.assertEqual(expected_fee, order["shipping_fee"])
+
+    def test_exchange_bundle_carries_no_hidden_values(self) -> None:
+        bundle = api.exchange_bundle(self.summary.end)
+        text = "".join(
+            path.read_text(encoding="utf-8") for path in sorted(Path(str(bundle["path"])).iterdir())
         )
-        self.assertTrue(bundle["detail"])
-        self.assertEqual(before, sorted(str(p) for p in self.tmp.rglob("*")))
-        self.assertFalse((self.root.parent / "simulator_exchange").exists())
+        self.assertNotIn("treatment_id", text)
+        for name in sc.FORBIDDEN_FIELD_NAMES:
+            self.assertNotIn(f'"{name}"', text)
 
     def test_public_returns_carry_no_hidden_field_names(self) -> None:
         names: set[str] = set(f.name for f in dataclasses.fields(api.RunSummary))

@@ -406,12 +406,19 @@ class TestSessionContinuity(unittest.TestCase):
 
 class TestCartThroughGeneratedEvents(SimulatorCase):
     def test_events_and_state_follow_the_30_day_rule_across_a_window_boundary(self) -> None:
-        root = self.start(customers=25)
-        api.advance(75)
-        boundary = api.save_state()
-        api.load_state(boundary, root, hidden_root=self.hidden)
-        api.advance(75)
-        final = api.save_state()
+        # S4: 카탈로그가 240개로 늘어 "만료 뒤 같은 상품 재담기" 가 드물어졌다. 이 시험은 장바구니 규칙을 보므로
+        # 조회 대상을 카테고리마다 첫 상품(5개)으로 좁혀 S1 때의 밀도를 되살린다 — 생성 규칙은 그대로다.
+        from src.simulator._internal import params
+
+        active = params.active()
+        narrow = tuple(pool[:1] for pool in active.category_pools)
+        with mock.patch.object(active, "category_pools", narrow):
+            root = self.start(customers=25)
+            api.advance(75)
+            boundary = api.save_state()
+            api.load_state(boundary, root, hidden_root=self.hidden)
+            api.advance(75)
+            final = api.save_state()
 
         carts: dict[str, dict[str, list[int]]] = defaultdict(dict)
         views: dict[tuple[str, str], list[int]] = defaultdict(list)
@@ -421,8 +428,20 @@ class TestCartThroughGeneratedEvents(SimulatorCase):
         carried_over_boundary = 0
         boundary_ms = self.state(boundary)["now_ms"]
 
+        checkout_lines: dict[str, list[str]] = {}
         for record in sk.read_events(root):
             cid, kind = str(record["customer_id"]), record["event_type"]
+            # S4: 결제는 결제 시작 시점에 살아 있던 품목을 모두 사서 장바구니에서 뺀다(이벤트 없이).
+            if kind == "checkout_start":
+                at = _ms(str(record["timestamp"]))
+                checkout_lines[cid] = [
+                    pid for pid, value in carts[cid].items() if at < value[1] + LIFETIME_MS
+                ]
+                continue
+            if kind == "purchase":
+                for pid in checkout_lines.pop(cid, []):
+                    carts[cid].pop(pid, None)
+                continue
             if kind not in ("add_to_cart", "remove_from_cart", "product_view"):
                 continue
             at, pid = _ms(str(record["timestamp"])), str(record["product_id"])

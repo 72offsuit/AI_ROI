@@ -25,9 +25,11 @@ CONFIG_PATH = Path(__file__).resolve().parents[3].joinpath("config", "simulator_
 # 오류 메시지에는 절대 경로 대신 저장소 상대 이름만 싣는다.
 CONFIG_NAME = "config/simulator_config.yaml"
 
-GENERATION_KEYS = ("config_version", "personas", "hidden_traits")
+# S4~S6(#143): behavior(행동·이탈·처치 반응 모수)와 catalog(상품 풀)도 생성 부분이다 — 다이제스트에 든다.
+GENERATION_KEYS = ("config_version", "personas", "hidden_traits", "behavior", "catalog")
 _REQUIRED_TOP = frozenset(GENERATION_KEYS)
-_OPTIONAL_TOP = frozenset({"notes"})
+# guardrails 는 검사 범위라 생성 결과를 바꾸지 않는다 — 다이제스트에 넣지 않는다.
+_OPTIONAL_TOP = frozenset({"notes", "guardrails"})
 _PERSONA_KEYS = frozenset({"id", "alias", "ratio_bp"})
 # 선택 키. 없으면 Day 0 가입이다(DR-S3-p6-signup).
 _PERSONA_OPTIONAL_KEYS = frozenset({"signup_day_range"})
@@ -130,6 +132,10 @@ class GenerationConfig:
     digest: str
     personas: tuple[PersonaSpec, ...]
     traits: tuple[TraitSpec, ...]
+    # 정수·문자열·null 만 담은 원본 블록. 해석·검사는 params.py 가 한다(S4~S6).
+    behavior: Mapping[str, object] = MappingProxyType({})
+    catalog: Mapping[str, object] = MappingProxyType({})
+    guardrails: Mapping[str, object] = MappingProxyType({})
 
     @property
     def persona_ids(self) -> tuple[str, ...]:
@@ -191,7 +197,21 @@ def parse(text: str) -> GenerationConfig:
     personas = _personas(document["personas"])
     ids = tuple(p.id for p in personas)
     traits = _traits(document["hidden_traits"], ids)
-    return GenerationConfig(version, digest(document), personas, traits)
+    for block in ("behavior", "catalog", "guardrails"):
+        if not isinstance(document.get(block, {}), dict):
+            raise ConfigError(f"{block} 는 객체여야 한다")
+    config = GenerationConfig(
+        version, digest(document), personas, traits,
+        document["behavior"], document["catalog"], document.get("guardrails", {}),
+    )
+    # 순환 import 를 피해 지연 import 한다. 블록 구조 위반은 로드 단계에서 거부한다.
+    from src.simulator._internal import params
+
+    try:
+        params.Params(config)
+    except (KeyError, TypeError, ValueError) as error:
+        raise ConfigError(f"behavior·catalog·guardrails 블록 위반: {error}") from error
+    return config
 
 
 def _exact_keys(
