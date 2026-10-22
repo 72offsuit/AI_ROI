@@ -1,0 +1,99 @@
+{
+  "sprint": "sprint-v0",
+  "sealed": false,
+  "run_id": "mock-20261022-0001",
+  "generated_at": "2026-10-22T14:00:00+09:00",
+  "mock": true,
+  "window": {
+    "start": "2026-07-01",
+    "end": "2026-08-11"
+  },
+  "budget_krw": 30000000,
+  "strategies": [
+    {
+      "id": "S0",
+      "name": "처치 없음",
+      "n_targeted": 0,
+      "treatment_mix": {},
+      "revenue": 1824000000,
+      "marketing_cost": 0,
+      "contribution_profit": 412000000,
+      "churn_rate": 0.284,
+      "incremental_profit_vs_S1": -6100000,
+      "roi": null
+    },
+    {
+      "id": "S1",
+      "name": "전체 일괄 쿠폰 (T1)",
+      "n_targeted": 20000,
+      "treatment_mix": {
+        "T1": 20000
+      },
+      "revenue": 1902000000,
+      "marketing_cost": 29800000,
+      "contribution_profit": 418100000,
+      "churn_rate": 0.263,
+      "incremental_profit_vs_S1": 0,
+      "roi": 0.205
+    },
+    {
+      "id": "S2",
+      "name": "이탈 확률 상위 30%",
+      "n_targeted": 6000,
+      "treatment_mix": {
+        "T1": 6000
+      },
+      "revenue": 1871000000,
+      "marketing_cost": 8940000,
+      "contribution_profit": 421300000,
+      "churn_rate": 0.27,
+      "incremental_profit_vs_S1": 3200000,
+      "roi": 1.03
+    },
+    {
+      "id": "S3",
+      "name": "CLV 상위 30%",
+      "n_targeted": 6000,
+      "treatment_mix": {
+        "T2": 6000
+      },
+      "revenue": 1879000000,
+      "marketing_cost": 11200000,
+      "contribution_profit": 419800000,
+      "churn_rate": 0.275,
+      "incremental_profit_vs_S1": 1700000,
+      "roi": 0.69
+    },
+    {
+      "id": "S4",
+      "name": "Uplift 상위 (Persuadables)",
+      "n_targeted": 3820,
+      "treatment_mix": {
+        "T1": 1910,
+        "T2": 1910
+      },
+      "revenue": 1893000000,
+      "marketing_cost": 6420000,
+      "contribution_profit": 429600000,
+      "churn_rate": 0.259,
+      "incremental_profit_vs_S1": 11500000,
+      "roi": 2.68
+    },
+    {
+      "id": "S5",
+      "name": "예산 제약 최적화 (Uplift×CLV)",
+      "n_targeted": 4410,
+      "treatment_mix": {
+        "T1": 1290,
+        "T2": 2620,
+        "T3": 500
+      },
+      "revenue": 1898000000,
+      "marketing_cost": 7980000,
+      "contribution_profit": 433900000,
+      "churn_rate": 0.256,
+      "incremental_profit_vs_S1": 15800000,
+      "roi": 2.7
+    }
+  ]
+}

@@ -1,0 +1,58 @@
+{
+  "sprint": "sprint-v0",
+  "generated_at": "2026-10-22T14:00:00+09:00",
+  "mock": true,
+  "metrics": [
+    {
+      "name": "재구매율 (90일)",
+      "unit": "비율",
+      "synthetic": 0.312,
+      "reference": {
+        "dataset": "UCI Online Retail II",
+        "value": 0.298,
+        "source_url": "https://archive.ics.uci.edu/dataset/502/online+retail+ii"
+      },
+      "verdict": "consistent"
+    },
+    {
+      "name": "고객당 평균 주문 수",
+      "unit": "건",
+      "synthetic": 4.8,
+      "reference": {
+        "dataset": "UCI Online Retail II",
+        "value": 5.1,
+        "source_url": "https://archive.ics.uci.edu/dataset/502/online+retail+ii"
+      },
+      "verdict": "consistent"
+    },
+    {
+      "name": "장바구니 이탈률",
+      "unit": "비율",
+      "synthetic": 0.52,
+      "reference": {
+        "dataset": "Baymard Institute 집계",
+        "value": 0.7,
+        "source_url": "https://baymard.com/lists/cart-abandonment-rate"
+      },
+      "verdict": "deviates"
+    },
+    {
+      "name": "주문 금액 중앙값",
+      "unit": "원",
+      "synthetic": 38500,
+      "reference": {
+        "dataset": "Olist Brazilian E-Commerce",
+        "value": null,
+        "source_url": "https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce"
+      },
+      "verdict": "no_reference"
+    },
+    {
+      "name": "쿠폰 반응률",
+      "unit": "비율",
+      "synthetic": 0.087,
+      "reference": null,
+      "verdict": "no_reference"
+    }
+  ]
+}
