@@ -53,7 +53,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </main>
             {/* Team logo slot. Swap public/brand/team-logo.svg for the Figma export. */}
             <footer className="mx-auto flex max-w-(--container-dashboard-max) items-center gap-sm border-t border-border px-base py-md lg:px-page-gutter">
-              <Image src="/brand/team-logo.svg" alt="팀 로고" width={120} height={24} unoptimized className="h-6 w-auto" />
+              <Image src="/brand/team-logo.svg" alt="팀 로고" width={95} height={24} unoptimized className="h-6 w-auto" />
               <span className="text-caption text-text-secondary">72offsuit · AI 리텐션 ROI</span>
             </footer>
           </div>

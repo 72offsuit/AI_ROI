@@ -55,7 +55,7 @@ export function Sidebar() {
         <Image
           src="/brand/service-logo.svg"
           alt="서비스 로고"
-          width={160}
+          width={32}
           height={32}
           unoptimized
           priority
