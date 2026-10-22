@@ -6,7 +6,7 @@ from pathlib import Path
 
 from src.measurement import sink as sk
 from src.simulator import api
-from src.simulator._internal import storage
+from src.simulator._internal import guardrails, runtime, storage
 from src.simulator._internal import world as wd
 
 EXIT_OK = 0
@@ -37,9 +37,35 @@ def _parser() -> argparse.ArgumentParser:
     resume.add_argument("--output-root", required=True)
     resume.add_argument("--days", type=int, required=True)
 
-    for command in (init, advance, resume):
+    checks = commands.add_parser(
+        "guardrails",
+        help="새 세계를 워밍업한 시점에서 이탈률·ATE·쿠폰 사용률·Sleeping Dog 을 검사해 숨김 영역에 쓰고 표로 낸다",
+    )
+    checks.add_argument("--seed", type=int, required=True)
+    checks.add_argument("--customers", type=int, required=True)
+    checks.add_argument("--profile", default="small")
+    checks.add_argument("--warmup-days", type=int, required=True)
+    checks.add_argument("--sample", type=int, default=None)
+    checks.add_argument("--output-root", required=True)
+
+    for command in (init, advance, resume, checks):
         command.add_argument("--hidden-root", default=None, help="테스트·도구 전용")
     return parser
+
+
+def _guardrails(args: argparse.Namespace) -> int:
+    api.init(args.seed, args.customers, args.profile, args.output_root, hidden_root=args.hidden_root)
+    summary = api.advance(args.warmup_days)
+    session = runtime.active
+    orders = storage.read_orders(session.hidden_root, str(summary.run_id)) or []
+    result, rows = guardrails.evaluate(session.world, orders, args.sample)
+    result.update(seed=args.seed, customers=args.customers, profile=args.profile,
+                  warmup_days=args.warmup_days, simulator_version=session.world["simulator_version"])
+    root = storage.ground_truth_root(session.hidden_root).joinpath("guardrails")
+    name = f"guardrails-{session.world['world_id']}-d{args.warmup_days}"
+    guardrails.write(root, result, rows, name)
+    print(guardrails.table(result))
+    return EXIT_OK
 
 
 def _head_state_id(output_root: str, hidden_root: str | None) -> str:
@@ -67,6 +93,8 @@ def _head_state_id(output_root: str, hidden_root: str | None) -> str:
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
+        if args.command == "guardrails":
+            return _guardrails(args)
         if args.command == "init":
             api.init(
                 args.seed, args.customers, args.profile, args.output_root,

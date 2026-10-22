@@ -77,12 +77,22 @@ class SinkFormatError(SimulatorError)
 | `snapshot` | — | 토큰 `str`. 같은 토큰으로 여러 번 `restore` 할 수 있다 | `NotInitializedError` |
 | `restore` | `snap` · `output_root`(키워드, **빈** 루트) | `None`. 토큰 시점으로 되돌리고 이후 쓰기를 `output_root` 로 돌린다. 이미 쓴 루트에는 다시 쓰지 않는다. 이어받을 계보를 이 런타임이 읽을 수 없으면 거부한다 | `TypeError` · `SnapshotError` · `OutputRootError` · `SinkFormatError` · `SimulatorError`(시뮬레이터의 생성 설정이 같은 프로세스 안에서 바뀌었다) |
 | `discard_snapshot` | `snap` | `None` | `TypeError` · `SnapshotError` |
-| `apply_treatment` | `assignments`: `customer_id`(`^C\d{8}$`, 이 세계의 고객) → `treatment_id`(`^T[0-4]$`). `T0` 포함 | `None`. 현재 시각으로 배정 이력에 적고, 다음 `advance` 의 계보 기록(그 전에 `save_state` 를 부르면 그 저장의 계보)에 남긴다. 전부 검사한 뒤 하나라도 틀리면 아무것도 적지 않는다 | `TypeError` · `NotInitializedError` · `AssignmentError` |
+| `apply_treatment` | `assignments`: `customer_id`(`^C\d{8}$`, 이 세계의 고객) → `treatment_id`(`^T[0-4]$`). `T0` 포함 | `None`. 현재 시각으로 배정 이력에 적고, 다음 `advance` 의 계보 기록(그 전에 `save_state` 를 부르면 그 저장의 계보)에 남긴다. 전부 검사한 뒤 하나라도 틀리면 아무것도 적지 않는다. **의미는 아래 「처치 배정의 의미」** | `TypeError` · `NotInitializedError` · `AssignmentError` · `SimulatorError`(숨김 영역 기록 실패 — 배정을 적지 않았다) |
 | `events` | `until` | 이 세계의 계보가 기록한 이벤트 중 `timestamp < until` 인 것을 측정 계약 형식(`docs/measurement_contract.md`) 그대로 생성 순서로 낸다. 분기 루트에서도 분기 이전 이력이 함께 나온다. 계보에 속한 실행이 기록한 파일만 읽는다 — 같은 루트에 남은 중단된 쓰기의 흔적이나 다른 작성자의 파일은 결과에 섞이지 않는다. 읽는 파일의 바이트·건수가 실행 기록과 다르면 예외를 낸다. 반복 도중 예외가 나면 그때까지 받은 이벤트는 불완전하므로 쓰지 않는다(전량을 받은 뒤에만 쓴다) | `TypeError` · `ValueError` · `NotInitializedError` · `OutputRootError` · `SinkFormatError` |
-| `metrics` | `start` · `end` (`start ≤ end`) | `dict[str, MetricValue]` — `events_total` 과 `events.<event_type>` 16종, 비즈니스 지표 `churn_rate` · `revenue` · `contribution_profit` · `marketing_cost`. 이 판이 만들지 않는 유형과 비즈니스 지표는 `not_run` · `PRECONDITION_MISSING` 이다(0 이 아니다). `ok` 의 0 은 측정된 0 이다 | `events` 와 같다 |
+| `metrics` | `start` · `end` (`start ≤ end`) | `dict[str, MetricValue]` — `events_total` 과 `events.<event_type>` 16종, 비즈니스 지표 `churn_rate` · `revenue` · `contribution_profit` · `marketing_cost`. 이 판이 만들지 않는 유형(`search` · `return_visit` · `review` · `cs_contact`)과 비즈니스 지표는 `not_run` · `PRECONDITION_MISSING` 이다(0 이 아니다). 비즈니스 지표는 측정 계층(`publish`)이 이벤트와 교환 묶음으로 계산한다. `ok` 의 0 은 측정된 0 이다 | `events` 와 같다 |
 | `save_state` | — | `state_id` `str`. 현재 상태를 시뮬레이터 소유 위치에 원자적으로 쓴다. 같은 상태는 같은 `state_id` 다. 쓰기에 실패하면 이미 있던 상태 파일은 그대로다 | `NotInitializedError` · `SimulatorError` |
 | `load_state` | `state_id` · `output_root`: 비어 있거나, 실행 기록과 디스크가 맞고 그 루트의 마지막 실행이 바로 이 상태에서 끝났어야 한다 | `None`. 저장된 상태를 활성 세계로 둔다. 빈 루트로 이어받으면 이 상태에 이르는 계보가 끝까지 검증돼야 하고(이 런타임이 그 형식을 읽을 수 있어야 한다), 그 계보가 `events()` 의 이전 이력이 된다. 스냅샷 토큰은 그대로 두지만 다른 세계의 토큰은 `restore` 가 거부한다 | `TypeError` · `ValueError` · `StateFormatError`(시뮬레이터의 생성 설정이 그 상태를 만든 설정과 다르거나, 생성 설정을 읽을 수 없을 때도) · `OutputRootError` · `SinkFormatError` |
-| `exchange_bundle` | `until` | `{"status": "not_run", "reason_code": "PRECONDITION_MISSING", "detail": …, "path": None}` — 이 판은 주문을 만들지 않아 아무것도 쓰지 않는다 | `TypeError` · `ValueError` · `NotInitializedError` |
+| `exchange_bundle` | `until` | `{"status": "ok", "path", "orders", "order_items", "customers", "generated_at"}`. 출력 루트의 형제 `simulator_exchange/` 에 교환 계약 v1(`docs/contracts/commerce-exchange/v1/README.md` §11) 묶음을 **전량 스냅샷**으로 쓴다 — 이 세계 계보의 주문 중 `ordered_at < until` 과 그때까지 가입한 고객, 카탈로그(주문 시점 원가 포함). 같은 부모 아래 분기 루트가 여럿이면 마지막 호출이 덮어쓰므로 본선 루트에서 부른다 | `TypeError` · `ValueError` · `NotInitializedError` · `OutputRootError`(계보 실행의 주문 기록이 없다) · `SimulatorError`(쓰기 실패) |
+
+## 처치 배정의 의미 (S6 · #143)
+
+- **노출**: `apply_treatment` 를 부른 시각(그때의 세계 시각, KST 자정)에 배정된 고객의 노출 이벤트가 다음 `advance` 의 첫 순간 시각으로 기록된다. `T1`~`T4` 는 `campaign_exposed` · `push_sent`, 쿠폰 처치(`T2` · `T3`)는 `coupon_exposed` 도 낸다. `T0` 은 노출이 없다. 노출·쿠폰·처치 창 안의 결제 이벤트에는 `treatment_id` 가 실린다.
+- **효과 창**: 배정 시각부터 **42일**(`LABEL_WINDOW_DAYS` 와 같다). 창이 지나면 효과가 끝난다.
+- **덮어쓰기**: 같은 고객에게 다시 `apply_treatment` 하면 새 배정이 앞 배정을 덮어쓴다. `T0` 배정은 앞선 처치의 효과를 끝낸다.
+- **처치 종류**: `T1` 무료배송(할인 전 상품 합계 40,000원 미만 주문의 배송비 면제) · `T2` 정액 쿠폰(30,000원 이상 3,000원) · `T3` 강한 윈백 쿠폰(50,000원 이상 7,000원) · `T4` 재구매 리마인더(푸시). 쿠폰은 고객이 받아 둔 경우(`coupon_clicked`)에만, 배정 시각부터 **14일** 안에, 배정 1회에 한 번 결제에 쓰인다(`coupon_use`). 처치 효과는 쿠폰 사용 밖(방문·구매 의향)에서도 생긴다.
+- **참 효과**: 배정된 고객마다 처치별 참 효과를 시뮬레이터 숨김 영역(`data/ground_truth/simulator/`, 시험·도구가 `hidden_root` 를 주면 그 아래 `ground_truth/`)에 기록한다. **의사결정 측(`src/decision/`)은 읽지 않는다** — 사후 채점(`src/diagnostics/`)만 읽는다. 공개 API 는 이 값을 돌려주지 않는다.
+- **오케스트레이션 통합**: 분기마다 `restore → apply_treatment → advance(42)` 순서로 부른다. 창 안에서 같은 고객을 다시 배정하면 기록된 참 효과는 첫 배정의 42일 창 기준이므로 맞지 않게 된다. 참 효과 파일은 분기(배정 내용)마다 따로 남는다.
+- **비용**: 참 효과 계산 때문에 한 시작 상태에서 처음 부르는 `apply_treatment` 는 배정 고객 수에 비례해 걸린다(실측 5,000명 15.3초 — 고객당 약 3ms). 같은 스냅샷에서 갈라진 다음 분기는 같은 고객의 결과를 재사용해 빠르다(같은 5,000명 0.3초).
 
 출력 루트는 시뮬레이터 전용이다. 커머스 이벤트와 같은 루트를 쓰지 않는다. 세계 상태 파일의 위치는 시뮬레이터가 정하며 호출자는 `state_id` 만 다룬다. 새 루트의 저장 형식은 그 런타임의 기본값(`pyarrow` 가 있으면 parquet, 없으면 jsonl.gz)이다.
 
@@ -117,6 +127,7 @@ for T0 in campaign_index_dates:
 python -m src.simulator init --seed N --customers N --profile NAME --output-root PATH [--days N] [--hidden-root PATH]
 python -m src.simulator advance --output-root PATH --days N [--hidden-root PATH]
 python -m src.simulator resume --state-id ID --output-root PATH --days N [--hidden-root PATH]
+python -m src.simulator guardrails --seed N --customers N [--profile NAME] --warmup-days N [--sample N] --output-root PATH [--hidden-root PATH]
 ```
 
 | 하위 명령 | 하는 일 |
@@ -124,6 +135,7 @@ python -m src.simulator resume --state-id ID --output-root PATH --days N [--hidd
 | `init` | `api.init` → (`--days` 가 있으면) `api.advance` → `api.save_state` |
 | `advance` | 출력 루트의 마지막 실행이 끝난 상태를 불러(`api.load_state`) N 일 진행하고 저장한다 |
 | `resume` | 지정한 `state_id` 를 불러 N 일 진행하고 저장한다. `--output-root` 가 비어 있으면 새 루트로 이어간다 |
+| `guardrails` | 시뮬레이터 팀 도구(S7-lite). 새 세계를 `--warmup-days` 진행한 시점에서 생성 이탈률 · 처치별 ATE · 쿠폰 사용률 · Sleeping Dog 비율을 계산해 시뮬레이터 숨김 영역 `ground_truth/guardrails/` 에 JSON 으로 쓰고 표로 출력한다. 봉인은 하지 않는다. 시스템 팀은 쓰지 않는다 |
 
 | 종료 코드 | 뜻 |
 |---|---|

@@ -4,28 +4,23 @@ import hashlib
 import json
 import re
 
-from src.simulator._internal import behavior, clock, genconfig, persona, profiles, traits
+from src.simulator._internal import behavior, clock, genconfig, params, persona, profiles, traits
 from src.simulator._internal.cart import MAX_QUANTITY
 from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 
 # S2: 고객 항목에 persona·hidden_traits 가 생기고 world_id 열쇠에 생성 config 다이제스트가 들어간다
 # (DR-S2-trait-sampling 6절). RNG_SCHEME 은 열쇠 형식이 그대로라 올리지 않는다.
 # S3: P6 가입일이 Day 1~272 로 퍼져 이벤트가 바뀐다(DR-S3-p6-signup). 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
-FORMAT_VERSION = "sim-state-v2"
-SIMULATOR_VERSION = "sim-0.3"
+# S4~S6(#143): 구매 퍼널·이탈 진행·처치 반응이 생겨 고객 항목(engagement·churning·checkout_seq·promo)과
+# 세션 항목(intent·stage·order), 큐 종류(treat), 카탈로그(240개, product_margin 생성)가 바뀐다.
+FORMAT_VERSION = "sim-state-v3"
+SIMULATOR_VERSION = "sim-0.4"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999
 # session_id 는 13자리 epoch ms 다(schema.IDENTIFIER_PATTERNS). 이 시각을 넘는 창은 만들지 않는다.
 MAX_TIME_MS = 10_000_000_000_000
 
-CATALOG: tuple[tuple[str, str, int], ...] = (
-    ("P0001", "fresh_food", 4900),
-    ("P0002", "meal_solution", 6500),
-    ("P0003", "dairy", 2800),
-    ("P0004", "beverage", 1500),
-    ("P0005", "household", 3900),
-)
 
 _VERSIONED = (
     ("format_version", FORMAT_VERSION),
@@ -39,18 +34,48 @@ _TOP_KEYS = frozenset({
 })
 _CUSTOMER_KEYS = frozenset({
     "customer_id", "signup_ms", "lifecycle", "persona", "hidden_traits", "cart", "recent_views",
-    "session", "rfm", "assignments", "next_seq",
+    "session", "rfm", "assignments", "next_seq", "engagement", "churning", "checkout_seq", "promo",
+    "purchased",
 })
 # 공개 오류 메시지 정책: 숨은 필드의 이름·페르소나 id·Trait 값을 싣지 않는다(docs/persona_spec.md 5.3).
 # 메시지는 load_state 의 StateFormatError 로 시스템 팀까지 간다. 키 목록에서는 이 둘을 가린다.
 _HIDDEN_KEYS = frozenset({"persona", "hidden_traits"})
 _CART_KEYS = frozenset({"quantity", "last_change_ms", "unit_price"})
-_SESSION_KEYS = frozenset({"session_id", "start_ms", "last_activity_ms", "actions", "open"})
+_SESSION_KEYS = frozenset({
+    "session_id", "start_ms", "last_activity_ms", "actions", "open", "intent", "stage", "order",
+})
+_SESSION_STAGES = frozenset({"browse", "checkout", "done"})
+_PROMO_KEYS = frozenset({"treatment_id", "at_ms", "campaign_id", "coupon_id", "claim", "clicked", "used"})
 _RFM_KEYS = frozenset({"order_count", "monetary", "last_purchase_ms", "last_visit_ms"})
-_QUEUE_KINDS = frozenset({"visit", "action"})
+_QUEUE_KINDS = frozenset({"visit", "action", "treat"})
 _TREATMENT_ID = re.compile(r"T[0-4]")
 _SESSION_ID = re.compile(r"S-(C\d{8})-\d{13}")
-_PRODUCT_IDS = frozenset(pid for pid, _, _ in CATALOG)
+
+
+# 행동 엔진(engine·treatment·guardrails)이 읽는 Trait 의 중립 별칭. 숨은 이름 문자열은 이 모듈(생성·저장의
+# 집)에만 둔다 — tests/test_isolation.py TestHiddenNameConfinement. 엔진은 별칭으로만 읽는다.
+_BEHAVIOR_ALIASES = (
+    ("visit", "base_visit_frequency"),
+    ("purchase", "base_purchase_probability"),
+    ("order_value", "base_order_value"),
+    ("cycle", "purchase_cycle"),
+    ("coupon", "coupon_sensitivity"),
+    ("shipping", "shipping_fee_sensitivity"),
+    ("churn", "base_churn_propensity"),
+    ("responsiveness", "marketing_responsiveness"),
+    ("fatigue", "marketing_fatigue"),
+    ("abandon", "cart_abandonment_propensity"),
+    ("loyalty", "brand_loyalty"),
+)
+
+
+def behavior_traits(customer: dict[str, object]) -> dict[str, int]:
+    """엔진용 Trait 묶음: 별칭 → 값, 그리고 처치 ID(T1~T4) → 그 처치의 민감도 Trait 값(config 가 고른다)."""
+    values = customer["hidden_traits"]
+    found = {alias: values[name] for alias, name in _BEHAVIOR_ALIASES}
+    for tid, arm in params.active().arms.items():
+        found[tid] = values[arm.sensitivity]
+    return found
 
 
 class IncompatibleState(ValueError):
@@ -91,9 +116,11 @@ def _profile_settings(profile: str) -> tuple[int, int]:
 
 
 def _catalog() -> list[dict[str, object]]:
+    # 정본 경제 규칙 product_margin 의 사본(simulator_config.yaml catalog)으로 생성한다 — 계약 v1 §11.
     return [
-        {"product_id": pid, "category": category, "unit_price": price, "unit_cost": None}
-        for pid, category, price in CATALOG
+        {"product_id": p.product_id, "category": p.category, "unit_price": p.unit_price,
+         "unit_cost": p.unit_cost}
+        for p in params.active().catalog
     ]
 
 
@@ -117,6 +144,11 @@ def _new_customer(
         },
         "assignments": [],
         "next_seq": 0,
+        "engagement": params.PPM,
+        "churning": False,
+        "checkout_seq": 0,
+        "promo": None,
+        "purchased": [],
     }
 
 
@@ -280,7 +312,7 @@ def _validate(world: dict[str, object], config: genconfig.GenerationConfig) -> N
     if world["catalog"] != _catalog():
         raise _fail("catalog", "이 판의 카탈로그와 다르다")
     if _list("orders", world["orders"]):
-        raise _fail("orders", "이 판은 주문을 만들지 않는다")
+        raise _fail("orders", "주문은 상태가 아니라 실행마다 교환 기록으로 남긴다 — 상태에는 비어 있어야 한다")
     customers = _list("customers", world["customers"])
     if len(customers) != count:
         raise _fail("customers", f"{len(customers)}명인데 num_customers 는 {count}")
@@ -302,6 +334,8 @@ def _validate(world: dict[str, object], config: genconfig.GenerationConfig) -> N
         _int(where, seq, 0, next_seqs[index] - 1)
         if kind not in _QUEUE_KINDS:
             raise _fail(where, f"모르는 사건 종류: {kind!r}")
+        if kind == "treat" and not customers[index]["assignments"]:
+            raise _fail(where, "배정 없는 노출 항목")
 
 
 class _Identity:
@@ -316,6 +350,7 @@ class _Identity:
         # 오류 메시지는 Trait 을 이름 대신 config 순번(docs/persona_spec.md 3절 번호)으로 가리킨다.
         self.ordered = tuple(enumerate(config.trait_names, start=1))
         self.tables = traits.tables(config)
+        self.product_ids = frozenset(p.product_id for p in params.active().catalog)
 
     def check(self, where: str, persona_id: object, values: object) -> None:
         # 위치와 사유만 남긴다 — 숨은 필드 이름·페르소나 id·Trait 값은 싣지 않는다.
@@ -336,6 +371,7 @@ class _Identity:
 
 def _validate_customer(index: int, value: object, now: int, identity: _Identity) -> int:
     where = f"customers[{index}]"
+    product_ids = identity.product_ids
     customer = _keys(where, value, _CUSTOMER_KEYS)
     if customer["customer_id"] != customer_id(index):
         raise _fail(where, f"고객 ID 가 순번과 다르다: {customer['customer_id']!r}")
@@ -347,7 +383,7 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
     if not isinstance(cart, dict):
         raise _fail(f"{where}.cart", "객체가 아니다")
     for pid in sorted(cart):
-        if pid not in _PRODUCT_IDS:
+        if pid not in product_ids:
             raise _fail(f"{where}.cart", f"카탈로그에 없는 상품: {pid!r}")
         item = _keys(f"{where}.cart.{pid}", cart[pid], _CART_KEYS)
         _int(f"{where}.cart.{pid}.quantity", item["quantity"], 1, MAX_QUANTITY)
@@ -357,7 +393,7 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
     if len(views) > behavior.RECENT_VIEWS_CAP:
         raise _fail(f"{where}.recent_views", f"{len(views)}건 — 상한을 넘는다")
     for view in views:
-        if not isinstance(view, list) or len(view) != 2 or view[1] not in _PRODUCT_IDS:
+        if not isinstance(view, list) or len(view) != 2 or view[1] not in product_ids:
             raise _fail(f"{where}.recent_views", f"[time_ms, product_id] 가 아니다: {view!r}")
         _int(f"{where}.recent_views", view[0], 0, now)
     session = customer["session"]
@@ -375,6 +411,11 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
         _int(f"{where}.session.actions", session["actions"], 0)
         if not isinstance(session["open"], bool):
             raise _fail(f"{where}.session.open", "bool 이 아니다")
+        _int(f"{where}.session.intent", session["intent"], 0)
+        if session["stage"] not in _SESSION_STAGES:
+            raise _fail(f"{where}.session.stage", f"모르는 단계: {session['stage']!r}")
+        if session["order"] is not None and not isinstance(session["order"], dict):
+            raise _fail(f"{where}.session.order", "객체가 아니다")
     rfm = _keys(f"{where}.rfm", customer["rfm"], _RFM_KEYS)
     _int(f"{where}.rfm.order_count", rfm["order_count"], 0)
     _int(f"{where}.rfm.monetary", rfm["monetary"], 0)
@@ -386,4 +427,20 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
         _int(f"{where}.assignments", entry[0], 0, now)
         if not isinstance(entry[1], str) or not _TREATMENT_ID.fullmatch(entry[1]):
             raise _fail(f"{where}.assignments", f"처치 ID 형식 위반: {entry[1]!r}")
+    _int(f"{where}.engagement", customer["engagement"], 0, params.PPM)
+    if not isinstance(customer["churning"], bool):
+        raise _fail(f"{where}.churning", "bool 이 아니다")
+    _int(f"{where}.checkout_seq", customer["checkout_seq"], 0, 999_999)
+    purchased = _list(f"{where}.purchased", customer["purchased"])
+    if len(purchased) > params.active().recent_purchases_cap or any(p not in product_ids for p in purchased):
+        raise _fail(f"{where}.purchased", "상한을 넘거나 카탈로그에 없는 상품이 있다")
+    promo = customer["promo"]
+    if promo is not None:
+        promo = _keys(f"{where}.promo", promo, _PROMO_KEYS)
+        if not isinstance(promo["treatment_id"], str) or not _TREATMENT_ID.fullmatch(promo["treatment_id"]):
+            raise _fail(f"{where}.promo", "처치 ID 형식 위반")
+        _int(f"{where}.promo.at_ms", promo["at_ms"], 0, now)
+        for flag in ("claim", "clicked", "used"):
+            if not isinstance(promo[flag], bool):
+                raise _fail(f"{where}.promo.{flag}", "bool 이 아니다")
     return _int(f"{where}.next_seq", customer["next_seq"], 0)

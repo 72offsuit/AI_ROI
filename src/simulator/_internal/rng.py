@@ -20,9 +20,7 @@ class Stream:
     __slots__ = ("_base", "_count")
 
     def __init__(self, seed: int, customer_id: str | None, purpose: str, day: int) -> None:
-        self._base = hashlib.sha256(
-            canonical_json([RNG_SCHEME, seed, customer_id, purpose, day])
-        )
+        self._base = hashlib.sha256(_stream_key(seed, customer_id, purpose, day))
         self._count = 0
 
     def next_u64(self) -> int:
@@ -66,6 +64,34 @@ def _total(weights: Sequence[int]) -> int:
     return total
 
 
+# 열쇠 직렬화의 빠른 경로 (S4 성능). canonical_json 과 **바이트까지 같은** 문자열을 직접 만든다 — 이스케이프가
+# 필요 없는 문자(아스키 영숫자와 `_` `:` `-`)만 있는 문자열과 bool 이 아닌 int 에만 쓰고, 나머지는 canonical_json 으로
+# 간다. 같은지는 tests/test_simulator_behavior.py 가 대조한다.
+_PLAIN = frozenset("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_:-")
+_PLAIN_SEEN: set[str] = set()
+
+
+def _plain(text: object) -> bool:
+    if type(text) is not str:
+        return False
+    if text in _PLAIN_SEEN:
+        return True
+    if text and _PLAIN.issuperset(text):
+        if len(_PLAIN_SEEN) < 1_000_000:
+            _PLAIN_SEEN.add(text)
+        return True
+    return False
+
+
+def _stream_key(seed: int, customer_id: str | None, purpose: str, day: int) -> bytes:
+    if type(seed) is int and type(day) is int and _plain(purpose) and (
+        customer_id is None or _plain(customer_id)
+    ):
+        who = "null" if customer_id is None else f'"{customer_id}"'
+        return f'["{RNG_SCHEME}",{seed},{who},"{purpose}",{day}]'.encode("ascii")
+    return canonical_json([RNG_SCHEME, seed, customer_id, purpose, day])
+
+
 class DayDraws:
     __slots__ = ("_seed", "_day", "_streams")
 
@@ -82,10 +108,15 @@ class DayDraws:
         return found
 
 
+def _event_key(seed: int, customer_id: str, seq: int) -> bytes:
+    # canonical_json 과 바이트까지 같은 빠른 경로(_stream_key 와 같은 조건). 같음은 tests/test_simulator_behavior.py 가 대조한다.
+    if type(seed) is int and type(seq) is int and _plain(customer_id):
+        return f'["{EVENT_ID_SCHEME}",{seed},"{customer_id}",{seq}]'.encode("ascii")
+    return canonical_json([EVENT_ID_SCHEME, seed, customer_id, seq])
+
+
 def event_id(seed: int, customer_id: str, seq: int) -> str:
-    raw = bytearray(
-        hashlib.sha256(canonical_json([EVENT_ID_SCHEME, seed, customer_id, seq])).digest()[:16]
-    )
+    raw = bytearray(hashlib.sha256(_event_key(seed, customer_id, seq)).digest()[:16])
     raw[6] = (raw[6] & 0x0F) | 0x40
     raw[8] = (raw[8] & 0x3F) | 0x80
     text = raw.hex()
