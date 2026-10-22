@@ -455,8 +455,9 @@ class TestSprintWithoutDecision(unittest.TestCase):
             self.assertNotIn("revenue_krw", s0["metrics"])
             # 시뮬레이터가 아직 만들지 않는 지표는 0 이 아니라 null 이다
             self.assertIsNone(s0["metrics"]["sim_revenue"])
-            # purchase 를 만들지 않는 판 — S1 입력을 계산하지 않고 사유를 남긴다
-            self.assertFalse(meta["purchase_generated"]["value"])
+            # purchase 생성 여부는 시뮬레이터 판에 따라 다르다(sim-0.3 은 만들지 않고 sim-0.4 부터 만든다).
+            # 판에 기대지 않고, 값이 bool 이며 판단 근거(events.purchase 상태)를 남기는지만 본다
+            self.assertIsInstance(meta["purchase_generated"]["value"], bool)
             self.assertIn("events.purchase", meta["purchase_generated"]["detail"])
             self.assertEqual("not_run", meta["realism_report"]["status"])
             self.assertFalse((run_dir / "realism_report.json").exists())
