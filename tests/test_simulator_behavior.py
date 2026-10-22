@@ -171,6 +171,16 @@ class TestStreamKeyFastPath(unittest.TestCase):
                 )
 
 
+class TestEventKeyFastPath(unittest.TestCase):
+    def test_fast_event_key_is_byte_identical_to_canonical_json(self) -> None:
+        for seed, cid, seq in [(0, "C00000001", 0), (2**63 - 1, "C99999999", 10**9), (True, "C1", 1),
+                               (1, 'C"1', 2), (1, "", 3), (1, "고객", 4)]:
+            with self.subTest(case=(seed, cid, seq)):
+                self.assertEqual(
+                    rng.canonical_json([rng.EVENT_ID_SCHEME, seed, cid, seq]), rng._event_key(seed, cid, seq)
+                )
+
+
 class TestCatalogCopy(unittest.TestCase):
     def test_catalog_is_generated_from_product_margin(self) -> None:
         catalog = params.active().catalog

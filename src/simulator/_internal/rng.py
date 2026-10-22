@@ -108,10 +108,15 @@ class DayDraws:
         return found
 
 
+def _event_key(seed: int, customer_id: str, seq: int) -> bytes:
+    # canonical_json 과 바이트까지 같은 빠른 경로(_stream_key 와 같은 조건). 같음은 tests/test_simulator_behavior.py 가 대조한다.
+    if type(seed) is int and type(seq) is int and _plain(customer_id):
+        return f'["{EVENT_ID_SCHEME}",{seed},"{customer_id}",{seq}]'.encode("ascii")
+    return canonical_json([EVENT_ID_SCHEME, seed, customer_id, seq])
+
+
 def event_id(seed: int, customer_id: str, seq: int) -> str:
-    raw = bytearray(
-        hashlib.sha256(canonical_json([EVENT_ID_SCHEME, seed, customer_id, seq])).digest()[:16]
-    )
+    raw = bytearray(hashlib.sha256(_event_key(seed, customer_id, seq)).digest()[:16])
     raw[6] = (raw[6] & 0x0F) | 0x40
     raw[8] = (raw[8] & 0x3F) | 0x80
     text = raw.hex()
