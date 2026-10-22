@@ -1,0 +1,21 @@
+orders_rows 3421083 users 206209 gaps_n 3214874
+gap mean 11.115 sd 9.207 p10 2.0 p25 4.0 p50 7.0 p75 15.0 p90 30.0
+share gap==0: 0.0211
+share gap==1: 0.0452
+share gap==7: 0.0997
+share gap==14: 0.0312
+share gap==21: 0.0141
+share gap==30: 0.1149
+share gap<=7: 0.5039
+share gap>=28: 0.1292
+share gap>=21: 0.1859
+orders/user min 4 p25 6 median 10 mean 16.59 p75 20 max 100
+top20% users share of orders: 0.5257
+users>=3gaps 206209 user-mean-gap p10 6.67 p25 9.81 p50 15.00 p75 20.62 p90 25.14 mean 15.45
+sd of ln(user mean gap): 0.527
+CV of user order rate (1/mean gap): 0.762 -> gamma shape approx 1.72
+within-user gap CV median 0.571 (users>=5 gaps n=162631)
+hist {0: 0.0211, 1: 0.0452, 2: 0.0601, 3: 0.0675, 4: 0.069, 5: 0.0667, 6: 0.0747, 7: 0.0997, 8: 0.0565, 9: 0.0368, 10: 0.0296, 11: 0.0252, 12: 0.0237, 13: 0.0259, 14: 0.0312, 15: 0.0207, 16: 0.0146, 17: 0.0122, 18: 0.0112, 19: 0.0107, 20: 0.012, 21: 0.0141, 22: 0.01, 23: 0.0074, 24: 0.0064, 25: 0.006, 26: 0.0059, 27: 0.0068, 28: 0.0083, 29: 0.006, 30: 0.1149}
+train lines 1384617 orders 131209 reordered share 0.5986 items/order 10.55
+dow {'0': 0.1756, '1': 0.1717, '2': 0.1366, '3': 0.1277, '4': 0.1246, '5': 0.1325, '6': 0.1312}
+hour 9-16 share 0.649; 0-6 share 0.027
