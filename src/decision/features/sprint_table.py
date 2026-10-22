@@ -164,6 +164,7 @@ class _Builder:
         frame = _clean(events)
         frame = frame[(frame["timestamp"] < t0) & frame["customer_id"].isin(ids)].copy()
         frame["_age"] = (t0 - frame["timestamp"]).dt.total_seconds() / 86400.0
+        frame["_kst_date"] = frame["timestamp"].dt.tz_convert(TIMEZONE).dt.normalize()
         self.frame, self.t0, self.ids = frame, t0, ids
         self.orders = _orders(frame)
         self.data_start_age = float(frame["_age"].max()) if len(frame) else 0.0
@@ -275,8 +276,7 @@ def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
     b._note_window("active_days_30d", 30)
     act30 = b._in(b.frame[b.frame["event_type"].isin(ACTIVITY)], 30)
     out["active_days_30d"] = b._full(
-        act30.groupby("customer_id")["timestamp"].agg(lambda s: s.dt.date.nunique())
-    ).fillna(0).astype(float)
+        act30.groupby("customer_id")["_kst_date"].nunique()).fillna(0).astype(float)
     out["return_visit_count_60d"] = b.count({"return_visit"}, 60, name="return_visit_count_60d")
     out["push_sent_count_60d"] = b.count({"push_sent"}, 60, name="push_sent_count_60d")
 
@@ -347,8 +347,7 @@ def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
 
     def _active_days(days, offset):
         rows = b._in(act, days, offset)
-        return b._full(rows.groupby("customer_id")["timestamp"].agg(
-            lambda s: s.dt.date.nunique())).fillna(0).astype(float)
+        return b._full(rows.groupby("customer_id")["_kst_date"].nunique()).fillna(0).astype(float)
 
     out["active_days_change_2w"] = _active_days(14, 0) - _active_days(14, 14)
 
