@@ -1,8 +1,9 @@
 {
-  "config_version": "sim-gen-v1",
+  "config_version": "sim-gen-v2",
   "notes": [
     "S2(#76) 생성 config. 내용은 JSON 문법만 쓴다 — 표준 json 으로 읽어 의존성 없는 Python 3.10 에서도 생성이 돈다(사용자 확정 U2).",
     "값은 모두 정수다. ratio_bp 는 1/10000, mu_ppm 은 1/1000000, kappa_milli·shape_milli 는 1/1000, sigma_ppm 은 1/1000000 단위다. 금액은 원, 구매 주기는 밀리일, 방문 빈도는 밀리회/주다.",
+    "signup_day_range 는 가입일 번호의 반열림 구간 [from, until) 이고 균등으로 뽑는다. 키가 없는 페르소나는 Day 0 가입이다. 프로파일과 무관하다 — 근거: docs/decisions/DR-S3-p6-signup.md(sim-gen-v2, S3 #77).",
     "personas 배열 순서가 곧 추첨 순서다. 순서를 바꾸면 같은 seed 의 페르소나 배정이 바뀐다.",
     "구성비(ratio_bp)와 페르소나별 모수는 docs/data_spec.html §3.2·§3.3 초안이고 외부 근거가 없다. repurchase_propensity 는 잠정값이다. 근거와 민감도: docs/decisions/DR-S2-persona-mix.md · DR-S2-hidden-trait-dist.md.",
     "생성 부분(config_version·personas·hidden_traits)을 바꾸면 config_version 을 올리고 tests/test_simulator_persona.py 의 CONFIG_PINS 에 새 다이제스트를 추가한다. 옛 상태·계보는 거부된다.",
@@ -37,7 +38,8 @@
     {
       "id": "new_customer",
       "alias": "P6",
-      "ratio_bp": 1000
+      "ratio_bp": 1000,
+      "signup_day_range": [1, 273]
     }
   ],
   "hidden_traits": [

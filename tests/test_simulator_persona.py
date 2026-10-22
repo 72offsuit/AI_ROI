@@ -18,7 +18,7 @@ from unittest import mock
 from src.measurement import kpi
 from src.measurement import schema as sc
 from src.simulator import api
-from src.simulator._internal import genconfig, persona, rng, traits
+from src.simulator._internal import clock, genconfig, persona, rng, traits
 from src.simulator._internal import world as world_state
 from tests.test_isolation import SRS_HIDDEN_TRAITS
 from tests.test_simulator_support import REPO_ROOT, SimulatorCase
@@ -35,6 +35,7 @@ CONFIG_TEXT = genconfig.CONFIG_PATH.read_text(encoding="utf-8")
 # 지난 판은 지우지 않는다 — 같은 판 이름에 다른 내용이 실리는 것을 막는 기록이다.
 CONFIG_PINS: dict[str, str] = {
     "sim-gen-v1": "e150e434d1abef461b9491f1e70f0902f83c4ef999d108a04e0e85bd79c19ccc",
+    "sim-gen-v2": "49bfe06b2edaa9d45ca653d98175d7458b90e7707dca1d00f57a28f9e4d4006d",
 }
 
 
@@ -267,6 +268,68 @@ class TestGenerationProperties(unittest.TestCase):
                 changed += 1
         self.assertGreater(changed, 0)
         self.assertLess(changed, 60)
+
+
+
+class TestSignupSchedule(unittest.TestCase):
+    """S3(#77) 가입일 — `DR-S3-p6-signup` U10."""
+
+    @staticmethod
+    def signup_days(world: dict[str, object]) -> dict[str, int]:
+        start = world["calendar_start_ms"]
+        return {c["customer_id"]: (c["signup_ms"] - start) // clock.DAY_MS for c in world["customers"]}
+
+    def test_only_the_scheduled_persona_joins_late_and_inside_its_range(self) -> None:
+        config = genconfig.active()
+        spans = {p.id: p.signup_day_range for p in config.personas}
+        scheduled = [pid for pid, span in spans.items() if span is not None]
+        self.assertEqual(1, len(scheduled), "가입 일정이 있는 페르소나는 신규가입 하나다")
+        self.assertEqual((1, 273), spans[scheduled[0]])
+        world = world_state.new_world(7, 3000, "reference")
+        days = self.signup_days(world)
+        late = []
+        for customer in world["customers"]:
+            day = days[customer["customer_id"]]
+            if customer["persona"] in scheduled:
+                self.assertTrue(1 <= day <= 272, day)
+                late.append(day)
+            else:
+                self.assertEqual(0, day)
+        # 균등 [1, 272]: n≈300 이면 양 끝 3분위에 모두 들어온다(한쪽이 비면 범위 해석 오류).
+        self.assertGreater(len(late), 200)
+        self.assertTrue(any(d <= 90 for d in late) and any(d >= 182 for d in late))
+
+    def test_signup_day_does_not_depend_on_profile_or_population_size(self) -> None:
+        base = self.signup_days(world_state.new_world(11, 400, "smoke"))
+        for profile in ("small", "reference", "rolling"):
+            with self.subTest(profile=profile):
+                self.assertEqual(base, self.signup_days(world_state.new_world(11, 400, profile)))
+        larger = self.signup_days(world_state.new_world(11, 401, "smoke"))
+        self.assertEqual(base, {cid: d for cid, d in larger.items() if cid in base})
+
+    def test_no_event_before_signup(self) -> None:
+        from src.simulator._internal import engine
+        world = world_state.new_world(3, 300, "smoke")
+        signup = {c["customer_id"]: clock.timestamp(c["signup_ms"]) for c in world["customers"]}
+        records = list(engine.run(world, world["calendar_start_ms"] + 60 * clock.DAY_MS))
+        self.assertTrue(records)
+        # 타임스탬프는 같은 +09:00 고정 폭 문자열이라 사전순이 시간순이다.
+        self.assertEqual([], [r for r in records if r["timestamp"] < signup[r["customer_id"]]])
+        late = {cid for cid, ts in signup.items() if ts > clock.timestamp(world["calendar_start_ms"])}
+        self.assertTrue(late, "60일 창에 아직 가입하지 않은 고객이 있어야 검사가 의미 있다")
+
+    def test_loader_rejects_malformed_ranges(self) -> None:
+        def with_range(value):
+            def edit(doc):
+                doc["personas"][0]["signup_day_range"] = value
+            return edit
+        cases = [[1], [5, 5], [6, 5], [-1, 3], [1.0, 3], [True, 3], "1-3", [0, genconfig.MAX_SIGNUP_DAY + 1]]
+        for value in cases:
+            with self.subTest(value=value):
+                doc = document()
+                with_range(value)(doc)
+                with self.assertRaises(genconfig.ConfigError):
+                    genconfig.parse(text_of(doc))
 
 
 class TestNamesDoNotCollideWithTheMeasurementContract(unittest.TestCase):

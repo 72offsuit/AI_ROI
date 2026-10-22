@@ -113,7 +113,7 @@ def init(
     Args:
         seed: `0 <= seed < 2**63` 정수.
         num_customers: 1 ~ 99,999,999 정수. 고객 ID 는 `C00000001` 부터 순번.
-        profile: `smoke` · `short` · `reference` · `long` · `rolling` 중 하나.
+        profile: `smoke` · `short` · `small` · `reference` · `long` · `rolling` 중 하나.
         output_root: 이 세계 전용 Sink 루트. 없거나 빈 디렉터리여야 한다.
         hidden_root: 테스트·도구 전용. 오케스트레이션은 넘기지 않는다.
 

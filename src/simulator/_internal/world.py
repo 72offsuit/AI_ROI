@@ -10,8 +10,9 @@ from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 
 # S2: 고객 항목에 persona·hidden_traits 가 생기고 world_id 열쇠에 생성 config 다이제스트가 들어간다
 # (DR-S2-trait-sampling 6절). RNG_SCHEME 은 열쇠 형식이 그대로라 올리지 않는다.
+# S3: P6 가입일이 Day 1~272 로 퍼져 이벤트가 바뀐다(DR-S3-p6-signup). 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
 FORMAT_VERSION = "sim-state-v2"
-SIMULATOR_VERSION = "sim-0.2"
+SIMULATOR_VERSION = "sim-0.3"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999
@@ -48,6 +49,7 @@ _SESSION_KEYS = frozenset({"session_id", "start_ms", "last_activity_ms", "action
 _RFM_KEYS = frozenset({"order_count", "monetary", "last_purchase_ms", "last_visit_ms"})
 _QUEUE_KINDS = frozenset({"visit", "action"})
 _TREATMENT_ID = re.compile(r"T[0-4]")
+_SESSION_ID = re.compile(r"S-(C\d{8})-\d{13}")
 _PRODUCT_IDS = frozenset(pid for pid, _, _ in CATALOG)
 
 
@@ -129,8 +131,9 @@ def new_world(seed: int, num_customers: int, profile: str) -> dict[str, object]:
     customers = []
     for index in range(num_customers):
         cid = customer_id(index)
-        # S2 는 전원 Day 0 가입이다. P6 의 중도 가입 일정은 S3 가 맡는다(DR-S2-persona-mix 4).
-        customers.append(_new_customer(cid, start_ms, *persona.generate(seed, cid, config)))
+        persona_id, hidden_traits = persona.generate(seed, cid, config)
+        signup_ms = start_ms + persona.signup_day(seed, cid, persona_id, config) * clock.DAY_MS
+        customers.append(_new_customer(cid, signup_ms, persona_id, hidden_traits))
     return {
         "format_version": FORMAT_VERSION,
         "simulator_version": SIMULATOR_VERSION,
@@ -360,9 +363,12 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
     session = customer["session"]
     if session is not None:
         session = _keys(f"{where}.session", session, _SESSION_KEYS)
-        if not isinstance(session["session_id"], str) or not re.fullmatch(
-            rf"S-{customer['customer_id']}-\d{{13}}", session["session_id"]
-        ):
+        # 고정 패턴 + 그룹 대조. 고객마다 패턴 문자열을 만들면 re 캐시(512)를 넘어 매번 컴파일된다.
+        matched = (
+            _SESSION_ID.fullmatch(session["session_id"])
+            if isinstance(session["session_id"], str) else None
+        )
+        if matched is None or matched.group(1) != customer["customer_id"]:
             raise _fail(f"{where}.session", f"session_id 형식 위반: {session['session_id']!r}")
         _int(f"{where}.session.start_ms", session["start_ms"], 0, MAX_TIME_MS)
         _int(f"{where}.session.last_activity_ms", session["last_activity_ms"], 0, MAX_TIME_MS)

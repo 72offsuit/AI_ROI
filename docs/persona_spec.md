@@ -9,7 +9,8 @@
 > | **코드** | `src/simulator/_internal/{genconfig,traits,fixedpoint,persona,world}.py` |
 > | **설명**(이 문서) | 위 셋을 한 흐름으로 묶는다. 숫자를 새로 정하지 않는다 |
 >
-> 현재 생성 config: `sim-gen-v1` · 생성 부분 다이제스트 `e150e434d1abef461b9491f1e70f0902f83c4ef999d108a04e0e85bd79c19ccc` · `SIMULATOR_VERSION` `sim-0.2`
+> 현재 생성 config: `sim-gen-v2` · 생성 부분 다이제스트 `49bfe06b2edaa9d45ca653d98175d7458b90e7707dca1d00f57a28f9e4d4006d` · `SIMULATOR_VERSION` `sim-0.3`
+> (S3 #77: P6 `signup_day_range` 추가 — `docs/decisions/DR-S3-p6-signup.md`. 페르소나·Trait 값은 `sim-gen-v1` 과 같다)
 
 ---
 

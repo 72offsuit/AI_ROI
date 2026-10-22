@@ -29,6 +29,8 @@ GENERATION_KEYS = ("config_version", "personas", "hidden_traits")
 _REQUIRED_TOP = frozenset(GENERATION_KEYS)
 _OPTIONAL_TOP = frozenset({"notes"})
 _PERSONA_KEYS = frozenset({"id", "alias", "ratio_bp"})
+# 선택 키. 없으면 Day 0 가입이다(DR-S3-p6-signup).
+_PERSONA_OPTIONAL_KEYS = frozenset({"signup_day_range"})
 _IDENTIFIER = re.compile(r"[a-z][a-z0-9_]*")
 _ALIAS = re.compile(r"P[0-9]+")
 _VERSION = re.compile(r"[a-z0-9][a-z0-9.-]*")
@@ -47,6 +49,8 @@ MAX_SCALE_VALUE = 1_000_000_000_000
 # 지금 config 의 최솟값은 LogNormal 2,700(purchase_cycle P1 = 0.45 × 6,000), Gamma 700(P5 방문 = 1,400 / 2)이다.
 MIN_SPREAD_UNITS = 100
 MIN_PERSONAS = 6
+# 가입일 범위 상한(일). 프로파일 중 가장 긴 long 의 총 일수(1,100일)를 덮는다.
+MAX_SIGNUP_DAY = 3_650
 PPM = 1_000_000
 
 
@@ -90,6 +94,8 @@ class PersonaSpec:
     id: str
     alias: str
     ratio_bp: int
+    # 반열림 [from, until) 일 번호. None 이면 Day 0 가입.
+    signup_day_range: tuple[int, int] | None = None
 
 
 @dataclass(frozen=True)
@@ -216,13 +222,16 @@ def _personas(value: object) -> tuple[PersonaSpec, ...]:
     specs: list[PersonaSpec] = []
     for index, item in enumerate(value):
         where = f"personas[{index}]"
-        entry = _exact_keys(where, item, _PERSONA_KEYS)
+        entry = _exact_keys(where, item, _PERSONA_KEYS, _PERSONA_OPTIONAL_KEYS)
         pid, alias = entry["id"], entry["alias"]
         if not isinstance(pid, str) or not _IDENTIFIER.fullmatch(pid):
             raise ConfigError(f"{where}.id 형식 위반: {pid!r}")
         if not isinstance(alias, str) or not _ALIAS.fullmatch(alias):
             raise ConfigError(f"{where}.alias 형식 위반: {alias!r}")
-        specs.append(PersonaSpec(pid, alias, _int(f"{where}.ratio_bp", entry["ratio_bp"], 1, RATIO_TOTAL_BP)))
+        specs.append(PersonaSpec(
+            pid, alias, _int(f"{where}.ratio_bp", entry["ratio_bp"], 1, RATIO_TOTAL_BP),
+            _signup_range(f"{where}.signup_day_range", entry.get("signup_day_range")),
+        ))
     for field in ("id", "alias"):
         seen = [getattr(p, field) for p in specs]
         if len(set(seen)) != len(seen):
@@ -233,6 +242,16 @@ def _personas(value: object) -> tuple[PersonaSpec, ...]:
     if total != RATIO_TOTAL_BP:
         raise ConfigError(f"ratio_bp 합이 {total} 이다 — {RATIO_TOTAL_BP} 이어야 한다")
     return tuple(specs)
+
+
+def _signup_range(where: str, value: object) -> tuple[int, int] | None:
+    if value is None:
+        return None
+    if not isinstance(value, list) or len(value) != 2:
+        raise ConfigError(f"{where}: [from, until] 두 정수가 아니다")
+    lo = _int(f"{where}[0]", value[0], 0, MAX_SIGNUP_DAY - 1)
+    hi = _int(f"{where}[1]", value[1], lo + 1, MAX_SIGNUP_DAY)
+    return lo, hi
 
 
 def _traits(value: object, persona_ids: tuple[str, ...]) -> tuple[TraitSpec, ...]:

@@ -14,6 +14,7 @@ from src.simulator._internal.rng import Stream
 # 행동 스트림은 day ≥ 0 이라 생성 스트림과 열쇠가 겹치지 않는다. 열쇠 형식이 같아 RNG_SCHEME 은 그대로다.
 GENERATION_DAY = -1
 PERSONA_PURPOSE = "persona"
+SIGNUP_PURPOSE = "signup"
 TRAIT_PURPOSE_PREFIX = "trait:"
 
 
@@ -30,3 +31,14 @@ def generate(seed: int, customer_id: str, config: GenerationConfig) -> tuple[str
         for spec in config.traits
     }
     return persona, values
+
+
+def signup_day(seed: int, customer_id: str, persona_id: str, config: GenerationConfig) -> int:
+    """가입일 번호(calendar_start 기준). 범위가 없는 페르소나는 0 — `DR-S3-p6-signup`.
+
+    열쇠에 profile 이 없어 같은 seed 면 프로파일이 달라도 같은 날이다. 페르소나·Trait 추첨과 독립이다.
+    """
+    span = next(p.signup_day_range for p in config.personas if p.id == persona_id)
+    if span is None:
+        return 0
+    return Stream(seed, customer_id, SIGNUP_PURPOSE, GENERATION_DAY).between(*span)
