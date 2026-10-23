@@ -143,10 +143,16 @@ def _log(message: str) -> None:
 
 
 class StageLog:
-    """단계별 `status: ok|not_run|failed` · 사유 · 소요시간."""
+    """단계별 `status: ok|not_run|failed` · 사유 · 소요시간.
 
-    def __init__(self) -> None:
+    `selected` 가 있으면 그 밖의 단계는 시도하지 않고 not_run 으로 적는다 — 사유에 `scope` 를 쓴다
+    (`src/main.py --mode` 가 실행 범위를 정한다, #206). None 이면 전 구간이다.
+    """
+
+    def __init__(self, selected: frozenset[str] | None = None, scope: str = "") -> None:
         self.stages: list[dict[str, Any]] = []
+        self.selected = selected
+        self.scope = scope
 
     def status(self, name: str) -> str | None:
         for stage in reversed(self.stages):
@@ -167,15 +173,20 @@ class StageLog:
     @contextmanager
     def stage(self, name: str, *, requires: tuple[str, ...] = ()) -> Iterator[None]:
         """`with log.stage(...)` 안에서 `NotRun` 은 not_run, 그 밖의 예외는 failed 로 적고 삼킨다."""
+        out_of_scope = self.selected is not None and name not in self.selected
         missing = [r for r in requires if not self.ok(r)]
-        if missing:
-            self.record(name, "not_run", f"선행 단계가 ok 가 아니다: {', '.join(missing)}")
-            # contextmanager 는 본문을 건너뛸 수 없다. `requires` 를 둔 본문은 첫 줄에서
-            # `skip_if_not_run` 을 불러 `_SkipBody` 로 빠져나오고, 여기서 삼킨다.
+        if out_of_scope or missing:
+            self.record(name, "not_run",
+                        f"실행 범위 밖이다({self.scope or '선택한 단계'}) — 시도하지 않았다" if out_of_scope
+                        else f"선행 단계가 ok 가 아니다: {', '.join(missing)}")
+            # contextmanager 는 본문을 건너뛸 수 없다. 본문은 첫 줄에서 `skip_if_not_run` 을 불러
+            # `_SkipBody` 로 빠져나오고, 여기서 삼킨다.
             try:
                 yield
             except _SkipBody:
-                pass
+                return
+            if out_of_scope:  # 범위 밖인데 본문이 돌았다 — 그 본문에 skip_if_not_run 이 없다
+                raise RuntimeError(f"단계 {name} 는 실행 범위 밖인데 본문이 실행됐다 (skip_if_not_run 없음)")
             return
         _log(f"{name}: 시작")
         started = time.perf_counter()
@@ -704,6 +715,10 @@ class SprintConfig:
     realism_report: Path = REALISM_REPORT
     cv_folds: int | None = None       # churn CV fold 수 덮어쓰기 — 없으면 model_config churn.cv_folds
     max_train_rows: int | None = None  # churn 학습·CV 표본 상한 — 없으면 전원
+    # src/main.py --mode (#206). 기본값이면 이전과 같다 — 전 구간을 돌고 아무것도 넘기지 않는다.
+    stages: frozenset[str] | None = None   # 실행할 단계 이름 — None 이면 전 구간
+    scope: str = ""                        # 범위 밖 단계의 not_run 사유에 쓰는 이름 (예: "--mode train")
+    capture: dict[str, Any] | None = None  # 실행 뒤 ctx(점수 · 예산)·비용·결과 폴더를 넘겨받을 곳
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -832,7 +847,7 @@ def run(config: SprintConfig) -> Path:
     """전 구간을 돌리고 결과 폴더 경로를 돌려준다. 단계 실패는 기록하고 다음으로 간다."""
     run_id = config.run_id or new_run_id()
     generated_at = mc.kst_now()
-    log = StageLog()
+    log = StageLog(config.stages, config.scope)
     out = Path(config.out)
     main_root = out / "raw" / "main"
     warmup = config.warmup_days if config.warmup_days is not None else PROFILE_WARMUP_DAYS.get(config.profile)
@@ -1049,6 +1064,8 @@ def run(config: SprintConfig) -> Path:
             _log(f"  Feature(t2) {ctx['X2'].shape}")
 
         scores: dict[str, Any] = {}
+        ctx["scores"] = scores  # 같은 dict — main.py 가 고객별 점수 CSV 를 쓴다(#206)
+
         with log.stage("scores_t2", requires=("features_t2",)):
             skip_if_not_run(log, "scores_t2")
             X2 = ctx["X2"]
@@ -1348,6 +1365,8 @@ def run(config: SprintConfig) -> Path:
         }
         run_dir = write_results(Path(config.results_root), run_id, payloads, extra_files)
         _log(f"결과: {run_dir}")
+        if config.capture is not None:  # src/main.py --mode 산출물용 (#206)
+            config.capture.update(ctx, costs=costs, run_dir=run_dir)
     return run_dir
 
 
