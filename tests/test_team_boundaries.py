@@ -27,9 +27,13 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
+import shutil
 import subprocess
+import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BOUNDARIES = REPO_ROOT / "docs" / "team_boundaries.json"
@@ -156,14 +160,20 @@ class TestBranchStaysInsideOneTeam(unittest.TestCase):
         cls.data = _load()
 
     @staticmethod
-    def _run(*args: str) -> str | None:
-        result = subprocess.run(
-            ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True
-        )
+    def _run(*args: str, root: Path = REPO_ROOT) -> str | None:
+        # git 실행 파일이 아예 없으면(예: python:3.10-slim 컨테이너) FileNotFoundError 가
+        # 나서 skip 이 아니라 ERROR 가 됐다 — 아래 docstring 의 "git 을 못 쓰면 None" 과
+        # 어긋났다(#172 작업 중 발견, PR 본문에 기록).
+        try:
+            result = subprocess.run(
+                ["git", *args], cwd=root, capture_output=True, text=True
+            )
+        except FileNotFoundError:
+            return None
         return result.stdout if result.returncode == 0 else None
 
     @classmethod
-    def _changed_files(cls) -> list[str] | None:
+    def _changed_files(cls, root: Path = REPO_ROOT) -> list[str] | None:
         """`main` 대비 변경 파일 — **커밋된 것 + 아직 커밋하지 않은 것 전부.**
 
         ★ 처음에는 `git diff base...HEAD` 만 보았고, 그것은 커밋된 변경만 센다.
@@ -173,10 +183,20 @@ class TestBranchStaysInsideOneTeam(unittest.TestCase):
 
         git 을 못 쓰면 `None` 을 돌려주고 호출자가 skip 한다 — 대조하지 않은 것을
         통과로 적지 않는다.
+
+        ★ `--ignore-submodules=dirty` (#172). git worktree 에 본 체크아웃의 `Plan/` 을
+          복사하면 `Plan/.git` 의 상대 경로(`gitdir: ../.git/modules/Plan`)가 worktree 의
+          `.git` **파일** 아래를 가리켜 깨지고, 기본 `git status` 는 서브모듈 안을 들여다보다
+          `fatal`(128)로 죽는다. 그러면 이 검사는 BLOCKED skip 이 되어 **팀 경계를 한 번도
+          대조하지 않은 채** 초록으로 끝났다 — 에이전트마다 `submodule.Plan.ignore=all` 을
+          환경변수로 주고 돌린 이유다. `Plan/**` 은 어느 팀 소유도 아니므로(공용 읽기 전용)
+          서브모듈 *안의* 변경은 이 판정에 들어갈 자리가 없다. `dirty` 는 그 안만 보지 않고
+          포인터 이동은 여전히 보이게 두는 가장 좁은 단계다(`all` 은 포인터까지 숨긴다).
+          `TestBoundaryCheckSurvivesBrokenSubmoduleGitdir` 가 깨진 gitdir 을 실제로 만들어 고정한다.
         """
         committed: list[str] = []
         for base in ("origin/main", "main"):
-            output = cls._run("diff", "--name-only", f"{base}...HEAD")
+            output = cls._run("diff", "--name-only", f"{base}...HEAD", root=root)
             if output is not None:
                 committed = [line for line in output.splitlines() if line.strip()]
                 break
@@ -184,7 +204,7 @@ class TestBranchStaysInsideOneTeam(unittest.TestCase):
             return None
 
         # 인덱스와 작업 트리 — porcelain 의 경로는 3열부터, 이름 변경은 ` -> ` 뒤가 현재 이름.
-        status = cls._run("status", "--porcelain")
+        status = cls._run("status", "--porcelain", "--ignore-submodules=dirty", root=root)
         if status is None:
             return None
         pending = []
@@ -219,4 +239,75 @@ class TestBranchStaysInsideOneTeam(unittest.TestCase):
                 if _team_of(path, owned) is not None
             ) + "\n두 팀에 걸치는 작업이 필요하면 브랜치를 나누고, 공용 계약 변경이면 "
             "양 팀 합의를 거친다.",
+        )
+
+
+class TestBoundaryCheckSurvivesBrokenSubmoduleGitdir(unittest.TestCase):
+    """★ #172 — 깨진 `Plan` gitdir 이 경계 검사를 BLOCKED 로 만들지 않는다.
+
+    worktree 에 본 체크아웃의 `Plan/` 을 복사하면 `Plan/.git` 이 존재하지 않는
+    `../.git/modules/Plan` 을 가리킨다. 그 상태를 임시 저장소에 **실제로 만들고**
+    두 방향을 본다 — ① 대조군: 기본 `git status` 가 정말 죽는다(재현이 살아 있다)
+    ② `_changed_files()` 는 그래도 변경 목록을 낸다. ①이 없으면 ②의 통과는
+    재현이 사라져서인지 고쳐서인지 구분되지 않는다.
+
+    `GIT_*` 환경변수는 지운다. 우회(`GIT_CONFIG_* … submodule.Plan.ignore=all`)를 준
+    채로 스위트를 돌리면 대조군이 거짓으로 통과하기 때문이다.
+    """
+
+    def setUp(self) -> None:
+        if shutil.which("git") is None:
+            self.skipTest("BLOCKED: git 이 없다 — 깨진 서브모듈 재현을 만들지 못했다 (통과가 아니다)")
+        clean_env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+        patcher = mock.patch.dict(os.environ, clean_env, clear=True)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.root = Path(tempfile.mkdtemp(prefix="airoi-broken-submodule-"))
+        self.addCleanup(shutil.rmtree, self.root, ignore_errors=True)
+
+        def git(*args: str) -> str:
+            return subprocess.run(
+                ["git", "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+                 "-c", "commit.gpgsign=false", *args],
+                cwd=self.root, capture_output=True, text=True, check=True,
+            ).stdout.strip()
+
+        git("init", "-q")
+        git("symbolic-ref", "HEAD", "refs/heads/main")
+        (self.root / "README.md").write_text("x\n", encoding="utf-8")
+        git("add", "README.md")
+        git("commit", "-q", "-m", "init")
+        sha = git("rev-parse", "HEAD")
+        (self.root / ".gitmodules").write_text(
+            '[submodule "Plan"]\n\tpath = Plan\n\turl = https://example.invalid/Plan.git\n',
+            encoding="utf-8",
+        )
+        git("add", ".gitmodules")
+        git("update-index", "--add", "--cacheinfo", f"160000,{sha},Plan")
+        git("commit", "-q", "-m", "plan submodule")
+        (self.root / "Plan").mkdir()
+        # 본 체크아웃에서 복사해 온 gitfile 그대로 — 여기서는 가리키는 곳이 없다.
+        (self.root / "Plan" / ".git").write_text("gitdir: ../.git/modules/Plan\n", encoding="utf-8")
+
+    def test_plain_status_really_breaks_here(self) -> None:
+        """대조군 — 재현이 사라지면 아래 검사는 아무것도 증명하지 않는다."""
+        result = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=self.root, capture_output=True, text=True
+        )
+        self.assertNotEqual(
+            0, result.returncode,
+            "깨진 Plan gitdir 에서 기본 git status 가 성공했다 — 재현 픽스처가 더는 "
+            "#172 의 상태를 만들지 못한다",
+        )
+
+    def test_changed_files_still_lists_pending_changes(self) -> None:
+        (self.root / "src" / "decision").mkdir(parents=True)
+        (self.root / "src" / "decision" / "x.py").write_text("", encoding="utf-8")
+        changed = TestBranchStaysInsideOneTeam._changed_files(self.root)
+        self.assertIsNotNone(
+            changed, "깨진 Plan gitdir 때문에 변경 목록을 얻지 못했다 — 경계 검사가 BLOCKED 로 빠진다"
+        )
+        self.assertTrue(
+            any(path.startswith("src/") for path in changed or []),
+            f"작업 트리의 새 파일이 변경 목록에 없다: {changed}",
         )

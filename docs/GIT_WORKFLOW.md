@@ -116,12 +116,35 @@ Issue 템플릿은 이 저장소에 없다. 아래를 본문에 포함한다.
 
 Merge 기준:
 
-- CI workflow **`Tests`** / job **`격리 경계 + 전체 테스트`** 통과
-- 리뷰 승인 1건
+- CI **전 잡** 통과 — `.github/workflows/` 의 `pull_request` 워크플로우 전부(현재 `Tests` · `Tests (with deps)` · `파이썬 3.10 호환` · `대시보드 검증`). `Tests` 하나만 보던 이전 기준이 `#141`(`Tests (with deps)` 실패)을 통과시켰다
+- 작성자가 아닌 리뷰어의 **승인(`APPROVED`) 1건** — `COMMENTED` 는 승인이 아니다
 - §7 출하 게이트 충족
 - 미해결 `bug` 라벨 결함 0건
 
 **merge 방식은 squash merge다.** PR 안의 작업 단위 커밋은 리뷰를 위해 보존되지만 `main`에는 squash 커밋 하나로 반영된다. merge 실행 권한은 §6을 따른다.
+
+### 5.1 병합은 `scripts/safe_merge.py` 로만 한다 (#172)
+
+이 저장소는 private + GitHub Free 라 **브랜치 보호(필수 체크 · 필수 리뷰)를 켤 수 없다.** 서버가 막아 주지 않아 `#141` 이 `Tests (with deps)` **실패 상태로 병합됐다.** GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 늘 빈 값이다. 그래서 `gh pr merge` 를 직접 부르지 않고 아래 스크립트를 거친다.
+
+```bash
+python3 scripts/safe_merge.py <PR 번호> --dry-run   # 판정만 — 무엇이 막혔는지 출력
+python3 scripts/safe_merge.py <PR 번호>             # 판정 → 통과하면 squash 병합
+```
+
+| 막는 조건 | |
+|---|---|
+| PR 이 열려 있지 않거나 초안 | |
+| 필수 체크가 **아직 보고되지 않음** | 필수 목록은 `.github/workflows/*.yml` 에서 읽는다. 푸시 직후처럼 일부만 뜬 상태는 보고된 것만 보면 초록이다 |
+| 보고된 체크 중 `SUCCESS` 가 아닌 것 | `SKIPPED` · `NEUTRAL` · 진행 중도 통과가 아니다 |
+| 작성자가 아닌 리뷰어의 승인 0건 · 해소되지 않은 변경 요청 | 리뷰어마다 **마지막 판정**만 센다 |
+| main 과 충돌 | |
+
+- 통과하면 `gh pr merge --squash --match-head-commit <판정한 head>` 를 실행한다 — 판정 뒤에 커밋이 올라오면 gh 가 거부한다.
+- **우회 옵션이 없다.** 조건을 못 맞추면 조건을 맞춘다. 막혔는데 꼭 병합해야 하는 사정이 생기면 스크립트를 고치지 말고 **사람이 결정하고 PR 에 사유를 남긴다.**
+- 승인 뒤에 커밋이 더 올라온 경우는 막지 않고 `[주의]` 로 알린다 — 리뷰어가 그 커밋을 봤는지 확인한다.
+- 병합 실행 자체는 여전히 §6 의 **개별 승인** 대상이다. 스크립트는 승인을 대신하지 않고, 승인된 병합이 실패한 CI 위로 나가지 않게만 한다.
+- 근거 · 기각한 안: `docs/decisions/DR-172-merge-guard.md`. 검사: `tests/test_safe_merge.py`.
 
 ## 6. 에이전트 git 권한
 
@@ -225,3 +248,19 @@ BATHOS 웨이브 산출물은 **커밋한다.** 생성물이 아니라 **의사�
 예외 하나: **목업 캔버스 HTML은 커밋하지 않는다.** Claude Design 에디터 런타임이 통째로 들어간 생성물(2.5MB)이고 아티팩트 URL로 접근 가능하다. `.gitignore`가 제외한다.
 
 `.agent-team/` 변경은 `docs` type을 쓴다.
+
+## 11. git worktree 와 `Plan` 서브모듈 (#172)
+
+에이전트가 이슈마다 `git worktree` 를 따로 쓰는 일이 많다. **새 worktree 의 `Plan/` 은 빈 디렉터리다** — 서브모듈은 worktree 마다 따로 초기화되기 때문이다. 이 상태는 정상이고 테스트도 그대로 돈다.
+
+★ **본 체크아웃의 `Plan/` 을 worktree 로 복사하지 않는다.** `Plan/.git` 은 디렉터리가 아니라 `gitdir: ../.git/modules/Plan` 한 줄짜리 파일이다. worktree 에서는 `.git` 이 **파일**이라 이 상대 경로가 가리키는 곳이 없고, 그때부터 그 worktree 의 기본 `git status` 가 전부 `fatal: not a git repository: Plan/../.git/modules/Plan`(종료 코드 128)로 죽는다. 스프린트 1 에서 `tests/test_team_boundaries.py` 가 BLOCKED skip 으로 빠지고 에이전트마다 `GIT_CONFIG_* … submodule.Plan.ignore=all` 을 붙여 돌린 원인이 이것이다(2026-10-23 재현).
+
+| 하고 싶은 것 | 할 일 |
+|---|---|
+| worktree 에서 PRD/SRS 를 **읽기만** | 본 체크아웃의 `Plan/` 을 **경로로 읽는다** (`<본 체크아웃>/Plan/…`). 복사하지 않는다 |
+| worktree 안에 `Plan/` 이 **있어야** 함 (`tokens:test` 등) | worktree 안에서 `git submodule update --init` — worktree 전용 서브모듈 저장소가 `.git/worktrees/<이름>/modules/Plan` 에 따로 생긴다. 네트워크와 `Plan` 접근 권한이 필요하다 |
+| 이미 복사해서 깨졌다 | 복사본 `Plan/` 을 지우고 빈 디렉터리로 되돌린 뒤 필요하면 위 줄. 복사본은 정본이 아니므로 지워도 잃는 것이 없다 — 다만 그 안에서 편집한 것이 있으면 먼저 `Plan` 저장소로 옮긴다 |
+
+- `tests/test_team_boundaries.py` 는 이제 `git status --ignore-submodules=dirty` 로 변경 목록을 얻어 **깨진 gitdir 에서도 BLOCKED 가 되지 않는다.** `Plan/**` 은 어느 팀 소유도 아니라 판정에 영향이 없다. `GIT_CONFIG_*` 우회는 더는 필요 없다 — 쓰지 않는다.
+- 저장소 설정(`.gitmodules` 의 `ignore = all`)으로 해결하지 않는다. 모든 체크아웃에서 `Plan` 포인터 변경까지 `git status` 에서 숨겨, "포인터를 커밋하지 않는다"(§1)를 사람이 확인할 수단이 사라진다.
+- 근거 · 기각한 안: `docs/decisions/DR-172-merge-guard.md`.
