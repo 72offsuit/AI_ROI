@@ -68,8 +68,12 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
   HistGB 에 넣는다(결손을 0 으로 채우지 않는다).
 - HistGB 기저 학습기 설정(`BASE_LEARNER`: 깊이 3 · 잎 최소 80 · L2 3 · 학습률 0.03 · 200 회)은 **테스트용
   합성 데이터**에서 3 안을 비교해 골랐다. 프로젝트 데이터·Test 분할을 보고 고른 값이 아니다.
-- `summarize_strategy` 는 `sim_contribution_profit` 차이를 먼저 쓰고, 양쪽에 없으면 `Δ(매출 − 마케팅비)`
-  대체 계산에 `PROFIT_FALLBACK_REVENUE_BASED` 를 붙인다. 이 대체값은 COGS 를 빼지 않아 **과대평가**다.
+- ~~`summarize_strategy` 는 `sim_contribution_profit` 차이를 먼저 쓰고, 양쪽에 없으면 `Δ(매출 − 마케팅비)`
+  대체 계산에 `PROFIT_FALLBACK_REVENUE_BASED` 를 붙인다. 이 대체값은 COGS 를 빼지 않아 **과대평가**다.~~
+  **번복 (2026-10-23, #169 → `DR-169-measured-contribution-profit.md`).** 실제 코드는 "양쪽에 없으면" 이
+  아니라 공통 키가 없으면(한쪽 결손 · 키 이름 다름 포함) 대체로 떨어졌고, 그 값으로 `roi_status = "ok"` 가
+  나갈 수 있었다. 이제 정식 증분이익은 공통 기여이익 차이로만 내고(오케스트레이션이 분기마다 측정 계층
+  실측 기여이익을 넘긴다), 결손이면 계산 불가다. 대체값은 `directional_*` 별도 필드 · 별도 상태다.
 - `analyze_ab` 는 이진(비율 z-검정)과 연속(Welch t) 결과를 값으로 판정해 둘 다 지원한다.
 - (결함 수정, 2026-10-22) 학습셋에서 **전부 NaN** 이거나 **결측 없는 상수**인 Feature 열은 제외하고
   `dropped_features`·`feature_screening` 에 목록을 남긴다. 처치군별 하위 모델은 그 부분 표본에서 다시

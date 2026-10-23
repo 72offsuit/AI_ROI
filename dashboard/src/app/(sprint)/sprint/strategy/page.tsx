@@ -18,7 +18,8 @@ export default async function StrategyPage() {
   const st = await loadSprint("strategy_comparison");
   const rows = st.kind === "ok" ? (st.artifact.strategies ?? []) : [];
   const label = (s: (typeof rows)[number]) => `${s.id} ${typeof s.name === "string" ? s.name : ""}`.trim();
-  // 증분이익의 계산 근거(DG-13). 실측 기여이익이 없으면 roi.py 가 매출 기준 대체 계산에 이 플래그를 붙인다.
+  // 증분이익의 계산 근거(DG-13). 실측 기여이익이 없으면 증분이익은 계산 불가이고, roi.py 가 방향 확인용
+  // 대체값을 별도 필드(directional_revenue_minus_marketing_vs_S1)에 싣고 이 플래그를 붙인다(#169).
   const revenueFallback = (s: (typeof rows)[number]) => (s.flags ?? []).includes("PROFIT_FALLBACK_REVENUE_BASED");
   const anyFallback = rows.some(revenueFallback);
 
@@ -103,8 +104,14 @@ export default async function StrategyPage() {
                       </td>
                       <td className={TDR}>
                         <Val text={fmtKrw(s.incremental_profit_vs_S1, true)} />
+                        {typeof s.incremental_profit_status === "string" && s.incremental_profit_status !== "ok" ? (
+                          <span className="block text-text-secondary">{s.incremental_profit_status}</span>
+                        ) : null}
                         {revenueFallback(s) ? (
-                          <span className="block whitespace-nowrap text-text-secondary">매출 기준 대체 · COGS 미차감</span>
+                          <span className="block whitespace-nowrap text-text-secondary">
+                            방향 확인용 Δ(매출 − 마케팅 비용){" "}
+                            <Val text={fmtKrw(s.directional_revenue_minus_marketing_vs_S1, true)} /> · COGS 미차감 — 증분이익 아님
+                          </span>
                         ) : null}
                       </td>
                       <td className={TDR}>
@@ -122,7 +129,7 @@ export default async function StrategyPage() {
               title="증분이익 (vs S1)"
               note={
                 anyFallback
-                  ? "0 선 왼쪽은 S1 보다 손해입니다. ⚠ 실측 공헌이익이 없어 Δ(매출 − 마케팅 비용) 대체 계산입니다 — 원가(COGS)를 빼지 않아 과대평가될 수 있습니다 (이슈 #169)."
+                  ? "0 선 왼쪽은 S1 보다 손해입니다. ⚠ 실측 공헌이익이 없는 전략은 증분이익이 계산 불가입니다. 표의 '방향 확인용' 값은 Δ(매출 − 마케팅 비용)으로 원가(COGS)를 빼지 않아 증분이익이 아니며 막대에 그리지 않습니다 (이슈 #169)."
                   : "0 선 왼쪽은 S1 보다 손해입니다."
               }
             >

@@ -152,15 +152,25 @@ class TestRoi(unittest.TestCase):
         self.assertNotIn("PROFIT_FALLBACK_REVENUE_BASED", r["flags"])
         self.assertEqual(10, r["n_population"])
 
-    def test_revenue_fallback_is_flagged(self) -> None:
+    def test_revenue_fallback_is_separate_and_not_profit(self) -> None:
+        """#169 — 대체값은 별도 필드다. 정식 증분이익 · ROI 는 계산 불가(이전에는 대체값으로 ROI ok)."""
         base = {"strategy_id": "S1", "sim_contribution_profit": None, "revenue_krw": 1000.0,
                 "planned_treatment_cost_krw": 100.0}
         ai = {"strategy_id": "S2", "sim_contribution_profit": None, "revenue_krw": 1100.0,
               "planned_treatment_cost_krw": 140.0}
-        r = summarize_strategy(ai, base)
-        self.assertAlmostEqual(100.0 - 40.0, r["incremental_profit_vs_S1"])
-        self.assertTrue(r["incremental_profit_basis"].startswith("fallback:"))
+        r = summarize_strategy(ai, base, ai_investment_cost=5.0)
+        self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIsNone(r["incremental_profit_basis"])
+        self.assertIn("계산 불가", r["incremental_profit_status"])
+        self.assertAlmostEqual(100.0 - 40.0, r["directional_revenue_minus_marketing_vs_S1"])
+        self.assertEqual("Δrevenue_krw − Δplanned_treatment_cost_krw", r["directional_basis"])
+        self.assertIn("방향 확인용", r["directional_status"])
+        self.assertIsNone(r["roi"])
+        self.assertNotEqual("ok", r["roi_status"])
+        self.assertIsNone(r["ai_roi"])
+        self.assertNotEqual("ok", r["ai_roi_status"])
         self.assertIn("PROFIT_FALLBACK_REVENUE_BASED", r["flags"])
+        self.assertIn("CONTRIBUTION_PROFIT_MISSING", r["flags"])
         self.assertIn("MARKETING_COST_PLANNED_NOT_REALIZED", r["flags"])
 
     def test_mixed_basis_is_not_compared(self) -> None:
@@ -168,6 +178,14 @@ class TestRoi(unittest.TestCase):
         r = summarize_strategy({"strategy_id": "S2", "sim_contribution_profit": 10.0},
                                {"strategy_id": "S1", "contribution_profit": 5.0})
         self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIn("기준 불일치", r["incremental_profit_status"])
+        self.assertIsNone(r["directional_revenue_minus_marketing_vs_S1"])
+        self.assertNotIn("PROFIT_FALLBACK_REVENUE_BASED", r["flags"])
+
+    def test_summarize_all_keeps_baseline_zero(self) -> None:
+        rows = summarize_all({"S1": self.BASE})
+        self.assertEqual("ok", rows[0]["incremental_profit_status"])
+        self.assertIn("not_run", rows[0]["directional_status"])
 
     def test_summarize_all(self) -> None:
         rows = summarize_all({"S1": self.BASE, "S0": {"marketing_cost": 0.0, "contribution_profit": 250.0}})
@@ -176,6 +194,113 @@ class TestRoi(unittest.TestCase):
         self.assertEqual("무처치", rows[0]["name"])
         self.assertAlmostEqual(0.0, rows[1]["incremental_profit_vs_S1"])
         self.assertIsNone(rows[1]["roi"])
+
+
+class TestRoiProfitBasis(unittest.TestCase):
+    """#169 — 정식 증분이익은 공통 기여이익 차이로만. 결손 · 키 불일치는 계산 불가, 대체값은 별도."""
+
+    #: 오케스트레이션이 측정 계층(build_kpi_report)으로 낸 분기 집계의 모양 (DR-169).
+    S1 = {"strategy_id": "S1", "sim_contribution_profit": None, "sim_revenue": None, "sim_marketing_cost": None,
+          "measured_revenue": 24_087_300.0, "measured_marketing_cost": 100_000.0,
+          "measured_contribution_profit": 6_277_952.0, "revenue_krw": 900_000.0,
+          "planned_treatment_cost_krw": 70_300.0, "churn_rate": 0.30}
+
+    def test_measured_profit_is_the_formal_increment(self) -> None:
+        ai = {**self.S1, "strategy_id": "S3", "measured_revenue": 24_435_800.0, "measured_marketing_cost": 280_000.0,
+              "measured_contribution_profit": 6_198_289.0, "revenue_krw": 950_000.0, "churn_rate": 0.29}
+        r = summarize_strategy(ai, self.S1, ai_investment_cost=1_000.0)
+        self.assertAlmostEqual(6_198_289.0 - 6_277_952.0, r["incremental_profit_vs_S1"])
+        self.assertEqual("measured_contribution_profit", r["incremental_profit_basis"])
+        self.assertEqual("ok", r["incremental_profit_status"])
+        # ROI 분모는 계획치가 아니라 측정 계층 실현 마케팅비다
+        self.assertEqual("measured_marketing_cost", r["basis"]["incremental_marketing_cost"])
+        self.assertAlmostEqual(-79_663.0 / 180_000.0, r["roi"])
+        self.assertEqual("ok", r["ai_roi_status"])
+        self.assertIsNone(r["directional_revenue_minus_marketing_vs_S1"])
+        self.assertIn("not_run", r["directional_status"])
+        for flag in ("PROFIT_FALLBACK_REVENUE_BASED", "CONTRIBUTION_PROFIT_MISSING",
+                     "MARKETING_COST_PLANNED_NOT_REALIZED"):
+            self.assertNotIn(flag, r["flags"])
+        # 매출(측정)↑ · 기여이익↓ — 대체 계산으로는 영원히 판정할 수 없던 경우다
+        self.assertEqual({"status": "ok", "triggered": True},
+                         {k: r["guardrails"]["revenue_up_profit_down"][k] for k in ("status", "triggered")})
+        self.assertEqual("measured_revenue", r["guardrails"]["revenue_up_profit_down"]["basis"]["revenue"])
+        self.assertIn("revenue_up_profit_down", r["flags"])
+        self.assertEqual("measured_revenue", r["basis"]["revenue"])  # 표의 매출도 기여이익과 같은 모집단
+
+    def test_one_side_missing_is_not_computable(self) -> None:
+        """전략 쪽만 결손 — 이전에는 대체 계산으로 떨어져 roi_status=ok 였다."""
+        ai = {**self.S1, "strategy_id": "S2", "measured_contribution_profit": None,
+              "measured_marketing_cost": 300_000.0, "measured_revenue": 25_000_000.0}
+        r = summarize_strategy(ai, self.S1, ai_investment_cost=1_000.0)
+        self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIn("전략 쪽 contribution_profit 결손", r["incremental_profit_status"])
+        self.assertIsNone(r["roi"])
+        self.assertIn("계산 불가", r["roi_status"])
+        self.assertIsNone(r["ai_roi"])
+        self.assertIsNone(r["ai_net_incremental_value"])
+        self.assertIn("계산 불가", r["ai_roi_status"])
+        self.assertAlmostEqual(912_700.0 - 200_000.0, r["directional_revenue_minus_marketing_vs_S1"])
+        self.assertIn("PROFIT_FALLBACK_REVENUE_BASED", r["flags"])
+        self.assertIn("CONTRIBUTION_PROFIT_MISSING", r["flags"])
+
+    def test_baseline_side_missing_is_named(self) -> None:
+        base = {**self.S1, "measured_contribution_profit": None}
+        r = summarize_strategy({**self.S1, "strategy_id": "S4"}, base)
+        self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIn("기준선 쪽 contribution_profit 결손", r["incremental_profit_status"])
+
+    def test_key_mismatch_is_not_compared_even_with_revenue(self) -> None:
+        """키 이름이 다르면 같은 정의라는 대조가 없다 — 차이를 내지 않는다."""
+        ai = {"strategy_id": "S5", "sim_contribution_profit": 330.0, "revenue_krw": 1100.0,
+              "planned_treatment_cost_krw": 150.0}
+        base = {"strategy_id": "S1", "measured_contribution_profit": 300.0, "revenue_krw": 1000.0,
+                "planned_treatment_cost_krw": 100.0}
+        r = summarize_strategy(ai, base)
+        self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIn("기준 불일치", r["incremental_profit_status"])
+        self.assertIn("sim_contribution_profit", r["incremental_profit_status"])
+        self.assertIn("measured_contribution_profit", r["incremental_profit_status"])
+        self.assertIsNone(r["roi"])
+        self.assertAlmostEqual(100.0 - 50.0, r["directional_revenue_minus_marketing_vs_S1"])
+
+    def test_missing_is_not_zero(self) -> None:
+        """결손을 0 으로 채우지 않는다 — 0 은 정직한 값이다."""
+        zero = {**self.S1, "strategy_id": "S0", "measured_contribution_profit": 0.0}
+        r = summarize_strategy(zero, self.S1)
+        self.assertAlmostEqual(-6_277_952.0, r["incremental_profit_vs_S1"])
+        self.assertEqual("ok", r["incremental_profit_status"])
+        nan = {**self.S1, "strategy_id": "S0", "measured_contribution_profit": float("nan")}
+        self.assertIsNone(summarize_strategy(nan, self.S1)["incremental_profit_vs_S1"])
+
+    def test_guardrail_is_not_run_without_common_profit(self) -> None:
+        ai = {**self.S1, "strategy_id": "S2", "measured_contribution_profit": None, "measured_revenue": 30_000_000.0}
+        r = summarize_strategy(ai, self.S1)
+        verdict = r["guardrails"]["revenue_up_profit_down"]
+        self.assertEqual("not_run", verdict["status"])
+        self.assertIsNone(verdict["triggered"])  # False(통과) 가 아니다
+        self.assertIn("공통 기여이익 차이 없음", verdict["reason"])
+        self.assertIn("REVENUE_UP_PROFIT_DOWN_NOT_RUN", r["flags"])
+        self.assertNotIn("revenue_up_profit_down", r["flags"])
+
+    def test_guardrail_false_is_a_verdict(self) -> None:
+        ai = {**self.S1, "strategy_id": "S3", "measured_contribution_profit": 6_500_000.0}
+        verdict = summarize_strategy(ai, self.S1)["guardrails"]["revenue_up_profit_down"]
+        self.assertEqual(("ok", False), (verdict["status"], verdict["triggered"]))
+
+    def test_cost_surge_not_run_when_baseline_cost_is_zero(self) -> None:
+        base = {**self.S1, "measured_marketing_cost": 0.0}
+        ai = {**self.S1, "strategy_id": "S2", "measured_marketing_cost": 50_000.0, "churn_rate": 0.2}
+        r = summarize_strategy(ai, base)
+        self.assertEqual("not_run", r["guardrails"]["retention_up_cost_surge"]["status"])
+        self.assertIn("RETENTION_UP_COST_SURGE_NOT_RUN", r["flags"])
+
+    def test_without_baseline_everything_is_not_computable(self) -> None:
+        r = summarize_strategy({**self.S1, "strategy_id": "S2"}, None)
+        self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIn("기준선", r["incremental_profit_status"])
+        self.assertIsNone(r["roi"])
+        self.assertEqual({"not_run"}, {v["status"] for v in r["guardrails"].values()})
 
 
 if __name__ == "__main__":

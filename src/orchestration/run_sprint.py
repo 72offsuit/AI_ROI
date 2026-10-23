@@ -14,6 +14,10 @@
    같은 시점·같은 난수에서 출발시킨다. Feature(t2) 로 점수를 내고(``t1`` 에서 학습한 모델)
    ``plan`` → ``apply_treatment`` → ``advance(42)`` → ``sim.metrics(t2, t2+42)`` + 이벤트 기반 결과.
    기준은 S1 이다(PRD §63). S1 은 상한 없이 실행하고 그 계획 비용 합(C_rule)을 S2~S5 의 예산으로 쓴다(DR-145).
+   분기마다 그 세계가 활성일 때 ``sim.exchange_bundle`` 로 교환 묶음을 받고, 측정 계층
+   ``publish.build_kpi_report`` 로 분기 창의 매출·마케팅비·**실측 기여이익**(묶음의 주문 시점 원가로
+   COGS 차감)을 계산해 ``measured_*`` 로 넘긴다(DR-169). 분기 루트는 ``out/branches/{S}/raw`` —
+   묶음이 그 형제 ``simulator_exchange/`` 에 분기별로 남는다.
    S4·S5 의 가치는 CLV × margin_rate 다 — 측정 계층 실현 기여이익률, 없으면 economic_config 매출 가중 마진.
    결과 JSON 은 대시보드 sprint 로더 타입(dashboard/src/lib/artifacts/sprint-types.ts)의 키로 낸다.
    S1 입력(마지막 구매 경과일·누적 주문 수·eligible)은 이벤트에서 계산한다 — purchase 를 만들지 않는
@@ -557,6 +561,107 @@ def margin_rate_basis(metrics: Mapping[str, Any] | None) -> tuple[float | None, 
 
 def two_classes(series: Any) -> bool:
     return series is not None and series.dropna().nunique() >= 2
+
+
+# ── 실측 기여이익 — 분기별 교환 묶음 → 측정 계층 (#169 · DR-169) ─────────────────
+
+
+def branch_raw_root(out: Path, strategy: str) -> Path:
+    """전략 분기의 Sink 루트. 분기마다 **부모 폴더를 따로** 둔다.
+
+    ``sim.exchange_bundle`` 은 활성 세계 출력 루트의 형제 ``simulator_exchange/`` 에 묶음을 쓴다
+    (``docs/simulator_api.md``). 분기 루트가 한 부모 아래 있으면 마지막 분기가 앞 분기의 묶음을
+    덮어써 분기별 원가 근거를 디스크에서 대조할 수 없다(DR-169). 이렇게 두면 묶음 위치가 측정
+    계층 기본값(``exchange.default_roots`` — Sink 루트의 형제)과도 같다.
+    """
+    return out / "branches" / strategy / "raw"
+
+
+#: 측정 계층 경제 지표의 조립(``publish.assemble_orders`` · ``assemble_campaign``)이 읽는 이벤트 —
+#: 이 유형이거나 ``campaign_id`` 가 있는 이벤트. 나머지는 경제 지표에 영향이 없어 거른다(분기 창 이벤트가
+#: 20K 실행에서 1.4M 건이다 — 전량 dict 로 들지 않는다). 조립이 다른 이벤트를 읽기 시작하면
+#: ``tests/test_orchestration_sprint.py`` 의 전량 대조가 실패한다.
+ECONOMIC_EVENT_TYPES = frozenset({"purchase", "coupon_use", "push_sent"})
+#: ``build_kpi_report`` 에서 꺼내 남기는 경제 지표 — 기여이익과 그 구성요소.
+ECONOMIC_METRICS: tuple[str, ...] = (
+    "revenue", "cogs", "shipping_subsidy", "message_cost", "coupon_cost", "campaign_fixed_cost",
+    "marketing_cost", "contribution_profit",
+)
+#: ``roi.summarize_strategy`` 에 ``measured_<이름>`` 으로 넘기는 지표.
+MEASURED_KEYS: tuple[str, ...] = ("revenue", "marketing_cost", "contribution_profit")
+
+
+def economic_events(raw_root: Path) -> list[dict[str, object]]:
+    """``raw_root`` 의 이벤트 중 경제 지표 조립이 읽는 것만(``ECONOMIC_EVENT_TYPES`` 또는 ``campaign_id`` 보유)."""
+    from src.measurement import sink
+
+    return [
+        event for event in sink.read_events(raw_root)
+        if event.get("event_type") in ECONOMIC_EVENT_TYPES or isinstance(event.get("campaign_id"), str)
+    ]
+
+
+def measured_economics(raw_root: Path, bundle_root: Path, index_date: Any,
+                       events: list[dict[str, object]] | None = None) -> dict[str, Any]:
+    """분기 창의 경제 지표 — 측정 계층 ``publish.build_kpi_report`` 를 **그대로** 부르고 시뮬레이터 출처 값만 꺼낸다.
+
+    게시물 ``kpi_report`` 의 기여이익과 같은 함수·같은 조립이다(정의가 두 벌이 되지 않는다).
+    묶음이 없으면 측정 계층이 ``contribution_profit`` 을 ``NO_COST_BASIS`` 로 낸다 — 그대로 싣는다.
+    ``index_date`` 는 경제 지표에 쓰이지 않는다(``build_kpi_report`` 의 다른 지표용 인자).
+    """
+    from src.measurement import config_loader
+    from src.measurement import exchange as ex
+    from src.measurement import publish as mp
+    from src.measurement.sink import EventSource
+
+    config = config_loader.load_economic_config(ECONOMIC_CONFIG).cost_accounting
+    bundle = ex.read_exchange(bundle_root, EventSource.SIMULATOR)
+    events = economic_events(raw_root) if events is None else events
+    split = mp.partition_by_source(events)
+    source = EventSource.SIMULATOR.value
+    report = mp.build_kpi_report(events, split, index_date=index_date, config=config,
+                                 bundles={source: bundle} if bundle is not None else {})
+    by_name = {entry["name"]: entry for entry in report["metrics"]}
+    return {
+        "source": "src.measurement.publish.build_kpi_report — 게시물 kpi_report 와 같은 함수·조립, "
+                  "시뮬레이터 출처만(MEA-002)",
+        "raw_root": raw_root,
+        "bundle_root": bundle_root,
+        "bundle": ({"status": "ok", "orders": len(bundle.orders), "generated_at": bundle.generated_at}
+                   if bundle is not None else
+                   {"status": "not_run", "reason": "교환 묶음이 없다 — 기여이익은 NO_COST_BASIS"}),
+        "event_filter": f"event_type ∈ {sorted(ECONOMIC_EVENT_TYPES)} 또는 campaign_id 보유",
+        "n_events_read": len(events),
+        "n_simulator_events": len(split.simulator),
+        "n_commerce_events_excluded": len(split.commerce),
+        "metrics": {name: by_name[name]["value"]["by_source"][source] for name in ECONOMIC_METRICS},
+    }
+
+
+def branch_economics(raw_root: Path, end: datetime) -> dict[str, Any]:
+    """활성 분기 세계의 묶음을 받고(``sim.exchange_bundle``) 측정 계층으로 경제 지표를 낸다.
+
+    실패해도 분기 단계를 멈추지 않는다 — ``status: failed`` 와 사유를 남기고, 그때 ``measured_*``
+    는 ``None`` 이라 증분이익은 계산 불가가 된다(0 으로 채우지 않는다).
+    """
+    try:
+        bundle = sim.exchange_bundle(end)
+        if bundle.get("status") != "ok":
+            return {"status": "not_run", "reason": f"sim.exchange_bundle 상태 {bundle.get('status')!r}"}
+        last_day = (end - timedelta(days=1)).astimezone(KST).date()
+        return {"status": "ok", "reason": None,
+                **measured_economics(raw_root, Path(str(bundle["path"])), last_day)}
+    except Exception as error:  # noqa: BLE001 — 기여이익만 계산 불가로 두고 분기는 계속한다
+        traceback.print_exc(file=sys.stderr)
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
+
+
+def measured_value(record: Mapping[str, Any] | None, key: str) -> Any:
+    """``measured_economics`` 기록에서 ``ok`` 인 값만. 아니면 ``None``(0 이 아니다)."""
+    if not record or record.get("status") != "ok":
+        return None
+    metric = (record.get("metrics") or {}).get(key) or {}
+    return metric.get("value") if metric.get("status") == "ok" else None
 
 
 # ── JSON ────────────────────────────────────────────────────────────────────
@@ -1131,7 +1236,7 @@ def run(config: SprintConfig) -> Path:
                     budget = ctx["budget"]["planning_budget_krw"]
                     entry["budget_krw"] = budget
                     assignments = dict(call_plan(strategy, scores, budget, costs))
-                branch_root = out / "raw" / strategy
+                branch_root = branch_raw_root(out, strategy)
                 sim.restore(ctx["snapshot"], output_root=branch_root)
                 if assignments:
                     sim.apply_treatment(assignments)
@@ -1156,13 +1261,16 @@ def run(config: SprintConfig) -> Path:
                 entry["sim_metrics"] = {
                     k: mc.metric_to_json(v) for k, v in sim.metrics(ctx["t2"], summary.end).items()
                 }
+                # 실측 기여이익 — 이 분기 세계가 활성인 지금 묶음을 받는다(다음 restore 전에, DR-169).
+                entry["measured_economics"] = branch_economics(branch_root, summary.end)
 
                 def sim_value(key: str) -> Any:
                     metric = entry["sim_metrics"].get(key, {})
                     return metric.get("value") if metric.get("status") == "ok" else None
 
                 # summarize_strategy 가 읽는 키 — 값을 고르는 순서(roi.CANDIDATES)는 의사결정이 정한다.
-                # 측정 계층 값은 sim_*, 이벤트 결과는 revenue_krw·churn_rate, 계획 비용은 planned_treatment_cost_krw.
+                # sim.metrics 값은 sim_*, 측정 계층 호출 값은 measured_*(DR-169), 이벤트 결과는
+                # revenue_krw·churn_rate, 계획 비용은 planned_treatment_cost_krw.
                 metrics: dict[str, Any] = {
                     "id": strategy,
                     "name": _strategy_name(strategy),
@@ -1172,6 +1280,8 @@ def run(config: SprintConfig) -> Path:
                 }
                 for key in ("revenue", "marketing_cost", "contribution_profit", "churn_rate"):
                     metrics[f"sim_{key}"] = sim_value(key)
+                for key in MEASURED_KEYS:
+                    metrics[f"measured_{key}"] = measured_value(entry["measured_economics"], key)
                 try:
                     build_outcomes = decision_fn("build_outcomes")
                     if population is None:
@@ -1295,7 +1405,7 @@ def run(config: SprintConfig) -> Path:
             "event_counts_by_type_until_t2": ctx.get("event_types_t2"),
             "event_source": reader.source,
             "event_source_fallback_reason": reader.fallback_reason,
-            "raw_roots": {"main": main_root, **{s: out / "raw" / s for s in STRATEGIES}},
+            "raw_roots": {"main": main_root, **{s: branch_raw_root(out, s) for s in STRATEGIES}},
             "budget": budget_record,
             "cost_basis": basis,
             "cost_basis_reason": basis_reason,
@@ -1318,6 +1428,9 @@ def run(config: SprintConfig) -> Path:
                 "strategies_restored_from_it": [s for s in STRATEGIES if log.ok(f"strategy_{s}")],
                 "same_random_numbers": "같은 토큰에서 restore — 같은 시점·같은 고객 상태·같은 난수 (docs/simulator_api.md restore)",
                 "rct_effect_overlap": "RCT 처치 효과 창 [t1, t1+42) 는 t2 에서 끝난다 — 전략 창 [t2, t2+42) 와 겹치지 않는다(정의상)",
+                "contribution_profit": "분기마다 sim.exchange_bundle → 측정 계층 publish.build_kpi_report 의 "
+                                       "contribution_profit(교환 묶음 COGS 차감, 시뮬레이터 출처만). 결손이면 증분이익 "
+                                       "계산 불가 — strategy_details.*.measured_economics (DR-169)",
             },
             "decision_modules": {k: decision_available(k) for k in DECISION_API},
             "provenance": provenance(),

@@ -362,9 +362,93 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         s0 = _read(self.run_dir, "strategy_comparison")["strategy_details"]["S0"]["metrics"]
         for key in ("id", "n_targeted", "treatment_mix", "sim_revenue", "sim_marketing_cost",
                     "sim_contribution_profit", "sim_churn_rate", "revenue_krw", "churn_rate",
-                    "planned_treatment_cost_krw"):
+                    "planned_treatment_cost_krw", "measured_revenue", "measured_marketing_cost",
+                    "measured_contribution_profit"):
             self.assertIn(key, s0)
         self.assertIsNone(s0["sim_marketing_cost"])  # 측정 계층이 만들지 않으면 None — 0 이 아니다
+
+    # #169 — 실측 기여이익 ------------------------------------------------------
+    def _economics(self, strategy: str) -> dict:
+        return _read(self.run_dir, "strategy_comparison")["strategy_details"][strategy]["measured_economics"]
+
+    def test_every_branch_has_its_own_bundle_and_measured_profit(self) -> None:
+        details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
+        for strategy in rs.STRATEGIES:
+            record = details[strategy]["measured_economics"]
+            self.assertEqual("ok", record["status"], strategy)
+            self.assertEqual((self.base / "out" / "branches" / strategy / "simulator_exchange").resolve(),
+                             Path(record["bundle_root"]).resolve(), strategy)
+            self.assertEqual("ok", record["bundle"]["status"], strategy)
+            self.assertEqual(0, record["n_commerce_events_excluded"], strategy)
+            for name in ("revenue", "cogs", "marketing_cost", "contribution_profit"):
+                self.assertEqual("ok", record["metrics"][name]["status"], f"{strategy}.{name}")
+            metrics = details[strategy]["metrics"]
+            self.assertEqual(record["metrics"]["contribution_profit"]["value"], metrics["measured_contribution_profit"])
+            self.assertEqual(record["metrics"]["revenue"]["value"], metrics["measured_revenue"])
+            self.assertEqual(record["metrics"]["marketing_cost"]["value"], metrics["measured_marketing_cost"])
+            # COGS 를 뺐다 — 기여이익 < 매출
+            self.assertLess(metrics["measured_contribution_profit"], metrics["measured_revenue"], strategy)
+
+    def test_profit_is_not_a_constant_multiple_of_revenue(self) -> None:
+        """EC-1 — COGS 가 원가율 곱이면 분기마다 기여이익률이 같아진다."""
+        details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
+        ratios = {round(d["metrics"]["measured_contribution_profit"] / d["metrics"]["measured_revenue"], 12)
+                  for d in details.values()}
+        self.assertGreater(len(ratios), 1)
+
+    def test_event_filter_matches_full_events(self) -> None:
+        """경제 지표 조립이 읽지 않는 이벤트만 거른다 — 전량으로 낸 값과 같아야 한다."""
+        index_date = datetime(2025, 5, 1).date()
+        for strategy in rs.STRATEGIES:
+            record = self._economics(strategy)
+            raw, bundle = Path(record["raw_root"]), Path(record["bundle_root"])
+            full = list(sink.read_events(raw))
+            filtered = rs.measured_economics(raw, bundle, index_date)
+            everything = rs.measured_economics(raw, bundle, index_date, events=full)
+            self.assertEqual(everything["metrics"], filtered["metrics"], strategy)
+            self.assertLess(filtered["n_events_read"], len(full), strategy)
+
+    def test_real_roi_uses_measured_profit_without_fallback(self) -> None:
+        """정상 실행(묶음 있음)에서는 대체 계산이 발동하지 않는다."""
+        from src.decision import roi
+
+        details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
+        base = details["S1"]["metrics"]
+        for strategy in rs.STRATEGIES:
+            row = roi.summarize_strategy(details[strategy]["metrics"], base)
+            self.assertEqual("ok", row["incremental_profit_status"], strategy)
+            self.assertEqual("measured_contribution_profit", row["incremental_profit_basis"], strategy)
+            self.assertIsInstance(row["incremental_profit_vs_S1"], float, strategy)
+            self.assertIsNone(row["directional_revenue_minus_marketing_vs_S1"], strategy)
+            for flag in ("PROFIT_FALLBACK_REVENUE_BASED", "CONTRIBUTION_PROFIT_MISSING",
+                         "MARKETING_COST_PLANNED_NOT_REALIZED", "REVENUE_UP_PROFIT_DOWN_NOT_RUN"):
+                self.assertNotIn(flag, row["flags"], strategy)
+            self.assertEqual("ok", row["guardrails"]["revenue_up_profit_down"]["status"], strategy)
+
+    def test_missing_bundle_makes_profit_not_computable(self) -> None:
+        """묶음이 없으면 측정 계층이 NO_COST_BASIS 를 내고, 증분이익은 계산 불가로 나간다."""
+        from src.decision import roi
+
+        record = self._economics("S2")
+        missing = rs.measured_economics(Path(record["raw_root"]), self.base / "없는-묶음", datetime(2025, 5, 1).date())
+        self.assertEqual("not_run", missing["bundle"]["status"])
+        self.assertEqual("ok", missing["metrics"]["revenue"]["status"])
+        self.assertEqual("unavailable", missing["metrics"]["contribution_profit"]["status"])
+        self.assertEqual("NO_COST_BASIS", missing["metrics"]["contribution_profit"]["reason_code"])
+        details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
+        ai = dict(details["S2"]["metrics"])
+        for key in rs.MEASURED_KEYS:
+            ai[f"measured_{key}"] = rs.measured_value({"status": "ok", **missing}, key)
+        self.assertIsNone(ai["measured_contribution_profit"])
+        row = roi.summarize_strategy(ai, details["S1"]["metrics"], ai_investment_cost=1_000.0)
+        self.assertIsNone(row["incremental_profit_vs_S1"])
+        self.assertIn("전략 쪽 contribution_profit 결손", row["incremental_profit_status"])
+        self.assertIsNone(row["roi"])
+        self.assertNotEqual("ok", row["roi_status"])
+        self.assertNotEqual("ok", row["ai_roi_status"])
+        self.assertIsNotNone(row["directional_revenue_minus_marketing_vs_S1"])  # 별도 필드에만
+        self.assertIn("PROFIT_FALLBACK_REVENUE_BASED", row["flags"])
+        self.assertEqual("not_run", row["guardrails"]["revenue_up_profit_down"]["status"])
 
     def test_dashboard_shapes(self) -> None:
         churn = _read(self.run_dir, "churn_eval")
@@ -455,6 +539,9 @@ class TestSprintWithoutDecision(unittest.TestCase):
             self.assertNotIn("revenue_krw", s0["metrics"])
             # 시뮬레이터가 아직 만들지 않는 지표는 0 이 아니라 null 이다
             self.assertIsNone(s0["metrics"]["sim_revenue"])
+            # 측정 계층 호출은 의사결정 모듈과 무관하게 돈다 (#169)
+            self.assertEqual("ok", s0["measured_economics"]["status"])
+            self.assertIn("status", s0["measured_economics"]["metrics"]["contribution_profit"])
             # purchase 생성 여부는 시뮬레이터 판에 따라 다르다(sim-0.3 은 만들지 않고 sim-0.4 부터 만든다).
             # 판에 기대지 않고, 값이 bool 이며 판단 근거(events.purchase 상태)를 남기는지만 본다
             self.assertIsInstance(meta["purchase_generated"]["value"], bool)
@@ -607,6 +694,28 @@ class TestHelpers(unittest.TestCase):
         same = rs.stratified_cap(X, y, None, seed=1)
         self.assertIs(X, same[0])
         self.assertFalse(same[2]["applied"])
+
+    def test_branch_economics_failure_is_recorded_not_zero(self) -> None:
+        """묶음을 못 받으면 분기는 계속하고 기여이익은 None 이다 (#169)."""
+        end = datetime(2025, 5, 1, tzinfo=KST)
+        with mock.patch.object(rs.sim, "exchange_bundle", side_effect=sim.SimulatorError("no orders")), _quiet():
+            record = rs.branch_economics(Path("unused"), end)
+        self.assertEqual("failed", record["status"])
+        self.assertIn("no orders", record["reason"])
+        for key in rs.MEASURED_KEYS:
+            self.assertIsNone(rs.measured_value(record, key))
+        with mock.patch.object(rs.sim, "exchange_bundle", return_value={"status": "empty"}):
+            self.assertEqual("not_run", rs.branch_economics(Path("unused"), end)["status"])
+        self.assertIsNone(rs.measured_value({"status": "ok", "metrics": {
+            "contribution_profit": {"status": "unavailable", "value": None}}}, "contribution_profit"))
+        self.assertEqual(0, rs.measured_value({"status": "ok", "metrics": {
+            "contribution_profit": {"status": "ok", "value": 0}}}, "contribution_profit"))  # 측정된 0
+
+    def test_branch_roots_have_separate_parents(self) -> None:
+        out = Path("/x")
+        parents = {rs.branch_raw_root(out, s).parent for s in rs.STRATEGIES}
+        self.assertEqual(len(rs.STRATEGIES), len(parents))
+        self.assertEqual("raw", rs.branch_raw_root(out, "S1").name)
 
     def test_decision_fn_reports_missing_module(self) -> None:
         with mock.patch.dict(sys.modules, {"src.decision.churn": None}):

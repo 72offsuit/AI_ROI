@@ -29,7 +29,9 @@
 ## 3. 지표 정의의 근사
 
 - **CLV 는 42일 매출이다.** 12개월 CLV 가 아니다(#154). 이익으로 환산할 근거(마진율)가 측정 계층에 없으면 S4 · S5 의 가치는 매출 기준이고 `run_meta.margin_rate` 에 그렇게 적는다.
-- **증분이익 대체 계산.** 측정 계층의 기여이익이 기준선이나 전략 한쪽에라도 없으면 `Δ(매출 − 마케팅비)` 를 쓰고 `PROFIT_FALLBACK_REVENUE_BASED` 플래그를 붙인다. 이 값은 **COGS 를 빼지 않아 기여이익 증분을 과대평가**하고, 순매출(할인 후, DR-101)에서 쿠폰비를 다시 빼므로 쿠폰 할인을 이중 차감한다 — 기여이익의 대용이 아니라 방향 확인용이다(`src/decision/roi.py` · #156).
+- **증분이익은 측정 계층 실측 기여이익으로만 낸다** (#169 · `docs/decisions/DR-169-measured-contribution-profit.md`). 오케스트레이션이 분기마다 시뮬레이터 교환 묶음(`sim.exchange_bundle`)을 받아 측정 계층 `publish.build_kpi_report` 로 기여이익(묶음의 주문 시점 원가로 COGS 차감)을 계산한다. 전략·기준선 어느 한쪽에라도 같은 키의 기여이익이 없으면 **증분이익 · ROI · AI ROI 는 계산 불가**(`incremental_profit_status` 가 사유)이고 `CONTRIBUTION_PROFIT_MISSING` 이 붙는다. 그때만 방향 확인용 `Δ(매출 − 마케팅비)` 를 **별도 필드** `directional_revenue_minus_marketing_vs_S1` 에 싣고 `PROFIT_FALLBACK_REVENUE_BASED` 를 붙인다 — COGS 미차감 · 쿠폰 할인 이중 차감이라 부호도 보장하지 않는다. 매출↑/이익↓ 가드레일은 공통 기여이익 차이가 없으면 `guardrails.revenue_up_profit_down.status = not_run` 이다.
+- **분기 창의 금액 대조(DQ-09)는 돌리지 않는다.** 묶음은 계보 전량, 이벤트는 분기 창뿐이라 그대로 대조하면 거짓 위반이 난다. 묶음에 없는 주문은 `NO_COST_BASIS` 로 잡히지만 이벤트 ↔ 묶음 금액 불일치는 잡히지 않는다(DR-169).
+- **전략 비교표의 매출 · 마케팅비 · 기여이익은 분기 창 전 고객**(측정 계층)이고 이탈률은 Feature(t2) 모집단(이벤트 결과)이다(DR-169).
 - **계획 비용과 실현 비용.** 마케팅비가 측정값이 아니라 계획치(`planned_treatment_cost_krw`)면 `MARKETING_COST_PLANNED_NOT_REALIZED` 가 붙는다. 계획 비용은 쿠폰 전량 사용 상한이라 같은 예산에서 AI 전략이 고르는 고객 수가 보수적으로 적다(#156).
 - **증분 ROI** 는 기준선 대비 추가 마케팅비가 0 이하이면 계산 불가(`null`)다 — 비율이 음수 · 무한대가 되어 해석이 뒤집힌다(`roi.py`).
 - AI ROI(PRD §64)는 AI 투자비가 주어질 때만 계산한다. 스프린트 실행은 투자비를 넘기지 않으므로 계산 불가다.
