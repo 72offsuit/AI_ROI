@@ -89,7 +89,7 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 |---|---|
 | GitHub 권한 | `AI_ROI` · `Plan`(private 서브모듈) · `Ecommerce_Service` — 네 명 모두 이미 있다 |
 | `git` · [`gh`](https://cli.github.com) | `gh auth login` 을 한 번 해 둔다. 이슈·PR 을 터미널에서 본다 |
-| **Python 3.12** | CI 와 같은 판이다. 선언된 최소는 3.10(`python-compat.yml` 이 CI 에서 확인)이지만 로컬은 3.12 로 맞춘다 |
+| **Python 3.12** | **전체 파이프라인의 지원 런타임**이다 — CI · Dockerfile 과 같은 판. 고정 의존성(numpy · scipy · shap)이 3.12 이상에서만 설치된다. 3.10 은 **측정 계층 하한**(`python-compat.yml` 이 의존성 없이 확인)이지 전체가 도는 판이 아니다(`docs/decisions/DR-207-python-runtime.md`) |
 | Node.js | `dashboard/` 를 건드릴 때만 |
 
 ### 3.2 받기 · 환경 · 첫 검증

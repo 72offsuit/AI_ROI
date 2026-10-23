@@ -1,6 +1,7 @@
 # 개발·검증 의존성. 런타임(requirements.txt)에 들어가지 않는 것만 여기 적는다.
 #
 # Resolved on Python 3.12.4 (CI parity). See requirements.txt for why 3.12 and not 3.14.
+# 지원 Python 판은 requirements.txt 머리의 선언을 따른다 — 전체 3.12, 측정 계층 하한 3.10 (#207).
 #
 # Decision D-21 / M05-a: jsonschema is DEV-ONLY.
 # Consequence, stated so nobody is surprised at publish time: publish-time

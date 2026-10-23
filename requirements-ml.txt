@@ -7,4 +7,7 @@
 #
 # 설치: pip install -r requirements.txt -r requirements-ml.txt
 # 버전은 스프린트 venv(Python 3.12)가 실제로 돌린 값이다.
+# Python 판은 requirements.txt 의 선언(3.12)을 따른다 — 이 파일은 그것과 함께 설치한다(#207).
+# Docker 에서는 CPU 인덱스로 받는다(NFR-03): docker build --build-arg WITH_TORCH=1 .
+#   PyPI 의 Linux torch 는 CUDA 패키지(nvidia-*)를 함께 끌고 온다.
 torch==2.14.1
