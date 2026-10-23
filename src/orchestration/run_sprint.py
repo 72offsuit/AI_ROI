@@ -52,6 +52,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
+from src.decision.config import load_experiment_config, load_model_config
 from src.measurement import contracts as mc
 from src.simulator import api as sim
 
@@ -61,6 +62,10 @@ SPRINT = "sprint-v0"
 KST = timezone(timedelta(hours=9), "KST")
 
 # ── 실험 상수 ───────────────────────────────────────────────────────────────
+# config/experiment_config.yaml (#206) — 배정 비율 · 모집단 창 · 실행 기본값은 그 파일 한 곳에만 있다.
+# 모델 config 도 여기서 한 번 읽어 검증한다: 잘못된 config 는 시뮬레이션을 시작하기 전에 import 에서 멈춘다.
+EXPERIMENT = load_experiment_config()
+load_model_config()
 # 프로파일별 권장 warmup — docs/data_spec.html §2.2 표. `small` 은 시간축이 `short` 와 같다
 # (docs/decisions/DR-S3-p6-signup.md U11). `--warmup-days` 로 덮어쓸 수 있다.
 PROFILE_WARMUP_DAYS: dict[str, int] = {
@@ -74,10 +79,10 @@ BASELINE_STRATEGY = "S1"
 # 전략별 필수 점수는 의사결정(`strategies.REQUIRED_SCORES`)이 정한다 — 없으면 plan 이 NotComputable(→ not_run).
 
 RCT_ARMS: tuple[str, ...] = ("T0", "T1", "T2", "T3", "T4")
-RCT_CONTROL_SHARE = 0.5  # T0 50% · 나머지를 T1~T4 에 균등(각 12.5%)
-# 탐색 RCT 모집단 = t1 직전 90일 안에 이벤트가 1건 이상인 고객.
-# 90일은 S1 규칙의 상한과 같은 근거다(data_spec §12.1 "90일을 넘기면 회수 확률이 급감").
-DEFAULT_ACTIVE_DAYS = 90
+RCT_CONTROL_SHARE = EXPERIMENT.rct.control_share  # T0 비율 · 나머지를 T1~T4 에 균등
+# 탐색 RCT 모집단 = t1 직전 active_days 일 안에 이벤트가 1건 이상인 고객.
+# 기본 90일은 S1 규칙의 상한과 같은 근거다(data_spec §12.1 "90일을 넘기면 회수 확률이 급감").
+DEFAULT_ACTIVE_DAYS = EXPERIMENT.rct.active_days
 
 # 예산 기본값 — data_spec §12.2 설계 추정치 C_rule ≈ 8,833,000원(26,000명 기준)을 고객 수에
 # 비례해 환산한다. 정확한 C_rule 은 GATE 2 에서 S1 을 실측해 Lock 한다 — 이 값은 그 전의 추정이다.
@@ -697,7 +702,7 @@ class SprintConfig:
     active_days: int = DEFAULT_ACTIVE_DAYS
     run_id: str | None = None
     realism_report: Path = REALISM_REPORT
-    cv_folds: int | None = None       # churn CV fold 수 덮어쓰기 — 없으면 의사결정 기본값(5)
+    cv_folds: int | None = None       # churn CV fold 수 덮어쓰기 — 없으면 model_config churn.cv_folds
     max_train_rows: int | None = None  # churn 학습·CV 표본 상한 — 없으면 전원
 
 
@@ -1310,7 +1315,8 @@ def run(config: SprintConfig) -> Path:
             "realism_report": realism,
             "assignment_files": assignment_files,
             "churn_options": {"cv_folds": config.cv_folds, "max_train_rows": config.max_train_rows,
-                              "note": "지정하지 않으면 의사결정 기본값(Stratified 5-Fold · 전원)"},
+                              "note": "지정하지 않으면 config/model_config.yaml churn.cv_folds "
+                                      f"(Stratified {load_model_config().churn.cv_folds}-Fold) · 전원"},
             "rct": rct_meta,
             "strategy_comparison_protocol": {
                 "snapshot_at": ctx["timeline"].get("t2"),
@@ -1350,9 +1356,9 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m src.orchestration.run_sprint",
         description="스프린트 v0 — 탐색 RCT → Churn/Uplift/CLV → S0~S5 전략 비교를 한 번에 실행한다.",
     )
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--customers", type=int, default=20000)
-    parser.add_argument("--profile", default="reference")
+    parser.add_argument("--seed", type=int, default=EXPERIMENT.holdout.development_seed)
+    parser.add_argument("--customers", type=int, default=EXPERIMENT.run.num_customers)
+    parser.add_argument("--profile", default=EXPERIMENT.run.profile)
     parser.add_argument("--out", type=Path, required=True, help="시뮬레이터 출력 루트의 상위 폴더 (빈 폴더)")
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
     parser.add_argument("--warmup-days", type=int, default=None, help="기본: 프로파일 권장값(data_spec §2.2)")
@@ -1362,7 +1368,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help="탐색 RCT 모집단 — t1 직전 이 일수 안에 이벤트가 있는 고객")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--cv-folds", type=int, default=None,
-                        help="churn 교차검증 fold 수 (기본: 의사결정 기본값 5)")
+                        help="churn 교차검증 fold 수 (기본: config/model_config.yaml churn.cv_folds)")
     parser.add_argument("--max-train-rows", type=int, default=None,
                         help="churn 학습·CV 표본 상한 — 클래스 비율 유지 추출 (기본: 전원)")
     parser.add_argument("--realism-report", type=Path, default=REALISM_REPORT,
