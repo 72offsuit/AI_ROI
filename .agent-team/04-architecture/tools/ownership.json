@@ -505,6 +505,11 @@
       "pattern": "docs/sprint1_report.md",
       "owner": "timothy",
       "why": "스프린트 1(#142) 결과 보고 — 리드 소유 모델 리포트. 시뮬레이터 팀 must_not_read"
+    },
+    {
+      "pattern": "docs/sprint_plan.md",
+      "owner": "timothy",
+      "why": "스프린트 2~5 정본 계획 — 리드 소유. 두 팀 모두 읽는다(성능 수치 · 시뮬레이터 내부를 적지 않는다)"
     }
   ],
   "planned": [
