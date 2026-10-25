@@ -35,6 +35,8 @@
 | CI 실행 비교 (2026-10-25 `gh run view --log`) | `main` d9a3902 push (run 39931602748) `Tests (with deps)` skipped=12 · PR #236(문서 1개만 변경) skipped=13, 차이는 이 검사의 BLOCKED 1건. #237~#240 도 전부 13 | PR 내용과 무관한 +1 — 체크아웃 설정이 원인임을 가리킨다 |
 | 로컬 재현 | `--depth 1` 클론 + `GITHUB_ACTIONS=true` → 이 PR 의 테스트로 **FAIL**(#241 사유), 환경변수 없이 → skip. `origin/main` 이 있는 클론 → ok | 수정 전 CI 조건과 수정 후 CI 조건을 둘 다 재현했다 |
 | 저장소 크기 | 전체 이력 클론의 `.git` 28MB · `main` 커밋 63개 | A 의 비용이 무시할 만하다 |
+| 수정 후 PR CI (PR #242, 2026-10-25) | 세 잡 모두 `test_branch_stays_inside_one_team ... ok`(skip 아님). `Tests (with deps)` skipped=12 — `main` 과 같다 | 결정 A 가 `origin/main` 을 실제로 만든다 |
+| 원격 대조군 (`test/241-boundary-control` = 이 PR + 시뮬 `docs/simulator_ci_probe.md` · 시스템 `src/decision/_ci_probe.txt` 새 파일, `workflow_dispatch` run 40166778458) | `isolation.yml` **failure** — `FAIL: test_branch_stays_inside_one_team` · "두 팀의 경로를 동시에 건드렸다: ['sim', 'sys']" | 검사가 돌 뿐 아니라 섞인 브랜치를 CI 에서 막는다 |
 
 ## 결정
 
@@ -64,6 +66,5 @@
 
 ## 남은 불확실성
 
-- **원격 대조군 미실행(BLOCKED)** — 두 팀 경로를 섞은 시험 브랜치를 `workflow_dispatch` 로 돌려 CI 가 실패하는지는 이 PR 을 올린 뒤에 확인한다. 로컬에서는 같은 테스트가 그 모양을 잡는다.
 - `main` 푸시 실행은 `origin/main...HEAD` 가 비어 대조할 것이 없다. 이 검사는 브랜치 단위라 의도된 것이지만, `main` 에 직접 섞인 커밋은 이 검사가 아니라 리뷰와 병합 절차(#238)가 막아야 한다.
 - 앞으로 git 이 없는 CI 잡(예: Docker 안에서 스위트 실행)이 생기면 거기서 이 테스트가 실패한다. 그 잡은 `GITHUB_ACTIONS` 를 컨테이너에 넘기지 않거나 이 테스트를 제외해야 한다 — 그때 이 DR 을 갱신한다.
