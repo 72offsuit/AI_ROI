@@ -27,9 +27,11 @@ from __future__ import annotations
 
 import fnmatch
 import json
+import os
 import subprocess
 import unittest
 from pathlib import Path
+from unittest import mock
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BOUNDARIES = REPO_ROOT / "docs" / "team_boundaries.json"
@@ -45,6 +47,11 @@ def _team_of(path: str, owned: dict[str, list[str]]) -> str | None:
         if any(fnmatch.fnmatch(path, pattern) for pattern in patterns):
             return team
     return None
+
+
+def _in_ci() -> bool:
+    """GitHub Actions 는 모든 잡에 `GITHUB_ACTIONS=true` 를 준다 — 워크플로가 따로 켜지 않아도 된다."""
+    return os.environ.get("GITHUB_ACTIONS") == "true"
 
 
 class TestDeclarationIsConsistent(unittest.TestCase):
@@ -144,6 +151,41 @@ class TestForbiddenPathsAreTheOtherTeamsOrAnswers(unittest.TestCase):
         self.assertIn("src/diagnostics/**", self.data["owned"]["sim"])
 
 
+class TestBlockedIsAFailureInCI(unittest.TestCase):
+    """★ #241 — 경계를 대조하지 못하면 로컬에서는 skip, CI 에서는 **실패**다.
+
+    CI 체크아웃이 얕아(`fetch-depth: 1`) PR 실행에 main 이 없던 동안, 아래 경계 검사는
+    모든 PR 에서 BLOCKED skip 이었고 skip 은 초록이라 아무도 몰랐다. 이제 CI 는 main 을
+    받으므로 거기서도 못 구했다면 설정이 깨진 것이다. 로컬은 git 이 없거나 main 을
+    받지 않은 체크아웃이 정상적으로 있으니 skip 으로 둔다. 두 방향을 다 본다.
+    """
+
+    @staticmethod
+    def _run_blocked(github_actions: str | None) -> unittest.TestResult:
+        case = TestBranchStaysInsideOneTeam("test_branch_stays_inside_one_team")
+        result = unittest.TestResult()
+        with mock.patch.object(
+            TestBranchStaysInsideOneTeam, "_changed_files", return_value=None
+        ), mock.patch.dict(os.environ):
+            os.environ.pop("GITHUB_ACTIONS", None)
+            if github_actions is not None:
+                os.environ["GITHUB_ACTIONS"] = github_actions
+            case.run(result)
+        return result
+
+    def test_ci_turns_blocked_into_a_failure(self) -> None:
+        result = self._run_blocked("true")
+        self.assertEqual(0, len(result.skipped), "CI 에서 대조 못 한 경계 검사가 또 skip 됐다")
+        self.assertEqual(1, len(result.failures))
+        self.assertIn("#241", result.failures[0][1])
+
+    def test_local_keeps_it_a_skip(self) -> None:
+        result = self._run_blocked(None)
+        self.assertEqual(0, len(result.failures))
+        self.assertEqual(1, len(result.skipped))
+        self.assertIn("BLOCKED", result.skipped[0][1])
+
+
 class TestBranchStaysInsideOneTeam(unittest.TestCase):
     """★ 실질 가드 — 한 브랜치가 두 팀 경로를 동시에 건드리지 않는다.
 
@@ -200,10 +242,13 @@ class TestBranchStaysInsideOneTeam(unittest.TestCase):
     def test_branch_stays_inside_one_team(self) -> None:
         changed = self._changed_files()
         if changed is None:
-            self.skipTest(
+            reason = (
                 "BLOCKED: git 으로 main 대비 변경 목록을 얻지 못했다 — 팀 경계를 "
                 "대조하지 않았다 (통과가 아니다)"
             )
+            if _in_ci():
+                self.fail(reason + " — CI 는 main 을 받으므로 이것은 설정 결함이다 (#241)")
+            self.skipTest(reason)
         owned = self.data["owned"]
         touched = {
             team
