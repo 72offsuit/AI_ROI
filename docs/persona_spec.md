@@ -9,8 +9,9 @@
 > | **코드** | `src/simulator/_internal/{genconfig,traits,fixedpoint,persona,world}.py` |
 > | **설명**(이 문서) | 위 셋을 한 흐름으로 묶는다. 숫자를 새로 정하지 않는다 |
 >
-> 현재 생성 config: `sim-gen-v3` · 생성 부분 다이제스트 `66588097846aa9914aa57f62034a4d2d05bbe8cc66b2a01e3a89040b55df1157` · `SIMULATOR_VERSION` `sim-0.4`
+> 현재 생성 config: `sim-gen-v3` · 생성 부분 다이제스트 `66588097846aa9914aa57f62034a4d2d05bbe8cc66b2a01e3a89040b55df1157` · `SIMULATOR_VERSION` `sim-0.5`
 > (S3 #77: P6 `signup_day_range` 추가 — `docs/decisions/DR-S3-p6-signup.md`. 페르소나·Trait 값은 `sim-gen-v1` 과 같다)
+> (#183: 관측 중 가입 고객의 첫 구매 뒤 재구매 게이트로 `sim-0.5` — `docs/decisions/DR-183-purchase-calibration.md`. 생성 config·Trait 값은 그대로다)
 > (S4~S6 #143: `behavior`·`catalog` 블록 추가 — Trait 이 행동·이탈·처치 반응을 구동한다. `docs/decisions/DR-143-sim-sprint.md`. 페르소나·Trait 값은 그대로다)
 
 ---
@@ -291,8 +292,12 @@ world_id      = "W-" + sha256(["sim-world-v2", seed, n, profile, start_ms, confi
 ### S4 (#78) — 행동 규칙
 
 - **Trait → 행동 연결.** 3절 "읽을 태스크" 열의 data_spec 식들이 Trait 을 읽는다. [0,1] Trait 은 `bernoulli(값, 1_000_000)` 로 쓴다.
-- **소비처가 없는 Trait 3종** — `brand_loyalty`, `marketing_responsiveness`(S6 와 함께), `repurchase_propensity`. 쓸 곳을 정하거나 "쓰지 않는다"고 DR 에 적는다. 그러지 않으면 GATE 1 에 죽은 값으로 봉인된다.
+- **S2 당시 소비처가 없던 Trait 3종(지금은 셋 다 소비처가 있다)** — `brand_loyalty`, `marketing_responsiveness`(S6 와 함께), `repurchase_propensity`. 당시 지시는 "쓸 곳을 정하거나 '쓰지 않는다'고 DR 에 적는다. 그러지 않으면 GATE 1 에 죽은 값으로 봉인된다"였다. 현재 소비처:
+  - `brand_loyalty` — 재주문 비중(엔진 별칭 `loyalty`, `DR-143-sim-sprint`).
+  - `marketing_responsiveness` — 처치 반응 민감도의 절반(별칭 `responsiveness`, `treatment.py`).
+  - `repurchase_propensity` — T4 처치 민감도(`behavior.arms.T4.sensitivity`), #183 부터 관측 중 가입 고객의 첫 구매 뒤 재구매 게이트(`DR-183-purchase-calibration`).
 - **`repurchase_propensity` × `base_churn_propensity` 이중 계산.** 둘 다 그대로 쓰면 이탈을 두 번 센다(Pareto/NBD 는 시간 기반, BG/NBD 는 거래 기반 — 문헌은 둘 중 하나를 고른다). 합성 규칙이나 한쪽만 쓰는 이유를 S4 DR 에 적는다.
+  - #183: 재구매 게이트는 생애 첫 구매라는 사건에 한 번만 걸리고, 그 뒤 이탈은 `base_churn_propensity` 의 시간 기반 hazard 만 쓴다 — 같은 이탈을 두 번 세지 않는다(`DR-183-purchase-calibration`).
 - 실현 구매 빈도·객단가를 국내 자릿수(컬리 이용자 월 2.5회, 44,800원 — 오픈서베이 2023)와 다시 대조한다. 생성 모수만으로는 월 2.53회(상한)·45,889원이다.
 - `BEHAVIOR_BASELINE` 항목을 지운다(행동이 바뀌므로).
 
