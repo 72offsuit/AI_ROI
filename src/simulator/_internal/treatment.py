@@ -23,17 +23,16 @@ NEUTRAL = "neutral"
 NEGATIVE = "negative"
 ARMS = ("T0", "T1", "T2", "T3", "T4")
 _TWO_64 = 1 << 64
-_RESPONSE_DAY = -2  # 생성(-1)·행동(≥0) 스트림과 겹치지 않는 열쇠
 
 
 def response_type(seed: int, customer_id: str, traits: dict[str, int], tid: str, p: params.Params) -> str:
     """`traits` 는 `world.behavior_traits` 의 별칭 묶음이다."""
     fatigue = traits["fatigue"] * p.negative_scale_pct // 100
-    if rng.Stream(seed, customer_id, "response", _RESPONSE_DAY).next_u64() < fatigue * _TWO_64 // params.PPM:
+    if rng.Stream(seed, customer_id, "response", rng.RESPONSE_DAY).next_u64() < fatigue * _TWO_64 // params.PPM:
         return NEGATIVE
     sensitivity = (traits[tid] + traits["responsiveness"]) // 2
     chance = sensitivity * p.positive_scale_pct // 100
-    if rng.Stream(seed, customer_id, "response:" + tid, _RESPONSE_DAY).next_u64() < chance * _TWO_64 // params.PPM:
+    if rng.Stream(seed, customer_id, "response:" + tid, rng.RESPONSE_DAY).next_u64() < chance * _TWO_64 // params.PPM:
         return POSITIVE
     return NEUTRAL
 
