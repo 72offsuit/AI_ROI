@@ -38,6 +38,16 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "c2fd38f7738b3b737645b7a6b11a65b21b346ec6bea7737396a8862db3ebfc1b",
         1160,
     ),
+    # #183: 관측 중 가입 고객의 첫 구매 뒤 재구매 게이트. 이 14일 창에서는 게이트가 이벤트를 바꾸지 않아
+    # 판 라벨만 다르다(라벨을 sim-0.4 로 되돌리면 sim-0.4 다이제스트와 같다). 그래도 행동을 바꾼 판이라
+    # BEHAVIOR_BASELINE 에 넣지 않는다 — 게이트가 발화하는 실행의 정확한 값은 tests/test_simulator_behavior.py 의
+    # GATE_GOLDEN(TestRepurchaseGateKeepsSplitInvariance.test_gate_decisions_and_digests_match_the_pinned_values_of_this_version)
+    # 이 같은 판 키로 고정한다.
+    "sim-0.5": (
+        "182e880d5c295aabe97e83f56da83411a4b55b258143c1677669191b1342c210",
+        "d0cbfc345a5efa2707e1de03593e1c4359336da752ded1c46ebb91e38bcfe255",
+        1160,
+    ),
 }
 # 행동은 그대로이고 판 라벨만 바뀐 판 → 행동 기준 판. S2 는 생성(페르소나·Trait)만 더하고 이벤트 규칙을
 # 건드리지 않는다(사용자 확정 U1·U4). sim-0.3(S3)은 가입일을 바꿔 행동이 바뀐 판이라 항목이 없다.

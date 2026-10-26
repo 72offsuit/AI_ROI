@@ -14,6 +14,7 @@ _TWO_64 = 1 << 64
 # 값을 바꾸면 그 스트림의 추첨이 전부 바뀐다 — simulator_version 과 골든을 함께 올린다.
 GENERATION_DAY = -1  # 페르소나·Trait·가입일 생성(persona)
 RESPONSE_DAY = -2  # 처치 반응 유형(treatment)
+REPURCHASE_DAY = -3  # 생애 첫 구매 뒤 재구매 게이트(engine)
 
 
 def canonical_json(value: object) -> bytes:

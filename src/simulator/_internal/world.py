@@ -13,8 +13,9 @@ from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 # S3: P6 가입일이 Day 1~272 로 퍼져 이벤트가 바뀐다(DR-S3-p6-signup). 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
 # S4~S6(#143): 구매 퍼널·이탈 진행·처치 반응이 생겨 고객 항목(engagement·churning·checkout_seq·promo)과
 # 세션 항목(intent·stage·order), 큐 종류(treat), 카탈로그(240개, product_margin 생성)가 바뀐다.
+# #183(F11 보정): 관측 중 가입 고객의 생애 첫 구매 뒤 재구매 게이트가 생겨 이벤트가 바뀐다. 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
 FORMAT_VERSION = "sim-state-v3"
-SIMULATOR_VERSION = "sim-0.4"
+SIMULATOR_VERSION = "sim-0.5"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999
@@ -66,6 +67,7 @@ _BEHAVIOR_ALIASES = (
     ("fatigue", "marketing_fatigue"),
     ("abandon", "cart_abandonment_propensity"),
     ("loyalty", "brand_loyalty"),
+    ("repurchase", "repurchase_propensity"),
 )
 
 

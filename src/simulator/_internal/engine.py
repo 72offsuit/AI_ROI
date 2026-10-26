@@ -470,6 +470,8 @@ def _complete(window: _Window, customer: dict[str, object], at_ms: int, seq: int
     rfm["order_count"] += 1
     rfm["monetary"] += amount
     rfm["last_purchase_ms"] = at_ms
+    if rfm["order_count"] == 1:
+        _repurchase_gate(window, customer)
     if window.orders is not None:
         catalog = window.params.product_index
         window.orders.append({
@@ -493,6 +495,26 @@ def _complete(window: _Window, customer: dict[str, object], at_ms: int, seq: int
             ],
         })
     return records
+
+
+def _repurchase_gate(window: _Window, customer: dict[str, object]) -> None:
+    """생애 첫 구매 직후 한 번, 재구매 성향 Trait 으로 다음 구매로 이어질 고객인지 정한다(#183, F11).
+
+    0일차 고객은 시뮬레이터 안 첫 구매가 생애 첫 구매가 아니라 제외한다 — 관측 중 가입한 고객만 대상이다.
+    통과하면 아무것도 바꾸지 않는다. 실패하면 `_day_start` 의 이탈 시작(onset)과 같은 처리로 이탈 진행에 넣고,
+    이후 회복은 하루 recovery hazard 그대로라 비재구매자도 돌아올 수 있다.
+    이탈 성향 Trait(churn)과 이중 계산이 아니다: 그쪽은 매일의 시간 기반 hazard 이고, 이 게이트는 첫 구매라는
+    사건에 붙은 한 번뿐인 전이다.
+    """
+    if customer["signup_ms"] <= window.world["calendar_start_ms"]:
+        return
+    # 날짜·처치와 무관한 고객 고정 스트림 — 처치 분기(CRN)마다 첫 구매 날짜가 달라도 게이트 결과는 같다.
+    draw = rng.Stream(window.seed, customer["customer_id"], "repurchase", rng.REPURCHASE_DAY)
+    if _below_ppm(draw.next_u64(), window.traits(customer)["repurchase"]) or customer["churning"]:
+        return  # 이미 이탈 진행 중이면 onset 을 다시 적용하지 않는다(감쇠를 하루 두 번 겹치지 않게)
+    p = window.params
+    customer["churning"] = True
+    customer["engagement"] = max(p.engagement_floor_ppm, customer["engagement"] * p.decay_ppm // PPM)
 
 
 def _product_view(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -> Event:
