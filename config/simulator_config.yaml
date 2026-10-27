@@ -451,5 +451,11 @@
       1100,
       2100
     ]
+  },
+  "churn": {
+    "at_risk_days": 28,
+    "no_purchase_days": 42,
+    "no_login_days": 60,
+    "rule_operator": "OR"
   }
 }

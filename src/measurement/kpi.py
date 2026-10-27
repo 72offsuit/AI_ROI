@@ -86,22 +86,71 @@ LABEL_WINDOW_DAYS = 42
 운영 임계값(28/42/60)과 숫자가 같은 것은 우연이고, 둘은 독립적으로 바뀐다.
 그래서 상수를 따로 둔다."""
 
-AT_RISK_DAYS = 28
-NO_PURCHASE_DAYS = 42
-NO_LOGIN_DAYS = 60
-"""운영 상태 임계값 — ★ **가설값이다. C1 에서 Lock 하지 않는다.**
+RULE_OPERATORS = ("OR", "AND")
 
-`data_spec` §5.1 이 확정 절차 5단계를 규정했고 ①~④가 전부 시뮬레이터를 요구한다.
-C1 에 시뮬레이터가 없으므로 절차를 건너뛰고 숫자를 Lock 하면 *"미실행 검증을 통과로
-표시하지 않는다"* 를 위반한다.
 
-**→ 이 값을 쓰는 지표는 `status: unconfirmed` + `params_used` 로 나간다.**"""
+@dataclass(frozen=True)
+class ChurnDefinition:
+    """운영 이탈 정의 — FR-10 · SIM-009 · CFG-001 *"Churn 정의는 Config 변경 가능"*.
 
-_UNCONFIRMED_THRESHOLDS: Mapping[str, object] = {
-    "at_risk_days": AT_RISK_DAYS,
-    "no_purchase_days": NO_PURCHASE_DAYS,
-    "no_login_days": NO_LOGIN_DAYS,
-}
+    정본 값은 `config_loader.load_churn_definition()` 이 읽는 config 의 `churn` 블록이다
+    (CFG-001 이 지정한 파일). 필드 기본값은 그 블록이 생기기 전의 가설값(28/42/60 · OR)이다.
+
+    - 이탈 = (미구매 경과일 ≥ `no_purchase_days`) `rule_operator` (미접속 경과일 ≥ `no_login_days`).
+    - 미접속 경과일은 마지막 `session_start`·`purchase` 중 늦은 날부터 센다 — 스키마에 로그인
+      이벤트가 없고 구매도 접속이다. 그래서 미접속 경과일은 미구매 경과일보다 길 수 없고,
+      `no_login_days ≥ no_purchase_days` 인 OR 규칙은 미구매 조건 하나와 같은 결과를 낸다.
+    - ★ **가설값이다(data_spec §5.1).** C1 에서 Lock 하지 않았고, 이 정의를 쓰는 지표는
+      `status: unconfirmed` + `params_used` 로 나간다.
+    - 라벨 창(`LABEL_WINDOW_DAYS`)은 여기에 두지 않는다 — 운영 정의와 독립인 고정값이다.
+
+    값이 규칙에 어긋나면 `ValueError` 를 낸다.
+    """
+
+    at_risk_days: int = 28
+    no_purchase_days: int = 42
+    no_login_days: int = 60
+    rule_operator: str = "OR"
+
+    def __post_init__(self) -> None:
+        for name in ("at_risk_days", "no_purchase_days", "no_login_days"):
+            value = getattr(self, name)
+            if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+                raise ValueError(f"{name} 는 양의 정수여야 한다: {value!r}")
+        if self.at_risk_days >= self.no_purchase_days:
+            raise ValueError(
+                f"at_risk_days({self.at_risk_days}) 는 no_purchase_days"
+                f"({self.no_purchase_days}) 보다 작아야 한다 — 위험 구간이 이탈보다 먼저다"
+            )
+        if self.rule_operator not in RULE_OPERATORS:
+            raise ValueError(
+                f"rule_operator 는 {'/'.join(RULE_OPERATORS)} 중 하나여야 한다: "
+                f"{self.rule_operator!r}"
+            )
+
+    def is_churned(self, purchase_days: int, access_days: int) -> bool:
+        no_purchase = purchase_days >= self.no_purchase_days
+        no_login = access_days >= self.no_login_days
+        if self.rule_operator == "OR":
+            return no_purchase or no_login
+        return no_purchase and no_login
+
+    def params_used(self) -> Mapping[str, object]:
+        return {
+            "at_risk_days": self.at_risk_days,
+            "no_purchase_days": self.no_purchase_days,
+            "no_login_days": self.no_login_days,
+            "rule_operator": self.rule_operator,
+        }
+
+    def describe(self) -> str:
+        return (
+            f"days_since_last_purchase ≥ {self.no_purchase_days} {self.rule_operator} "
+            f"days_since_last_access ≥ {self.no_login_days}"
+        )
+
+
+DEFAULT_CHURN_DEFINITION = ChurnDefinition()
 
 _SUM_DENOMINATOR = "분모 없음 (합계)"
 _EVENT_TYPE_TOTAL = len(EventType)  # 16. 리터럴로 적지 않는다 — Enum 이 정본이다
@@ -526,21 +575,54 @@ def _days_since_last_purchase(
     return {c: (index_date - d).days for c, d in last.items()}
 
 
+def _churn_elapsed(
+    events: Iterable[Mapping[str, object]], *, index_date: date
+) -> dict[str, tuple[int, int]]:
+    """구매 이력 고객별 (미구매 경과일, 미접속 경과일). 접속 = `session_start`·`purchase`.
+
+    한 번만 순회한다 — 1회용 iterable 이 들어와도 두 값이 같은 이벤트에서 나온다.
+    """
+    access_types = (EventType.SESSION_START.value, EventType.PURCHASE.value)
+    last_purchase: dict[str, date] = {}
+    last_access: dict[str, date] = {}
+    for event in events:
+        event_type = event.get("event_type")
+        customer = event.get("customer_id")
+        if event_type not in access_types or not isinstance(customer, str):
+            continue
+        moment = _event_date(event)
+        if moment is None or moment > index_date:
+            continue
+        if event_type == EventType.PURCHASE.value and (
+            customer not in last_purchase or moment > last_purchase[customer]
+        ):
+            last_purchase[customer] = moment
+        if customer not in last_access or moment > last_access[customer]:
+            last_access[customer] = moment
+    return {
+        customer: ((index_date - bought).days, (index_date - last_access[customer]).days)
+        for customer, bought in last_purchase.items()
+    }
+
+
 def churn_rate(
-    events: Sequence[Mapping[str, object]], *, index_date: date
+    events: Sequence[Mapping[str, object]],
+    *,
+    index_date: date,
+    definition: ChurnDefinition = DEFAULT_CHURN_DEFINITION,
 ) -> MetricValue:
-    """**운영 상태 · 후향.** `days_since_last_purchase ≥ no_purchase_days` 비율.
+    """**운영 상태 · 후향.** `definition` 의 이탈 규칙을 만족하는 구매 고객 비율.
 
     ★ `churn_label()` 과 **다른 함수다** (R-2). 이쪽은 `D` 이전을 보고 대시보드
     표시·코호트 분석·Rule-based Baseline 조건에 쓴다. 저쪽은 `D` 이후를 보고 모델
     학습 라벨에만 쓴다. **플래그로 합치지 않는다.**
 
-    임계값이 가설값이므로 `unconfirmed` + `params_used` 다.
+    정의가 가설값이므로 `unconfirmed` + `params_used` 다.
     """
-    elapsed = _days_since_last_purchase(events, index_date=index_date)
+    elapsed = _churn_elapsed(events, index_date=index_date)
     if not elapsed:
         return _no_source("churn_rate", "purchase", unit=Unit.RATIO)
-    churned = sum(1 for days in elapsed.values() if days >= NO_PURCHASE_DAYS)
+    churned = sum(1 for days in elapsed.values() if definition.is_churned(*days))
     return MetricValue.unconfirmed(
         churned / len(elapsed),
         unit=Unit.RATIO,
@@ -550,18 +632,21 @@ def churn_rate(
             window=Window(WindowDirection.POINT_IN_TIME, label="index_date 시점 상태"),
             denominator=len(elapsed),
             observed_count=len(elapsed),
-            source_event_types=("purchase",),
+            source_event_types=("purchase", "session_start"),
         ),
         reason_detail=(
-            f"이탈 임계값 no_purchase_days={NO_PURCHASE_DAYS} 가 가설값이다 — "
+            f"이탈 정의 {definition.describe()} 가 가설값이다 — "
             "data_spec §5.1 확정 절차 ①~④가 시뮬레이터를 요구하고 C1 에 없다"
         ),
-        params_used=_UNCONFIRMED_THRESHOLDS,
+        params_used=definition.params_used(),
     )
 
 
 def retention_rate(
-    events: Sequence[Mapping[str, object]], *, index_date: date
+    events: Sequence[Mapping[str, object]],
+    *,
+    index_date: date,
+    definition: ChurnDefinition = DEFAULT_CHURN_DEFINITION,
 ) -> MetricValue:
     """**상태·시점** 잔존율 = `1 − churn_rate`. 동일 모집단·동일 시점의 파생값.
 
@@ -569,7 +654,7 @@ def retention_rate(
     저쪽은 "가입 코호트의 m 개월차 잔존율"이다. 같은 *"Retention"* 이 두 뜻으로
     쓰이는 것이 이 프로젝트가 이름을 가른 첫 번째 이유다.
     """
-    churn = churn_rate(events, index_date=index_date)
+    churn = churn_rate(events, index_date=index_date, definition=definition)
     if churn.status is MetricStatus.UNAVAILABLE:
         return MetricValue.unavailable(
             churn.reason_code or ReasonCode.NO_SOURCE_EVENT,
@@ -588,7 +673,7 @@ def retention_rate(
         unit=Unit.RATIO,
         basis=churn.basis,  # type: ignore[arg-type]
         reason_detail=f"churn_rate 의 파생값이므로 같은 미확정을 물려받는다 — {churn.reason_detail}",
-        params_used=_UNCONFIRMED_THRESHOLDS,
+        params_used=definition.params_used(),
     )
 
 
@@ -659,11 +744,12 @@ def winback_rate(
     *,
     index_date: date,
     lookback_days: int = DEFAULT_LOOKBACK_DAYS,
+    definition: ChurnDefinition = DEFAULT_CHURN_DEFINITION,
 ) -> MetricValue:
-    """`D−L` 시점 이탈 고객 중 `(D−L, D]` 에 구매한 비율. 임계값 의존 → `unconfirmed`."""
+    """`D−L` 시점 이탈 고객 중 `(D−L, D]` 에 구매한 비율. 이탈 정의 의존 → `unconfirmed`."""
     boundary = index_date - timedelta(days=lookback_days)
-    elapsed_then = _days_since_last_purchase(events, index_date=boundary)
-    churned_then = {c for c, days in elapsed_then.items() if days >= NO_PURCHASE_DAYS}
+    elapsed_then = _churn_elapsed(events, index_date=boundary)
+    churned_then = {c for c, days in elapsed_then.items() if definition.is_churned(*days)}
     if not churned_then:
         return MetricValue.unavailable(
             ReasonCode.NO_SOURCE_EVENT,
@@ -695,12 +781,10 @@ def winback_rate(
             ),
             denominator=len(churned_then),
             observed_count=len(churned_then),
-            source_event_types=("purchase",),
+            source_event_types=("purchase", "session_start"),
         ),
-        reason_detail=(
-            f"이탈 판정에 no_purchase_days={NO_PURCHASE_DAYS} 가설값을 썼다"
-        ),
-        params_used=_UNCONFIRMED_THRESHOLDS,
+        reason_detail=f"이탈 판정에 가설값 {definition.describe()} 를 썼다",
+        params_used=definition.params_used(),
     )
 
 
@@ -893,7 +977,10 @@ def churn_label(
 # ── 파생 상태 분포 3종 — 게시 시점 계산 (리드 판정 G-8) ─────────────────────
 
 def derived_state_count(
-    events: Sequence[Mapping[str, object]], *, index_date: date
+    events: Sequence[Mapping[str, object]],
+    *,
+    index_date: date,
+    definition: ChurnDefinition = DEFAULT_CHURN_DEFINITION,
 ) -> dict[str, MetricValue]:
     """`inactive`·`at_risk`·`churn` 분포. **게시 시점에 계산해 게시한다.**
 
@@ -914,19 +1001,21 @@ def derived_state_count(
     ④가 가장 위험한 자리다. 파생 상태가 `kpi_report` 에 나타나는 순간
     *"이제 Feature 로 써도 되는 것 아닌가"* 로 읽힐 수 있다.
     """
-    elapsed = _days_since_last_purchase(events, index_date=index_date)
+    elapsed = _churn_elapsed(events, index_date=index_date)
+    churn_formula = definition.describe()
+    not_churn = f"¬({churn_formula})"
     bands = {
         DerivedStateType.INACTIVE.value: (
-            lambda d: AT_RISK_DAYS > d > 0,
-            f"0 < days_since_last_purchase < {AT_RISK_DAYS}",
+            lambda d: not definition.is_churned(*d) and definition.at_risk_days > d[0] > 0,
+            f"{not_churn} ∧ 0 < days_since_last_purchase < {definition.at_risk_days}",
         ),
         DerivedStateType.AT_RISK.value: (
-            lambda d: AT_RISK_DAYS <= d < NO_PURCHASE_DAYS,
-            f"{AT_RISK_DAYS} ≤ days_since_last_purchase < {NO_PURCHASE_DAYS}",
+            lambda d: not definition.is_churned(*d) and d[0] >= definition.at_risk_days,
+            f"{not_churn} ∧ days_since_last_purchase ≥ {definition.at_risk_days}",
         ),
         DerivedStateType.CHURN.value: (
-            lambda d: d >= NO_PURCHASE_DAYS,
-            f"days_since_last_purchase ≥ {NO_PURCHASE_DAYS}",
+            lambda d: definition.is_churned(*d),
+            churn_formula,
         ),
     }
     result: dict[str, MetricValue] = {}
@@ -946,14 +1035,13 @@ def derived_state_count(
                     WindowDirection.POINT_IN_TIME, label="index_date 시점 상태"
                 ),
                 observed_count=len(elapsed),
-                source_event_types=("purchase",),
+                source_event_types=("purchase", "session_start"),
             ),
             reason_detail=(
-                f"임계값 at_risk_days={AT_RISK_DAYS} · "
-                f"no_purchase_days={NO_PURCHASE_DAYS} 가 가설값이다 — "
-                "data_spec §5.1 확정 절차가 시뮬레이터를 요구하고 C1 에 없다"
+                f"이탈 정의(at_risk_days={definition.at_risk_days} · {churn_formula})가 "
+                "가설값이다 — data_spec §5.1 확정 절차가 시뮬레이터를 요구하고 C1 에 없다"
             ),
-            params_used=_UNCONFIRMED_THRESHOLDS,
+            params_used=definition.params_used(),
             derived=True,
             derivation=(
                 f"{formula} 인 고객 수. 저장된 사실이 아니라 purchase 이벤트의 "

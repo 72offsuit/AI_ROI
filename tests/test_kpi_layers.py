@@ -261,6 +261,94 @@ class TestUnconfirmedThresholds(unittest.TestCase):
         self.assertIsNone(result.reason_code)
 
 
+class TestChurnDefinition(unittest.TestCase):
+    """FR-10 · SIM-009 — 이탈 정의(임계값 · rule_operator)를 바꾸면 지표가 그 정의를 따른다."""
+
+    AND = kpi.ChurnDefinition(rule_operator="AND")
+    SHORT_LOGIN_OR = kpi.ChurnDefinition(no_login_days=30)
+
+    def _lapsed_buyer_still_visiting(self) -> list[dict[str, object]]:
+        # 50일 전 구매 뒤 10일 전에도 접속 — 미구매 조건만 만족한다.
+        return [
+            purchase("C00000001", INDEX_DATE - timedelta(days=50)),
+            event_of(EventType.SESSION_START, "C00000001", INDEX_DATE - timedelta(days=10)),
+        ]
+
+    def test_default_or_rule_matches_purchase_only_threshold(self) -> None:
+        # 마지막 접속은 마지막 구매보다 이를 수 없어 기본 OR(42/60)은 미구매 조건 하나와 같다.
+        result = kpi.churn_rate(self._lapsed_buyer_still_visiting(), index_date=INDEX_DATE)
+        self.assertEqual(1.0, result.value)
+        self.assertEqual(kpi.ChurnDefinition(), kpi.DEFAULT_CHURN_DEFINITION)
+        self.assertEqual(
+            {"at_risk_days": 28, "no_purchase_days": 42, "no_login_days": 60, "rule_operator": "OR"},
+            dict(result.params_used or {}),
+        )
+
+    def test_and_rule_requires_both_conditions(self) -> None:
+        events = self._lapsed_buyer_still_visiting()
+        self.assertEqual(0.0, kpi.churn_rate(events, index_date=INDEX_DATE, definition=self.AND).value)
+        gone = [purchase("C00000002", INDEX_DATE - timedelta(days=70))]
+        self.assertEqual(1.0, kpi.churn_rate(gone, index_date=INDEX_DATE, definition=self.AND).value)
+
+    def test_or_rule_with_short_login_threshold_catches_absent_recent_buyer(self) -> None:
+        # 35일 전 구매·32일 전 마지막 접속: 미구매 42일 전이지만 미접속 30일은 넘었다.
+        events = [
+            purchase("C00000001", INDEX_DATE - timedelta(days=35)),
+            event_of(EventType.SESSION_START, "C00000001", INDEX_DATE - timedelta(days=32)),
+        ]
+        self.assertEqual(0.0, kpi.churn_rate(events, index_date=INDEX_DATE).value)
+        self.assertEqual(
+            1.0, kpi.churn_rate(events, index_date=INDEX_DATE, definition=self.SHORT_LOGIN_OR).value
+        )
+
+    def test_retention_and_winback_follow_the_definition(self) -> None:
+        events = self._lapsed_buyer_still_visiting()
+        self.assertEqual(
+            1.0, kpi.retention_rate(events, index_date=INDEX_DATE, definition=self.AND).value
+        )
+        # 100일 전 구매 → D−42 시점 58일 경과(이탈), 그 뒤 5일 전 재구매.
+        winback = [
+            purchase("C00000003", INDEX_DATE - timedelta(days=100)),
+            purchase("C00000003", INDEX_DATE - timedelta(days=5)),
+        ]
+        self.assertEqual(1.0, kpi.winback_rate(winback, index_date=INDEX_DATE).value)
+        late_login = kpi.ChurnDefinition(no_login_days=90, rule_operator="AND")
+        self.assertIs(
+            MetricStatus.UNAVAILABLE,
+            kpi.winback_rate(winback, index_date=INDEX_DATE, definition=late_login).status,
+            "AND·미접속 90일이면 D−42 시점 이탈 고객이 없다",
+        )
+
+    def test_derived_states_partition_buyers_under_and_rule(self) -> None:
+        events = self._lapsed_buyer_still_visiting() + [
+            purchase("C00000002", INDEX_DATE - timedelta(days=70)),
+            purchase("C00000004", INDEX_DATE - timedelta(days=5)),
+        ]
+        result = kpi.derived_state_count(events, index_date=INDEX_DATE, definition=self.AND)
+        # C1 은 미구매 50일이지만 접속 10일이라 AND 에서 이탈이 아니고 위험 구간이다.
+        self.assertEqual((1, 1, 1), (
+            result["inactive"].value, result["at_risk"].value, result["churn"].value,
+        ))
+        self.assertEqual("AND", (result["churn"].params_used or {})["rule_operator"])
+
+    def test_invalid_definitions_are_rejected(self) -> None:
+        for kwargs in (
+            {"rule_operator": "XOR"},
+            {"at_risk_days": 42},
+            {"no_login_days": 0},
+            {"no_purchase_days": True},
+        ):
+            with self.subTest(**kwargs), self.assertRaises(ValueError):
+                kpi.ChurnDefinition(**kwargs)  # type: ignore[arg-type]
+
+    def test_one_shot_iterable_gives_the_same_result(self) -> None:
+        events = self._lapsed_buyer_still_visiting()
+        self.assertEqual(
+            kpi.churn_rate(events, index_date=INDEX_DATE, definition=self.AND).value,
+            kpi.churn_rate(iter(events), index_date=INDEX_DATE, definition=self.AND).value,  # type: ignore[arg-type]
+        )
+
+
 class TestExclusionIsReported(unittest.TestCase):
     """R-6 — 분모에서 제외한 고객을 값과 함께 보고한다."""
 
