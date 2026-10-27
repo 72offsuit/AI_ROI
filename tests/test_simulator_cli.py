@@ -7,8 +7,10 @@ import unittest
 from pathlib import Path
 from unittest import mock
 
+import src.simulator.__main__ as cli_main
 from src.measurement import sink as sk
 from src.simulator import api
+from src.simulator._internal import genconfig
 from tests.test_simulator_support import REPO_ROOT, SimulatorCase, root_digest
 
 
@@ -69,6 +71,14 @@ class TestCommandLine(SimulatorCase):
             "unknown profile": (2, ("init", "--seed", "1", "--customers", "3", "--profile", "nope",
                                     "--output-root", str(self.fresh_root("x")))),
             "missing argument": (2, ("init", "--seed", "1")),
+            "customers omitted without a profile default": (
+                2, ("init", "--seed", "1", "--profile", "smoke", "--output-root", str(self.fresh_root("x")))),
+            "guardrails customers omitted without a profile default": (
+                2, ("guardrails", "--seed", "1", "--profile", "short", "--warmup-days", "1",
+                    "--output-root", str(self.fresh_root("x")))),
+            "unreadable config": (1, ("init", "--seed", "1", "--customers", "3", "--profile", "smoke",
+                                      "--output-root", str(self.fresh_root("x")),
+                                      "--config", str(self.tmp / "nowhere.yaml"))),
             "malformed state id": (2, ("resume", "--state-id", "nope",
                                        "--output-root", str(self.fresh_root("x")), "--days", "1")),
         }
@@ -78,6 +88,43 @@ class TestCommandLine(SimulatorCase):
                 self.assertEqual(code, result.returncode, result.stderr)
                 self.assertTrue(result.stderr.strip())
                 self.assertEqual("", result.stdout)
+
+    def test_small_profile_defaults_to_five_thousand_customers(self) -> None:
+        # 5,000명 세계를 실제로 만들지 않고, CLI 가 API 에 넘기는 값만 본다.
+        for command, extra in (("init", ()), ("guardrails", ("--warmup-days", "1"))):
+            with self.subTest(command=command):
+                with mock.patch.object(api, "init", side_effect=api.SimulatorError("멈춤")) as init:
+                    code = cli_main.main([command, "--seed", "1", "--profile", "small",
+                                          "--output-root", str(self.fresh_root("x")), *extra])
+                self.assertEqual(cli_main.EXIT_SIMULATOR_ERROR, code)
+                self.assertEqual(5_000, init.call_args.args[1])
+        with mock.patch.object(api, "init", side_effect=api.SimulatorError("멈춤")) as init:
+            cli_main.main(["init", "--seed", "1", "--customers", "12", "--profile", "small",
+                           "--output-root", str(self.fresh_root("x"))])
+        self.assertEqual(12, init.call_args.args[1])
+
+    def test_experiment_config_runs_and_refuses_to_continue_under_another(self) -> None:
+        document = json.loads(genconfig.CONFIG_PATH.read_text(encoding="utf-8"))
+        document["behavior"]["visit"]["scale_pct"] += 1
+        experiment = self.tmp / "experiment.yaml"
+        experiment.write_text(json.dumps(document), encoding="utf-8")
+        root = self.fresh_root("cli")
+        first = self.ok("init", "--seed", "2", "--customers", "5", "--profile", "smoke",
+                        "--output-root", str(root), "--days", "2", "--config", str(experiment))
+        before = sorted(p.as_posix() for p in root.rglob("*"))
+        for arguments in (("advance", "--output-root", str(root), "--days", "1"),
+                          ("resume", "--state-id", first, "--output-root", str(self.fresh_root("x")),
+                           "--days", "1")):
+            with self.subTest(command=arguments[0]):
+                result = self.cli(*arguments)
+                self.assertEqual(1, result.returncode, result.stderr)
+                self.assertIn("--config", result.stderr)
+                self.assertIn("generation", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+        self.assertEqual(before, sorted(p.as_posix() for p in root.rglob("*")))
+        second = self.ok("advance", "--output-root", str(root), "--days", "1", "--config", str(experiment))
+        self.assertNotEqual(first, second)
+        self.assertEqual("ok", sk.verify_lineage(root).verification)
 
     def test_corrupt_head_record_exits_one(self) -> None:
         hidden = self.tmp / "cli-hidden"

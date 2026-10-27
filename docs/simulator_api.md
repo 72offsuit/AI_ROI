@@ -16,7 +16,7 @@ from src.simulator import api as sim
 ## 함수 시그니처
 
 ```python
-def init(seed: int, num_customers: int, profile: str, output_root: str | os.PathLike[str], *, hidden_root: str | os.PathLike[str] | None = None) -> None
+def init(seed: int, num_customers: int, profile: str, output_root: str | os.PathLike[str], *, hidden_root: str | os.PathLike[str] | None = None, config_path: str | os.PathLike[str] | None = None) -> None
 def advance(days: int) -> RunSummary
 def snapshot() -> str
 def restore(snap: str, *, output_root: str | os.PathLike[str]) -> None
@@ -25,11 +25,21 @@ def apply_treatment(assignments: Mapping[str, str]) -> None
 def events(until: datetime) -> Iterator[dict[str, object]]
 def metrics(start: datetime, end: datetime) -> dict[str, sc.MetricValue]
 def save_state() -> str
-def load_state(state_id: str, output_root: str | os.PathLike[str], *, hidden_root: str | os.PathLike[str] | None = None) -> None
+def load_state(state_id: str, output_root: str | os.PathLike[str], *, hidden_root: str | os.PathLike[str] | None = None, config_path: str | os.PathLike[str] | None = None) -> None
 def exchange_bundle(until: datetime) -> dict[str, object]
 ```
 
 `sc` 는 `src.measurement.schema` 다. `hidden_root` 는 테스트·도구 전용이며 **오케스트레이션은 넘기지 않는다.**
+`config_path` 는 시뮬레이터 팀의 실험 전용이다(아래 「실험용 생성 설정」). 오케스트레이션의 정본 실행은 넘기지 않는다.
+
+## 실험용 생성 설정 (`config_path` · `--config`)
+
+- 생략하면 기본 설정 `config/simulator_config.yaml` 이다. 지금까지와 같은 동작이다.
+- 실험용 파일을 주면 그 파일로 세계를 만든다(`init`). 고른 설정은 그 세계에 결속돼 이후 `advance`·`snapshot`·`restore` 가 그대로 쓴다. 한 프로세스에서 활성 설정은 하나이고, 바꾸는 길은 `init`·`load_state` 뿐이다. 둘 다 실패하면 이전 세계와 그 설정이 그대로 남는다.
+- 실험용 파일은 `init`·`load_state` 가 고를 때마다 다시 읽는다 — 같은 파일을 덮어쓰며 값을 바꿔 가도 한 프로세스 안에서 옛 값으로 돌지 않는다. 기본 설정은 프로세스에서 한 번만 읽는다.
+- 저장 상태는 그것을 만든 설정의 판 이름·다이제스트에 결속돼 있다. `load_state` 에 다른 설정을 고르면(생략해 기본 설정이 고른 것이 된 경우 포함) `StateFormatError` 다. 메시지에 상태 쪽과 고른 쪽의 판 이름·다이제스트 앞자리가 실리고 설정 파일을 다시 지정하라고 안내한다. 어느 값이 다른지는 싣지 않는다. 상태의 판(`format_version`·`simulator_version`)이 다를 때는 설정을 바꿔도 읽을 수 없으므로 이 안내를 붙이지 않는다.
+- 공개 오류 메시지는 실험 파일을 경로 대신 `지정한 실험 설정 파일` 로 적는다(기본 설정은 `config/simulator_config.yaml`). 경로와 자세한 사유는 원인 예외(`__cause__`)에만 있다.
+- 판 고정 검사(시뮬레이터 팀 테스트)는 **기본 설정 파일에만** 걸린다. 실험용 파일은 판 이름이 기본 설정과 같고 내용이 달라도 받는다 — 구분은 다이제스트 결속이 맡는다. 그래서 실험 결과는 정본 결과로 쓰지 않는다.
 
 ## 반환 타입
 
@@ -72,7 +82,7 @@ class SinkFormatError(SimulatorError)
 
 | 함수 | 인자 | 반환 | 예외 |
 |---|---|---|---|
-| `init` | `seed`: `0 ≤ seed < 2⁶³` 정수 · `num_customers`: 1 ~ 99,999,999(고객 ID `C00000001` 부터 순번) · `profile`: `smoke` `short` `small` `reference` `long` `rolling` 중 하나 · `output_root`: 이 세계 전용 Sink 루트, 없거나 빈 디렉터리. `bool` 은 정수로 받지 않는다 | `None`. 이전 세계와 스냅샷 토큰을 버린다. 이벤트를 쓰지 않는다 | `TypeError` · `ValueError` · `OutputRootError` · `SimulatorError`(시뮬레이터의 생성 설정을 읽을 수 없거나 형식이 틀렸다) |
+| `init` | `seed`: `0 ≤ seed < 2⁶³` 정수 · `num_customers`: 1 ~ 99,999,999(고객 ID `C00000001` 부터 순번) · `profile`: `smoke` `short` `small` `reference` `long` `rolling` 중 하나 · `output_root`: 이 세계 전용 Sink 루트, 없거나 빈 디렉터리 · `config_path`(키워드, 실험 전용): 생성 설정 파일. `bool` 은 정수로 받지 않는다. 고객 수에 프로파일 기본값은 없다 — 늘 넘긴다(기본값은 CLI 만 쓴다) | `None`. 이전 세계와 스냅샷 토큰을 버린다. 이벤트를 쓰지 않는다 | `TypeError` · `ValueError` · `OutputRootError` · `SimulatorError`(시뮬레이터의 생성 설정을 읽을 수 없거나 형식이 틀렸다) |
 | `advance` | `days`: 0 이상의 `int`. 창 끝이 epoch ms 13자리(2286-11-20)를 넘으면 `ValueError` | `RunSummary`. 창 `[now, now+days)` 를 기록하고 시각을 옮긴다. 1회 = 측정 계층 실행 기록 1건. `advance(0)` 은 아무것도 하지 않는다. `advance(a)` 후 `advance(b)` 는 `advance(a+b)` 와 이벤트 단위로 같다. 비어 있지 않은 루트는 실행 기록과 디스크가 맞고 이 세계 계보의 파티션 내용이 계보 기록과 같을 때만 이어 쓰고, 루트의 저장 형식은 첫 쓰기 때 정해져 바뀌지 않는다 | `TypeError` · `ValueError` · `NotInitializedError` · `OutputRootError` · `SinkFormatError` · `SimulatorError` |
 | `snapshot` | — | 토큰 `str`. 같은 토큰으로 여러 번 `restore` 할 수 있다 | `NotInitializedError` |
 | `restore` | `snap` · `output_root`(키워드, **빈** 루트) | `None`. 토큰 시점으로 되돌리고 이후 쓰기를 `output_root` 로 돌린다. 이미 쓴 루트에는 다시 쓰지 않는다. 이어받을 계보를 이 런타임이 읽을 수 없으면 거부한다 | `TypeError` · `SnapshotError` · `OutputRootError` · `SinkFormatError` · `SimulatorError`(시뮬레이터의 생성 설정이 같은 프로세스 안에서 바뀌었다) |
@@ -81,7 +91,7 @@ class SinkFormatError(SimulatorError)
 | `events` | `until` | 이 세계의 계보가 기록한 이벤트 중 `timestamp < until` 인 것을 측정 계약 형식(`docs/measurement_contract.md`) 그대로 생성 순서로 낸다. 분기 루트에서도 분기 이전 이력이 함께 나온다. 계보에 속한 실행이 기록한 파일만 읽는다 — 같은 루트에 남은 중단된 쓰기의 흔적이나 다른 작성자의 파일은 결과에 섞이지 않는다. 읽는 파일의 바이트·건수가 실행 기록과 다르면 예외를 낸다. 반복 도중 예외가 나면 그때까지 받은 이벤트는 불완전하므로 쓰지 않는다(전량을 받은 뒤에만 쓴다) | `TypeError` · `ValueError` · `NotInitializedError` · `OutputRootError` · `SinkFormatError` |
 | `metrics` | `start` · `end` (`start ≤ end`) | `dict[str, MetricValue]` — `events_total` 과 `events.<event_type>` 16종, 비즈니스 지표 `churn_rate` · `revenue` · `contribution_profit` · `marketing_cost`. 이 판이 만들지 않는 유형(`search` · `return_visit` · `review` · `cs_contact`)과 비즈니스 지표는 `not_run` · `PRECONDITION_MISSING` 이다(0 이 아니다). 비즈니스 지표는 측정 계층(`publish`)이 이벤트와 교환 묶음으로 계산한다. `ok` 의 0 은 측정된 0 이다 | `events` 와 같다 |
 | `save_state` | — | `state_id` `str`. 현재 상태를 시뮬레이터 소유 위치에 원자적으로 쓴다. 같은 상태는 같은 `state_id` 다. 쓰기에 실패하면 이미 있던 상태 파일은 그대로다 | `NotInitializedError` · `SimulatorError` |
-| `load_state` | `state_id` · `output_root`: 비어 있거나, 실행 기록과 디스크가 맞고 그 루트의 마지막 실행이 바로 이 상태에서 끝났어야 한다 | `None`. 저장된 상태를 활성 세계로 둔다. 빈 루트로 이어받으면 이 상태에 이르는 계보가 끝까지 검증돼야 하고(이 런타임이 그 형식을 읽을 수 있어야 한다), 그 계보가 `events()` 의 이전 이력이 된다. 스냅샷 토큰은 그대로 두지만 다른 세계의 토큰은 `restore` 가 거부한다 | `TypeError` · `ValueError` · `StateFormatError`(시뮬레이터의 생성 설정이 그 상태를 만든 설정과 다르거나, 생성 설정을 읽을 수 없을 때도) · `OutputRootError` · `SinkFormatError` |
+| `load_state` | `state_id` · `output_root`: 비어 있거나, 실행 기록과 디스크가 맞고 그 루트의 마지막 실행이 바로 이 상태에서 끝났어야 한다 · `config_path`(키워드, 실험 전용): 이 상태를 만든 생성 설정 파일 | `None`. 저장된 상태를 활성 세계로 둔다. 빈 루트로 이어받으면 이 상태에 이르는 계보가 끝까지 검증돼야 하고(이 런타임이 그 형식을 읽을 수 있어야 한다), 그 계보가 `events()` 의 이전 이력이 된다. 스냅샷 토큰은 그대로 두지만 다른 세계의 토큰은 `restore` 가 거부한다 | `TypeError` · `ValueError` · `StateFormatError`(고른 생성 설정이 그 상태를 만든 설정과 다르거나, 생성 설정을 읽을 수 없을 때도) · `OutputRootError` · `SinkFormatError` |
 | `exchange_bundle` | `until` | `{"status": "ok", "path", "orders", "order_items", "customers", "generated_at"}`. 출력 루트의 형제 `simulator_exchange/` 에 교환 계약 v1(`docs/contracts/commerce-exchange/v1/README.md` §11) 묶음을 **전량 스냅샷**으로 쓴다 — 이 세계 계보의 주문 중 `ordered_at < until` 과 그때까지 가입한 고객, 카탈로그(주문 시점 원가 포함). 같은 부모 아래 분기 루트가 여럿이면 마지막 호출이 덮어쓰므로 본선 루트에서 부른다 | `TypeError` · `ValueError` · `NotInitializedError` · `OutputRootError`(계보 실행의 주문 기록이 없다) · `SimulatorError`(쓰기 실패) |
 
 ## 처치 배정의 의미 (S6 · #143)
@@ -124,10 +134,10 @@ for T0 in campaign_index_dates:
 `python -m src.simulator` — 세계를 만들거나 이어서 진행하고, 끝 상태를 저장한 뒤 그 `state_id` 를 표준 출력에 한 줄로 낸다. 실패 메시지는 표준 오류로 낸다.
 
 ```
-python -m src.simulator init --seed N --customers N --profile NAME --output-root PATH [--days N] [--hidden-root PATH]
-python -m src.simulator advance --output-root PATH --days N [--hidden-root PATH]
-python -m src.simulator resume --state-id ID --output-root PATH --days N [--hidden-root PATH]
-python -m src.simulator guardrails --seed N --customers N [--profile NAME] --warmup-days N [--sample N] --output-root PATH [--hidden-root PATH]
+python -m src.simulator init --seed N [--customers N] --profile NAME --output-root PATH [--days N] [--config PATH] [--hidden-root PATH]
+python -m src.simulator advance --output-root PATH --days N [--config PATH] [--hidden-root PATH]
+python -m src.simulator resume --state-id ID --output-root PATH --days N [--config PATH] [--hidden-root PATH]
+python -m src.simulator guardrails --seed N [--customers N] [--profile NAME] --warmup-days N [--sample N] --output-root PATH [--config PATH] [--hidden-root PATH]
 ```
 
 | 하위 명령 | 하는 일 |
@@ -145,6 +155,8 @@ python -m src.simulator guardrails --seed N --customers N [--profile NAME] --war
 
 운용 제약:
 
+- `--customers` 를 생략하면 프로파일 기본 고객 수를 쓴다. 기본값은 `small` = **5,000명**(PRD FR-04 Small Mode) 하나뿐이고, 다른 프로파일에서 생략하면 인자 오류(종료 코드 2)다. `small` 의 시간축은 `short` 와 같은 275일이다 — FR-04 의 "6개월"은 하한으로 읽는다.
+- `--config` 는 위 「실험용 생성 설정」의 `config_path` 다. `advance`·`resume` 은 그 상태를 만든 `init` 과 같은 파일을 다시 줘야 한다. 다르면(생략 포함) 종료 코드 1 이고 무엇이 다른지가 표준 오류에 나온다.
 - `init` 을 `--days` 없이 실행한 루트에는 아직 실행 기록이 없다. 이어서 진행하려면 `advance` 가 아니라 `resume --state-id <init 이 출력한 값>` 을 쓴다.
 - CLI `advance` 는 루트의 마지막 실행이 끝난 상태가 저장돼 있어야 한다. API 로 `advance` 만 하고 `save_state` 를 하지 않은 루트는 거부한다(종료 코드 1). 그 경우 API 쪽에서 `save_state` 를 부르거나 `resume` 을 쓴다.
 - 중단된 쓰기의 흔적이 남은 루트는 `advance`·`resume` 모두 거부한다(종료 코드 1). 같은 명령을 다시 실행하지 말고 마지막으로 성공한 `state_id` 로 **새 빈 루트**에 `resume` 한다.

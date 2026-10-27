@@ -428,6 +428,18 @@ with mock.patch.object(sk, "parquet_available", return_value=False):
         attempt("config 변경: load_state", lambda: api.load_state(state_id, work / "e6", hidden_root=hidden))
         attempt("config 변경: advance", lambda: api.advance(1))
         attempt("config 변경: events", lambda: list(api.events(summary.end)))
+    # 실험용 설정 파일(config_path)을 고른 경로도 같은 공개 메시지 규칙을 따른다(#183 ②). 파일 이름에 Trait
+    # 이름을 넣어, 호출자가 준 경로가 공개 메시지로 새는지도 함께 본다.
+    experiment = work / f"experiment-{first}.yaml"
+    experiment.write_text(json.dumps(other_doc), encoding="utf-8")
+    broken_experiment = work / f"broken-{last}.yaml"
+    broken_experiment.write_text(json.dumps(broken_doc), encoding="utf-8")
+    attempt("실험 설정 불일치: load_state", lambda: api.load_state(
+        state_id, work / "e7", hidden_root=hidden, config_path=experiment))
+    attempt("실험 설정 위반: init", lambda: api.init(
+        1, 3, "smoke", work / "e8", hidden_root=hidden, config_path=broken_experiment))
+    attempt("실험 설정 없음: load_state", lambda: api.load_state(
+        state_id, work / "e9", hidden_root=hidden, config_path=work / f"missing-{first}.yaml"))
 
 print(PROBE_MARK + json.dumps({
     "state_id": state_id,

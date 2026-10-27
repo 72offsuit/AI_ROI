@@ -108,6 +108,7 @@ def init(
     output_root: str | os.PathLike[str],
     *,
     hidden_root: str | os.PathLike[str] | None = None,
+    config_path: str | os.PathLike[str] | None = None,
 ) -> None:
     """새 세계를 만들어 활성 세계로 둔다. 이전 세계와 스냅샷 토큰은 버린다. 이벤트는 쓰지 않는다.
 
@@ -117,6 +118,8 @@ def init(
         profile: `smoke` · `short` · `small` · `reference` · `long` · `rolling` 중 하나.
         output_root: 이 세계 전용 Sink 루트. 없거나 빈 디렉터리여야 한다.
         hidden_root: 테스트·도구 전용. 오케스트레이션은 넘기지 않는다.
+        config_path: 실험용 생성 설정 파일. `None` 이면 기본 설정이다. 고른 설정은 이 세계에 결속돼
+            이후 `advance`·`snapshot` 이 그대로 쓴다. 실패하면 이전 세계와 그 설정이 그대로 남는다.
 
     Raises:
         TypeError: 인자 타입이 틀렸다(`bool` 포함).
@@ -132,14 +135,17 @@ def init(
         raise ValueError(f"모르는 profile: {profile!r} (허용: {sorted(_profiles.PROFILES)})")
     root = _root("output_root", output_root)
     hidden = _hidden_root(hidden_root)
+    _check_config_path(config_path)
     _require_empty(root)
-    try:
+
+    def activate_new() -> None:
         world = _wd.new_world(seed, num_customers, profile)
+        _runtime.activate(_runtime.Session(world, hidden, root, None, None), drop_snapshots=True)
+
+    try:
+        _genconfig.switch(config_path, activate_new)
     except _genconfig.ConfigError as error:
-        raise SimulatorError(_CONFIG_UNUSABLE) from error
-    _runtime.activate(
-        _runtime.Session(world, hidden, root, None, None), drop_snapshots=True
-    )
+        raise SimulatorError(_config_unusable(config_path)) from error
 
 
 def advance(days: int) -> RunSummary:
@@ -475,6 +481,7 @@ def load_state(
     output_root: str | os.PathLike[str],
     *,
     hidden_root: str | os.PathLike[str] | None = None,
+    config_path: str | os.PathLike[str] | None = None,
 ) -> None:
     """저장된 상태를 활성 세계로 둔다.
 
@@ -486,10 +493,14 @@ def load_state(
         state_id: `save_state` 가 돌려준 값.
         output_root: 이후 쓰기를 받을 Sink 루트.
         hidden_root: 테스트·도구 전용. 오케스트레이션은 넘기지 않는다.
+        config_path: 그 상태를 만든 생성 설정 파일. `None` 이면 기본 설정이다. 실패하면 이전 세계와 그
+            설정이 그대로 남는다.
 
     Raises:
         TypeError · ValueError: 인자 타입·형식이 틀렸다.
-        StateFormatError: 상태가 없거나 손상됐거나 구조가 틀렸거나 판이 다르다.
+        StateFormatError: 상태가 없거나 손상됐거나 구조가 틀렸거나 판이 다르다. 고른 생성 설정이 그 상태를
+            만든 설정과 다를 때도 — 이때만 메시지에 두 설정의 판 이름·다이제스트 앞자리와 설정을 다시 지정하라는
+            안내가 실린다. 실험 파일은 경로 대신 고정 문구로 표기한다.
         OutputRootError: 이어 쓸 수 없는 루트이거나 이 상태에 이르는 계보를 검증할 수 없다.
         SinkFormatError: 이어 쓸 루트나 이어받을 계보의 저장 형식을 이 런타임이 다룰 수 없다.
     """
@@ -499,6 +510,7 @@ def load_state(
         raise ValueError(f"state_id 형식이 아니다: {state_id!r}")
     root = _root("output_root", output_root)
     hidden = _hidden_root(hidden_root)
+    _check_config_path(config_path)
     try:
         data = _storage.read_state(hidden, state_id)
     except FileNotFoundError as error:
@@ -506,12 +518,31 @@ def load_state(
     except OSError as error:
         raise StateFormatError(f"상태 {state_id} 를 읽지 못했다: {_reason(error)}") from error
     try:
+        _genconfig.switch(config_path, lambda: _activate_saved(state_id, data, root, hidden, config_path))
+    except _genconfig.ConfigError as error:
+        raise StateFormatError(f"상태 {state_id} 를 검증하지 못했다 — {_config_unusable(config_path)}") from error
+
+
+def _activate_saved(
+    state_id: str,
+    data: bytes,
+    root: _pathlib.Path,
+    hidden: _pathlib.Path,
+    config_path: str | os.PathLike[str] | None,
+) -> None:
+    """`load_state` 의 검증·활성화 단계. 고른 생성 설정 아래에서 돌아야 한다(`genconfig.switch`)."""
+    try:
         world = _wd.decode(data)
         canonical = _wd.encode(world)
+    except _wd.GenerationMismatch as error:
+        # 판은 같고 생성 설정만 다르다 — 설정 파일을 다시 고르면 읽을 수 있으니 그 길을 안내한다.
+        raise StateFormatError(
+            f"상태 {state_id} 의 판을 읽지 않는다: {error} — {_selected_config(config_path)}. "
+            "이 상태를 만든 설정 파일을 다시 지정한다(API config_path · CLI --config)"
+        ) from error
     except _wd.IncompatibleState as error:
+        # format_version·simulator_version 등 판이 다르면 설정을 바꿔도 읽을 수 없다 — 설정 안내를 붙이지 않는다.
         raise StateFormatError(f"상태 {state_id} 의 판을 읽지 않는다: {error}") from error
-    except _genconfig.ConfigError as error:
-        raise StateFormatError(f"상태 {state_id} 를 검증하지 못했다 — {_CONFIG_UNUSABLE}") from error
     except ValueError as error:
         raise StateFormatError(f"상태 {state_id} 가 손상됐다: {error}") from error
     state_digest = _wd.digest(data)
@@ -619,22 +650,32 @@ def _rng_json(value: object) -> bytes:
     return _wd.canonical_json(value)
 
 
-# config 오류의 자세한 사유(키·모수 값·페르소나 id)는 __cause__ 에만 둔다. 공개 메시지에는 숨은 필드의
-# 이름과 값을 싣지 않는다(docs/persona_spec.md 5.3).
-_CONFIG_UNUSABLE = (
-    f"생성 설정 {_genconfig.CONFIG_NAME} 을 쓸 수 없다 — 읽을 수 없거나 계약을 어겼다. "
-    "자세한 사유는 원인 예외(__cause__)에 있다"
-)
+# config 오류의 자세한 사유(키·모수 값·페르소나 id)와 호출자가 준 파일 경로는 __cause__ 에만 둔다. 공개 메시지에는
+# 숨은 필드의 이름과 값을 싣지 않는다(docs/persona_spec.md 5.3) — 실험 파일 이름에도 그런 이름이 들어갈 수 있다.
+def _config_unusable(config_path: str | os.PathLike[str] | None) -> str:
+    return (
+        f"생성 설정 {_genconfig.public_label(config_path)} 을 쓸 수 없다 — 읽을 수 없거나 계약을 어겼다. "
+        "자세한 사유는 원인 예외(__cause__)에 있다"
+    )
+
+
+def _selected_config(config_path: str | os.PathLike[str] | None) -> str:
+    """지금 고른 생성 설정의 공개 표기 — 파일 표기(실험 파일은 경로 대신 고정 문구)와 판 이름·다이제스트 앞 12자."""
+    config = _genconfig.active()
+    return (
+        f"지금 고른 생성 설정은 {_genconfig.public_label(config_path)}"
+        f"({config.version}·{config.digest[:12]}) 이다"
+    )
 
 
 def _decode_own(data: bytes) -> dict[str, object]:
-    """이 프로세스가 만든 상태를 다시 읽는다. config 는 프로세스 수명 동안 불변이 계약이라 실패는
+    """이 프로세스가 만든 상태를 다시 읽는다. 활성 세계가 있는 동안 config 는 불변이 계약이라 실패는
     그 계약이 깨졌다는 뜻이다. 내부 예외 대신 공개 예외로 알린다."""
     try:
         return _wd.decode(data)
     except (_wd.IncompatibleState, _genconfig.ConfigError) as error:
         raise SimulatorError(
-            "활성 세계를 만든 생성 설정이 지금 설정과 다르다 — 생성 설정은 프로세스 수명 동안 바꾸지 않는다"
+            "활성 세계를 만든 생성 설정이 지금 설정과 다르다 — 생성 설정은 init·load_state 로만 바꾼다"
         ) from error
 
 
@@ -680,6 +721,11 @@ def _root(name: str, value: object) -> _pathlib.Path:
     if not isinstance(value, (str, _os.PathLike)):
         raise TypeError(f"{name} 는 경로여야 한다 (받음: {type(value).__name__})")
     return _pathlib.Path(_os.fspath(value)).resolve()
+
+
+def _check_config_path(value: object) -> None:
+    if value is not None and not isinstance(value, (str, _os.PathLike)):
+        raise TypeError(f"config_path 는 경로여야 한다 (받음: {type(value).__name__})")
 
 
 def _hidden_root(value: object) -> _pathlib.Path:

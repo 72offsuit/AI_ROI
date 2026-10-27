@@ -84,6 +84,10 @@ class IncompatibleState(ValueError):
     pass
 
 
+class GenerationMismatch(IncompatibleState):
+    """판은 같고 상태를 만든 생성 config 만 지금 config 와 다르다 — config 를 다시 고르면 읽을 수 있다."""
+
+
 def customer_id(index: int) -> str:
     return f"C{index + 1:08d}"
 
@@ -231,7 +235,7 @@ def decode(data: bytes) -> dict[str, object]:
     expected_generation = _generation(config)
     if world.get("generation") != expected_generation:
         # 판 이름이 같고 내용만 다른 경우도 가려지게 다이제스트 앞 12자를 함께 싣는다.
-        raise IncompatibleState(
+        raise GenerationMismatch(
             f"generation 이 다르다 — 이 상태를 만든 생성 config 와 현재 config 가 다르다 "
             f"(기대 {_label(expected_generation)}, 발견 {_label(world.get('generation'))})"
         )

@@ -18,7 +18,7 @@ import src.simulator.__main__ as cli
 from src.measurement import schema as sc
 from src.measurement import sink as sk
 from src.simulator import api
-from src.simulator._internal import profiles
+from src.simulator._internal import genconfig, profiles
 from tests.test_simulator_support import REPO_ROOT, SimulatorCase, event_digest, root_digest
 
 SIMULATOR_DIR = REPO_ROOT / "src" / "simulator"
@@ -244,6 +244,18 @@ class TestArgumentRules(SimulatorCase):
                 ))
                 self.assertGreater(run, warmup + 42)
 
+    def test_only_small_has_a_default_customer_count(self) -> None:
+        # PRD FR-04 Small Mode 5,000명(DR-S3-sample-size U3). API 는 이 값을 쓰지 않고 CLI 만 쓴다.
+        self.assertEqual(
+            {"small": 5_000},
+            {name: profiles.default_customers(name) for name in profiles.PROFILES
+             if profiles.default_customers(name) is not None},
+        )
+        self.assertIsNone(profiles.default_customers("nope"))
+        self.assertIs(
+            inspect.signature(api.init).parameters["num_customers"].default, inspect.Parameter.empty
+        )
+
     def test_advance_rules(self) -> None:
         with mock.patch("src.simulator._internal.runtime.active", None):
             with self.assertRaises(api.NotInitializedError):
@@ -452,6 +464,123 @@ class TestNoWallClockOrNondeterminism(unittest.TestCase):
             if "results/" in path.read_text(encoding="utf-8")
         ]
         self.assertEqual([], offenders)
+
+
+class TestExperimentConfig(SimulatorCase):
+    """`config_path` — 실험용 생성 설정으로 세계를 만들고 잇는 길과, 다른 설정으로 이으려 할 때의 명시 오류(#183 ②)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # 이 테스트가 고른 설정이 다음 테스트의 활성 설정으로 새지 않게 한다.
+        keep = mock.patch.multiple(genconfig, _ACTIVE=genconfig._ACTIVE, _ACTIVE_PATH=genconfig._ACTIVE_PATH)
+        keep.start()
+        self.addCleanup(keep.stop)
+        document = json.loads(genconfig.CONFIG_PATH.read_text(encoding="utf-8"))
+        document["behavior"]["visit"]["scale_pct"] += 1
+        self.experiment = self.tmp / "experiment.yaml"
+        self.experiment.write_text(json.dumps(document), encoding="utf-8")
+        self.default = genconfig.load()
+
+    def generation(self, state_id: str) -> str:
+        return str(self.state(state_id)["generation"]["config_digest"])
+
+    def test_experiment_world_is_bound_to_its_file_and_resumes_only_with_it(self) -> None:
+        root = self.fresh_root("exp")
+        api.init(3, 6, "smoke", root, hidden_root=self.hidden, config_path=self.experiment)
+        api.advance(3)
+        saved = api.save_state()
+        experiment_digest = self.generation(saved)
+        self.assertNotEqual(self.default.digest, experiment_digest)
+
+        api.init(3, 6, "smoke", self.fresh_root(), hidden_root=self.hidden)  # 생략하면 기본 설정으로 돌아온다
+        self.assertEqual(self.default.digest, self.generation(api.save_state()))
+
+        with self.assertRaises(api.StateFormatError) as caught:
+            api.load_state(saved, root, hidden_root=self.hidden)
+        message = str(caught.exception)
+        for fragment in ("generation", experiment_digest[:12], self.default.digest[:12],
+                         genconfig.CONFIG_NAME, "--config"):
+            self.assertIn(fragment, message)
+        for hidden_name in self.default.trait_names + self.default.persona_ids:
+            self.assertNotIn(hidden_name, message)
+
+        api.load_state(saved, root, hidden_root=self.hidden, config_path=self.experiment)
+        api.advance(2)
+        self.assertEqual(experiment_digest, self.generation(api.save_state()))
+
+    def test_resuming_a_default_world_with_an_experiment_file_names_it_without_its_path(self) -> None:
+        # 파일 이름에 숨은 이름이 들어갈 수 있어 경로 대신 고정 문구와 다이제스트 앞자리로 가리킨다.
+        self.start(customers=4)
+        api.advance(1)
+        saved = api.save_state()
+        experiment_digest = genconfig.load(self.experiment).digest
+        with self.assertRaises(api.StateFormatError) as caught:
+            api.load_state(saved, self.fresh_root(), hidden_root=self.hidden, config_path=self.experiment)
+        message = str(caught.exception)
+        for fragment in (genconfig.EXPERIMENT_LABEL, experiment_digest[:12], "--config"):
+            self.assertIn(fragment, message)
+        self.assertNotIn(self.experiment.name, message)
+        self.assertNotIn(str(self.tmp), message)
+
+    def test_state_of_another_format_gets_no_config_advice(self) -> None:
+        # 판(format_version·simulator_version)이 다른 상태는 설정을 바꿔도 읽을 수 없다 — 설정 안내가 붙으면 따를 수 없다.
+        self.start(customers=4)
+        saved = self.state(api.save_state())
+        # 현재 판과 절대 같아질 수 없는 옛 값을 심는다 — 판을 올릴 때마다 이 테스트를 고치지 않게.
+        for field, value in (("format_version", "sim-state-v0"), ("simulator_version", "sim-0.0")):
+            with self.subTest(field=field):
+                planted = {**saved, field: value}
+                state_id = f"state-{len(field):016x}"
+                (self.hidden / "states" / f"{state_id}.json").write_text(
+                    json.dumps(planted, sort_keys=True, separators=(",", ":")), encoding="ascii"
+                )
+                with self.assertRaises(api.StateFormatError) as caught:
+                    api.load_state(state_id, self.fresh_root(), hidden_root=self.hidden)
+                message = str(caught.exception)
+                self.assertIn(field, message)
+                self.assertNotIn("--config", message)
+                self.assertNotIn("config_path", message)
+
+    def test_experiment_file_rewritten_in_place_is_read_again(self) -> None:
+        api.init(1, 3, "smoke", self.fresh_root(), hidden_root=self.hidden, config_path=self.experiment)
+        first = self.generation(api.save_state())
+        document = json.loads(self.experiment.read_text(encoding="utf-8"))
+        document["behavior"]["visit"]["scale_pct"] += 1
+        self.experiment.write_text(json.dumps(document), encoding="utf-8")
+        api.init(1, 3, "smoke", self.fresh_root(), hidden_root=self.hidden, config_path=self.experiment)
+        second = self.generation(api.save_state())
+        self.assertNotEqual(first, second)
+        self.assertEqual(genconfig.load(self.experiment).digest, second)
+
+    def test_failed_calls_keep_the_active_world_and_its_config(self) -> None:
+        self.start(customers=4)
+        api.advance(1)
+        saved = api.save_state()
+        broken = self.tmp / "broken.yaml"
+        broken.write_text("{not json", encoding="utf-8")
+        with self.assertRaises(api.SimulatorError) as caught:
+            api.init(1, 3, "smoke", self.fresh_root(), hidden_root=self.hidden, config_path=broken)
+        self.assertIn(genconfig.EXPERIMENT_LABEL, str(caught.exception))
+        self.assertNotIn(broken.name, str(caught.exception))
+        self.assertIn(str(broken), str(caught.exception.__cause__))
+        with self.assertRaises(api.StateFormatError):
+            api.load_state(saved, self.fresh_root(), hidden_root=self.hidden, config_path=self.experiment)
+        self.assertEqual(self.default.digest, genconfig.active().digest)
+        api.advance(1)  # 실패한 호출 뒤에도 원래 세계가 원래 설정으로 이어진다
+
+    def test_same_experiment_file_gives_the_same_world(self) -> None:
+        def run() -> str:
+            api.init(5, 5, "smoke", self.fresh_root(), hidden_root=self.hidden, config_path=self.experiment)
+            api.advance(4)
+            return api.save_state()
+
+        self.assertEqual(run(), run())
+
+    def test_config_path_type_is_checked(self) -> None:
+        with self.assertRaises(TypeError):
+            api.init(1, 3, "smoke", self.fresh_root(), hidden_root=self.hidden, config_path=3)
+        with self.assertRaises(TypeError):
+            api.load_state("state-0000000000000000", self.fresh_root(), hidden_root=self.hidden, config_path=3)
 
 
 class TestContractDocumentMatchesApi(unittest.TestCase):
