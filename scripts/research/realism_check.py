@@ -471,24 +471,35 @@ def f4(ctx: Context) -> Result:
     if o.empty:
         return no_data("purchase 이벤트가 없다")
     amounts = o["order_amount"].dropna()
-    first = _first_seen(ctx)
-    exposure_start = first.clip(lower=ctx.start)
-    exposure = (ctx.end - exposure_start).dt.days
     counts = o.groupby("customer_id").size()
-    active = counts.index[counts.index.isin(exposure.index)]
-    exp = exposure.loc[active]
-    keep = exp >= 28
-    rate = (counts.loc[active][keep] * MONTH_DAYS / exp[keep])
+    # 판정 — 근거(오픈서베이 "이용자" 응답)와 같은 활성 고객 빈도. 활성 구간은 첫 구매일 ~ min(관측 끝,
+    # 마지막 구매일 + 42일)(배타) 이다. 42일 = 정본 이탈 라벨 창이라 마지막 구매 + 42일 뒤의 공백은 분모에서
+    # 빠진다. 구간이 한 덩어리라 중간에 42일 넘게 쉬었다 복귀한 공백은 분모에 남는다(DR-183).
+    by_cust = o.groupby("customer_id")["date"]
+    active_end = (by_cust.max() + pd.Timedelta(days=CHURN_DAYS)).clip(upper=ctx.end)
+    active_days = (active_end - by_cust.min()).dt.days
+    keep = active_days >= 28
+    rate = counts.loc[active_days.index][keep] * MONTH_DAYS / active_days[keep]
+    # 참고(판정 안 함) — 구매 고객 전체 노출(첫 이벤트 ~ 관측 끝) 기준. 이탈 뒤 공백까지 들어간 값으로,
+    # "활성 비율 × 활성 고객 빈도" 를 함께 본다.
+    exposure = (ctx.end - _first_seen(ctx).clip(lower=ctx.start)).dt.days
+    exp = exposure.loc[counts.index[counts.index.isin(exposure.index)]]
+    exp = exp[exp >= 28]
+    legacy = counts.loc[exp.index] * MONTH_DAYS / exp
     if rate.empty:
-        return no_data("관측 노출 28일 이상인 구매 고객이 없다", {"aov_mean_krw": _r(amounts.mean(), 0) if len(amounts) else None})
+        return no_data("활성 구간 28일 이상인 구매 고객이 없다", {"aov_mean_krw": _r(amounts.mean(), 0) if len(amounts) else None})
     if amounts.empty:
         return no_data("purchase 의 order_amount 가 비어 있다", {"orders_per_month": _r(rate.mean(), 2)})
     opm, aov = float(rate.mean()), float(amounts.mean())
     parts = {"orders_per_month": judge(opm, 2.0, 3.2), "aov_krw": judge(aov, 38000, 55000)}
     syn = {"orders_per_month": _r(opm, 2), "orders_per_month_median": _r(rate.median(), 2),
            "aov_krw": _r(aov, 0), "aov_median_krw": _r(amounts.median(), 0),
-           "n_customers": int(len(rate)), "n_orders": int(len(amounts))}
-    return Result(syn, worst(list(parts.values())), "구매 고객(1회 이상)의 월 주문 수 = 주문 수 ÷ 노출 기간(첫 이벤트~관측 끝, 28일 미만 제외) × 30.44일. "
+           "n_customers": int(len(rate)), "n_orders": int(len(amounts)),
+           "orders_per_month_exposure": _r(float(legacy.mean()), 2) if len(legacy) else None,
+           "n_customers_exposure": int(len(legacy))}
+    return Result(syn, worst(list(parts.values())),
+                  "활성 고객의 월 주문 수 = 주문 수 ÷ 활성 구간(첫 구매일 ~ min(관측 끝, 마지막 구매일 + 42일), 28일 미만 제외) × 30.44일. "
+                  "참고 orders_per_month_exposure(판정 안 함) = 구매 고객 전체 노출(첫 이벤트~관측 끝) 기준 — 이탈 뒤 공백 포함. "
                   "객단가는 purchase.order_amount(할인 후·배송비 제외) 평균.", parts)
 
 
@@ -1004,7 +1015,7 @@ def _fmt_syn(m: dict) -> str:
         "F1": lambda s: f"중앙 {s['median']} · 평균 {s['mean']} · p75 {s['p75']}",
         "F2": lambda s: f"{s['median_cv']}",
         "F3": lambda s: f"중앙 {s['median']}일 · ln-sd {s['ln_sd']}",
-        "F4": lambda s: f"월 {s.get('orders_per_month')}회 · {_won(s.get('aov_krw'))}원",
+        "F4": lambda s: f"월 {s.get('orders_per_month')}회(전체 노출 {s.get('orders_per_month_exposure')}) · {_won(s.get('aov_krw'))}원",
         "F5": lambda s: f"{s.get('nbd_shape')}",
         "F6": lambda s: f"상위20% {s['top20']} · 상위10% {s['top10']}",
         "F7": lambda s: f"ln-sd {s.get('order_ln_sd')} · CV {s.get('customer_mean_aov_cv')}",

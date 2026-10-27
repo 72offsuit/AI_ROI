@@ -150,14 +150,51 @@ class TestGapFacts(unittest.TestCase):
 
 @unittest.skipUnless(HAVE_DEPS, "BLOCKED: numpy/pandas 미설치")
 class TestVolumeAndValue(unittest.TestCase):
-    def test_f4_rate_uses_exposure_from_first_event(self):
+    def test_f4_judges_active_span_and_drops_gap_after_churn(self):
+        # 마지막 구매(45일) + 42일 = 87일에 활성 구간이 끝난다. 그 뒤 관측 끝(200일)까지의 공백은
+        # 판정값에서 빠지고, 참고값(첫 이벤트~관측 끝)에만 들어간다.
+        rows = [ev(1, 0, "session_start", session_id="S-C00000001-1", page_type="home")]
+        rows += [buy(1, d, amount=40000) for d in (1, 15, 30, 45)]
+        rows += [ev(1, 199.5, "session_start", session_id="S-C00000001-2", page_type="home")]  # 관측 200일
+        r = rc.f4(ctx_of(rows))
+        self.assertAlmostEqual(r.synthetic["orders_per_month"], round(4 * rc.MONTH_DAYS / (87 - 1), 2))
+        self.assertAlmostEqual(r.synthetic["orders_per_month_exposure"], round(4 * rc.MONTH_DAYS / 200, 2))
+        self.assertEqual(r.synthetic["aov_krw"], 40000)
+        self.assertEqual(r.parts["aov_krw"], "pass")
+
+    def test_f4_active_span_is_cut_at_observation_end(self):
         rows = [ev(1, 0, "session_start", session_id="S-C00000001-1", page_type="home")]
         rows += [buy(1, d, amount=40000) for d in (1, 15, 30, 45)]
         rows += [ev(1, 59.5, "session_start", session_id="S-C00000001-2", page_type="home")]  # 관측 60일
         r = rc.f4(ctx_of(rows))
-        self.assertAlmostEqual(r.synthetic["orders_per_month"], round(4 * rc.MONTH_DAYS / 60, 2))
-        self.assertEqual(r.synthetic["aov_krw"], 40000)
-        self.assertEqual(r.parts["aov_krw"], "pass")
+        self.assertAlmostEqual(r.synthetic["orders_per_month"], round(4 * rc.MONTH_DAYS / (60 - 1), 2))
+        self.assertAlmostEqual(r.synthetic["orders_per_month_exposure"], round(4 * rc.MONTH_DAYS / 60, 2))
+
+    def test_f4_short_active_span_is_excluded_from_judgement_only(self):
+        # 고객 2 는 관측 내내 노출(60일)됐지만 첫 구매가 59일이라 활성 구간이 1일뿐이다.
+        rows = [ev(1, 0, "session_start", session_id="S-C00000001-1", page_type="home")]
+        rows += [buy(1, d, amount=40000) for d in (1, 15, 30, 45)]
+        rows += [ev(2, 0, "session_start", session_id="S-C00000002-1", page_type="home"), buy(2, 59, amount=40000)]
+        rows += [ev(1, 59.5, "session_start", session_id="S-C00000001-2", page_type="home")]
+        r = rc.f4(ctx_of(rows))
+        self.assertEqual(r.synthetic["n_customers"], 1)
+        self.assertEqual(r.synthetic["n_customers_exposure"], 2)
+        self.assertAlmostEqual(r.synthetic["orders_per_month_exposure"],
+                               round((4 + 1) * rc.MONTH_DAYS / 60 / 2, 2))
+
+    def test_f4_28_day_threshold_is_inclusive_for_both_values(self):
+        # 관측 60일. 고객 3 은 32일에 처음 나타나 구매(활성·노출 모두 정확히 28일 → 포함),
+        # 고객 4 는 33일(둘 다 27일 → 제외). 첫 이벤트가 구매라 두 값의 경계가 같은 날에 걸린다.
+        rows = [ev(1, 0, "session_start", session_id="S-C00000001-1", page_type="home")]
+        rows += [buy(1, d, amount=40000) for d in (1, 15, 30, 45)]
+        rows += [buy(3, 32, amount=40000), buy(4, 33, amount=40000)]
+        rows += [ev(1, 59.5, "session_start", session_id="S-C00000001-2", page_type="home")]
+        r = rc.f4(ctx_of(rows))
+        self.assertEqual((r.synthetic["n_customers"], r.synthetic["n_customers_exposure"]), (2, 2))
+        self.assertAlmostEqual(r.synthetic["orders_per_month"],
+                               round((4 * rc.MONTH_DAYS / 59 + rc.MONTH_DAYS / 28) / 2, 2))
+        self.assertAlmostEqual(r.synthetic["orders_per_month_exposure"],
+                               round((4 * rc.MONTH_DAYS / 60 + rc.MONTH_DAYS / 28) / 2, 2))
 
     def test_f6_pareto_shares(self):
         rows = [buy(1, 0, amount=910_000)] + [buy(c, 0, amount=10_000) for c in range(2, 11)]
