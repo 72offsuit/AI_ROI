@@ -40,7 +40,7 @@ class _Window:
         self.heap: list[QueueItem] = world["queue"]
         self.draws = rng.DayDraws(self.seed, 0)
         self.orders = orders
-        self.responses: dict[tuple[str, str], str] = {}
+        self.responses: dict[tuple[str, str, int], str] = {}  # (고객, 처치, 앞선 노출 수) → 반응 유형
         self._traits: dict[str, dict[str, int]] = {}
 
     def traits(self, customer: dict[str, object]) -> dict[str, int]:
@@ -161,9 +161,15 @@ def _day_start(window: _Window, customer: dict[str, object], day_ms: int) -> Non
     u_transition = day.next_u64()
     u_visit = day.next_u64()
     if customer["churning"]:
-        recovery = p.recovery_ppm + (arm.recovery_ppm if positive else 0)
+        recovery = p.recovery_ppm
+        if customer["gate_churning"]:
+            # 재구매 게이트 탈락으로 들어온 이탈은 자연 회복만 낮춘다. 처치 Positive 가산은 처치 효과라 그대로 둔다.
+            recovery = recovery * p.gate_recovery_scale_pct // 100
+        if positive:
+            recovery += arm.recovery_ppm
         if _below_ppm(u_transition, recovery):
             customer["churning"] = False
+            customer["gate_churning"] = False
             customer["engagement"] = PPM
         else:
             customer["engagement"] = max(
@@ -502,7 +508,8 @@ def _repurchase_gate(window: _Window, customer: dict[str, object]) -> None:
 
     0일차 고객은 시뮬레이터 안 첫 구매가 생애 첫 구매가 아니라 제외한다 — 관측 중 가입한 고객만 대상이다.
     통과하면 아무것도 바꾸지 않는다. 실패하면 `_day_start` 의 이탈 시작(onset)과 같은 처리로 이탈 진행에 넣고,
-    이후 회복은 하루 recovery hazard 그대로라 비재구매자도 돌아올 수 있다.
+    그 이탈에는 표시(`gate_churning`)를 달아 회복 hazard 를 `gate_recovery_scale_pct` 로 낮춘다 — 비재구매자도
+    돌아올 수 있되 일반 이탈자보다 느리다. 회복하면 표시를 지워 그 뒤로는 일반 고객과 같다.
     이탈 성향 Trait(churn)과 이중 계산이 아니다: 그쪽은 매일의 시간 기반 hazard 이고, 이 게이트는 첫 구매라는
     사건에 붙은 한 번뿐인 전이다.
     """
@@ -514,6 +521,7 @@ def _repurchase_gate(window: _Window, customer: dict[str, object]) -> None:
         return  # 이미 이탈 진행 중이면 onset 을 다시 적용하지 않는다(감쇠를 하루 두 번 겹치지 않게)
     p = window.params
     customer["churning"] = True
+    customer["gate_churning"] = True
     customer["engagement"] = max(p.engagement_floor_ppm, customer["engagement"] * p.decay_ppm // PPM)
 
 

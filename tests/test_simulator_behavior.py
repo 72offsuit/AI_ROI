@@ -343,15 +343,23 @@ class TestRepurchaseGateWiring(unittest.TestCase):
                 self.assertEqual(call["before"], call["after"])
 
     def test_failed_gate_customers_can_still_recover(self) -> None:
+        # 탈락 이탈의 회복 hazard 는 일반의 gate_recovery_scale_pct(sim-0.6 에서 10%)라, 이 클래스의 400명·300일
+        # 세계에서는 기대 회복 수가 3건 남짓이다. 우연히 0 이 되지 않게 더 크고 긴 세계를 따로 돌린다
+        # (기대 회복 수 10건 안팎 — 회복 hazard 의 정확한 식은 test_simulator_gate_recovery 가 대조한다).
+        self.assertGreater(self.p.gate_recovery_scale_pct * self.p.recovery_ppm, 0, "탈락이 영구 이탈이 되었다")
+        world = world_state.new_world(5, 800, "small")
+        calls: list[dict[str, object]] = []
+        with repurchase_trait_forced_to_zero(), recorded_gates(calls):
+            drain(world, 400)
         failed = {
-            c["customer_id"] for c in self.calls
+            c["customer_id"] for c in calls
             if c["observed_signup"] and c["failed"] and not c["before"][0]
         }
         self.assertTrue(failed)
         # 게이트로 이탈 진행에 들어간 고객만 본다. 이탈 진행을 끝내는 길은 하루 recovery hazard 뿐이라
         # 끝에 이탈 중이 아니면 회복한 것이다.
         recovered = [
-            c["customer_id"] for c in self.world["customers"]
+            c["customer_id"] for c in world["customers"]
             if c["customer_id"] in failed and not c["churning"]
         ]
         self.assertTrue(recovered)
@@ -420,6 +428,19 @@ GATE_GOLDEN: dict[str, tuple[dict[str, str], str, str]] = {
         },
         "b56e49820e419ebe9ad7f114456ac92ff7452c4bc80b442cc7930341d85bc186",
         "14f7f41f7018de591bd1c98fc8f110981801c61cb62740cc949f164fab873bda",
+    ),
+    # 구매 의향·onset 보정으로 C00000291 이 200일 안에 첫 구매를 해 게이트 대상이 늘고 이벤트가 바뀐다. 결정은 고객
+    # 고정 난수라 sim-0.5 에도 있던 고객의 결정은 그대로다. 탈락 이탈의 회복 배율(10%)도 이벤트에 든다.
+    "sim-0.6": (
+        {
+            "C00000043": "pass", "C00000066": "fail", "C00000081": "pass", "C00000113": "pass",
+            "C00000124": "pass", "C00000140": "pass", "C00000164": "fail", "C00000208": "pass",
+            "C00000236": "pass", "C00000244": "fail", "C00000249": "fail", "C00000253": "pass",
+            "C00000258": "pass", "C00000269": "fail", "C00000273": "fail", "C00000291": "fail",
+            "C00000297": "pass",
+        },
+        "7b50b927c264f7d5e8f9e05f391cd930a33d820b403d2e8fca8e8069748c8ace",
+        "9a3395d264c931a77352864966d0baf18f2c37b88222b4e03c8fcbd642954b7e",
     ),
 }
 

@@ -63,6 +63,16 @@ class Arm:
 
 
 @dataclass(frozen=True)
+class RepeatExposure:
+    """반복 노출 감쇠 계수(`treatment.repeat_exposure`). 앞선 노출이 1번 이상일 때만 읽힌다(`treatment.negative_ppm`·`positive_ppm`)."""
+
+    positive_decay_pct: int
+    positive_floor_pct: int
+    negative_step_pct: int
+    negative_max_pct: int
+
+
+@dataclass(frozen=True)
 class Product:
     product_id: str
     category: str
@@ -132,15 +142,20 @@ class Params:
 
         churn = _block("behavior.churn", behavior["churn"], frozenset({
             "onset_hazard_scale_ppm", "decay_per_day_ppm", "engagement_floor_ppm", "recovery_hazard_ppm",
+            "gate_recovery_scale_pct",
         }))
         self.onset_scale_ppm = _int("churn.onset_hazard_scale_ppm", churn["onset_hazard_scale_ppm"], 0, PPM)
         self.decay_ppm = _int("churn.decay_per_day_ppm", churn["decay_per_day_ppm"], 0, PPM)
         self.engagement_floor_ppm = _int("churn.engagement_floor_ppm", churn["engagement_floor_ppm"], 0, PPM)
         self.recovery_ppm = _int("churn.recovery_hazard_ppm", churn["recovery_hazard_ppm"], 0, PPM)
+        # 재구매 게이트 탈락으로 시작한 이탈의 회복 hazard 배율(engine._day_start). 100 이면 일반 이탈과 같다.
+        self.gate_recovery_scale_pct = _int(
+            "churn.gate_recovery_scale_pct", churn["gate_recovery_scale_pct"], 0, 100
+        )
 
         treatment = _block("behavior.treatment", behavior["treatment"], frozenset({
             "window_days", "negative_scale_pct", "positive_scale_pct", "coupon_click_scale_pct",
-            "message_cost_krw", "negative_effect", "arms",
+            "message_cost_krw", "negative_effect", "repeat_exposure", "arms",
         }))
         self.window_days = _int("treatment.window_days", treatment["window_days"], 1, 3650)
         self.negative_scale_pct = _int("treatment.negative_scale_pct", treatment["negative_scale_pct"], 0, 100)
@@ -157,6 +172,18 @@ class Params:
             "negative.intent_penalty_pct", negative["intent_penalty_pct"], 0, 100
         )
         self.negative_onset_accel_pct = _int("negative.onset_accel_pct", negative["onset_accel_pct"], 0, 1000)
+        repeat = _block("treatment.repeat_exposure", treatment["repeat_exposure"], frozenset({
+            "note", "positive_decay_pct", "positive_floor_pct", "negative_step_pct", "negative_max_pct",
+        }))
+        if not isinstance(repeat["note"], str) or not repeat["note"]:
+            raise TypeError("treatment.repeat_exposure.note: 비지 않은 문자열이 아니다")
+        # 상한을 첫 노출 배율 이상으로 강제한다 — 그래야 Negative 확률이 노출 수에 비감소이고 피로 Trait 을 넘지 않는다.
+        self.repeat_exposure = RepeatExposure(
+            _int("repeat_exposure.positive_decay_pct", repeat["positive_decay_pct"], 0, 100),
+            _int("repeat_exposure.positive_floor_pct", repeat["positive_floor_pct"], 0, 100),
+            _int("repeat_exposure.negative_step_pct", repeat["negative_step_pct"], 0, 100),
+            _int("repeat_exposure.negative_max_pct", repeat["negative_max_pct"], self.negative_scale_pct, 100),
+        )
         arms = _block("treatment.arms", treatment["arms"], frozenset(TREATMENTS))
         trait_names = frozenset(config.trait_names)
         self.arms: dict[str, Arm] = {}

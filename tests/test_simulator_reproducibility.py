@@ -48,6 +48,13 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "d0cbfc345a5efa2707e1de03593e1c4359336da752ded1c46ebb91e38bcfe255",
         1160,
     ),
+    # #183(sim-gen-v4): 구매 의향·이탈 onset·쿠폰 받기 보정으로 14일 창의 이벤트가 바뀐다. 반복 노출 감쇠·게이트 탈락
+    # 회복 분리는 이 창에서 발화하지 않는다(각각 tests/test_simulator_fatigue.py · test_simulator_gate_recovery.py).
+    "sim-0.6": (
+        "6d96c7def2a4818963165c1f20d3e8ebbc44b7e0003d1316f69871d93d24f6ed",
+        "e77089a96146e1f5b13674ee1a31b1aaccba229327c52372a1ea36ee6fde513b",
+        1213,
+    ),
 }
 # 행동은 그대로이고 판 라벨만 바뀐 판 → 행동 기준 판. S2 는 생성(페르소나·Trait)만 더하고 이벤트 규칙을
 # 건드리지 않는다(사용자 확정 U1·U4). sim-0.3(S3)은 가입일을 바꿔 행동이 바뀐 판이라 항목이 없다.

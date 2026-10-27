@@ -14,8 +14,10 @@ from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 # S4~S6(#143): 구매 퍼널·이탈 진행·처치 반응이 생겨 고객 항목(engagement·churning·checkout_seq·promo)과
 # 세션 항목(intent·stage·order), 큐 종류(treat), 카탈로그(240개, product_margin 생성)가 바뀐다.
 # #183(F11 보정): 관측 중 가입 고객의 생애 첫 구매 뒤 재구매 게이트가 생겨 이벤트가 바뀐다. 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
-FORMAT_VERSION = "sim-state-v3"
-SIMULATOR_VERSION = "sim-0.5"
+# #183(sim-0.6): 구매 의향·이탈 onset·쿠폰 받기 보정, 반복 노출 감쇠, 게이트 탈락자 회복 분리로 이벤트가 바뀐다.
+# 고객 항목에 gate_churning(재구매 게이트 탈락으로 시작한 이탈 표시)이 생겨 상태 형식도 바뀐다.
+FORMAT_VERSION = "sim-state-v4"
+SIMULATOR_VERSION = "sim-0.6"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999
@@ -36,11 +38,12 @@ _TOP_KEYS = frozenset({
 _CUSTOMER_KEYS = frozenset({
     "customer_id", "signup_ms", "lifecycle", "persona", "hidden_traits", "cart", "recent_views",
     "session", "rfm", "assignments", "next_seq", "engagement", "churning", "checkout_seq", "promo",
-    "purchased",
+    "purchased", "gate_churning",
 })
 # 공개 오류 메시지 정책: 숨은 필드의 이름·페르소나 id·Trait 값을 싣지 않는다(docs/persona_spec.md 5.3).
-# 메시지는 load_state 의 StateFormatError 로 시스템 팀까지 간다. 키 목록에서는 이 둘을 가린다.
-_HIDDEN_KEYS = frozenset({"persona", "hidden_traits"})
+# 메시지는 load_state 의 StateFormatError 로 시스템 팀까지 간다. 키 목록에서는 이 키들을 가린다.
+# gate_churning 은 재구매 성향 Trait 에서 정해진 결과라 같은 취급을 한다.
+_HIDDEN_KEYS = frozenset({"persona", "hidden_traits", "gate_churning"})
 _CART_KEYS = frozenset({"quantity", "last_change_ms", "unit_price"})
 _SESSION_KEYS = frozenset({
     "session_id", "start_ms", "last_activity_ms", "actions", "open", "intent", "stage", "order",
@@ -152,6 +155,7 @@ def _new_customer(
         "next_seq": 0,
         "engagement": params.PPM,
         "churning": False,
+        "gate_churning": False,
         "checkout_seq": 0,
         "promo": None,
         "purchased": [],
@@ -436,6 +440,9 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
     _int(f"{where}.engagement", customer["engagement"], 0, params.PPM)
     if not isinstance(customer["churning"], bool):
         raise _fail(f"{where}.churning", "bool 이 아니다")
+    # 숨은 필드라 이름을 싣지 않는다. 표시는 이탈 진행 중에만 켜질 수 있다.
+    if not isinstance(customer["gate_churning"], bool) or (customer["gate_churning"] and not customer["churning"]):
+        raise _fail(where, "숨은 필드가 bool 이 아니거나 이탈 진행 상태와 어긋난다")
     _int(f"{where}.checkout_seq", customer["checkout_seq"], 0, 999_999)
     purchased = _list(f"{where}.purchased", customer["purchased"])
     if len(purchased) > params.active().recent_purchases_cap or any(p not in product_ids for p in purchased):
