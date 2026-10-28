@@ -148,7 +148,7 @@ def _write_synthetic(root: Path, with_cate: bool) -> tuple[Path, Path]:
         cid = f"C{i + 1:08d}"
         rows.append({
             "customer_id": cid,
-            "treatment_id": arms[i % 5],
+            "assigned": arms[i % 5],
             "outcomes": {a: {"purchased": ys[a], "revenue": 0, "contribution_profit": 0,
                              "marketing_cost": 0} for a in arms},
         })

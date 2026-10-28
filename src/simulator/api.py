@@ -15,6 +15,7 @@ import os as _os
 import pathlib as _pathlib
 import platform as _platform
 import re as _re
+import subprocess as _subprocess
 import typing as _typing
 
 from src.measurement import schema as _sc
@@ -24,6 +25,7 @@ from src.simulator._internal import clock as _clock
 from src.simulator._internal import engine as _engine
 from src.simulator._internal import genconfig as _genconfig
 from src.simulator._internal import lineage as _lineage
+from src.simulator._internal import params as _params
 from src.simulator._internal import profiles as _profiles
 from src.simulator._internal import runtime as _runtime
 from src.simulator._internal import storage as _storage
@@ -313,6 +315,8 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
     의미(S6 #143): 배정 시각(지금의 세계 시각)에 노출 이벤트가 다음 `advance` 의 첫 순간에 기록되고,
     효과는 그 시각부터 42일 지속한다. 다음 `apply_treatment` 가 덮어쓴다(`T0` 은 효과를 끝낸다).
     배정된 고객마다 처치별 참 효과를 시뮬레이터 숨김 영역에 기록한다 — 호출자에게 돌려주지 않는다.
+    앞선 처치의 효과 창 안에서 다시 배정하면 그 앞선 참 효과는 "더 배정하지 않았을 때"의 값이라 관측과
+    어긋난다. 새 참 효과 행의 `supersedes` 에 끊긴 앞선 배정(시각·처치·끊기기 전 일수)을 적어 둔다(#167).
 
     Raises:
         TypeError: `assignments` 가 `Mapping` 이 아니다.
@@ -354,7 +358,10 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
         missing = [cid for cid in ordered if cid not in cache]
         for row in _treatment.potential_outcomes(world, missing):
             cache[str(row["customer_id"])] = row
-        rows = [{**cache[cid], "assigned": tid} for cid, tid in ordered.items()]
+        rows = [
+            {**cache[cid], "assigned": tid, "supersedes": _superseded(customers[_wd.customer_index(cid)], now)}
+            for cid, tid in ordered.items()
+        ]
         assignment_digest = _wd.digest(_rng_json(ordered))
         _storage.write_ground_truth(
             _storage.ground_truth_root(session.hidden_root),
@@ -591,14 +598,20 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
     try:
         for name, rows in files.items():
             _storage.write_jsonl(target.joinpath(name), rows)
-        _storage.write_json(target.joinpath("manifest.json"), {
+        commit = _source_commit()
+        manifest: dict[str, object] = {
             "contract": "commerce-exchange/v1",
             "source": "simulator",
-            "source_commit": world["simulator_version"],
+            # 계약 §2: 생산 코드의 커밋. 판 이름은 따로 싣는다. 커밋을 모르면 빈 값 대신 null + 사유(#167).
+            "source_commit": commit,
+            "simulator_version": world["simulator_version"],
             "generated_at": stamp,
             "mode": "full",
             "files": {name: len(rows) for name, rows in files.items()},
-        })
+        }
+        if commit is None:
+            manifest["null_reason"] = {"source_commit": _sc.ReasonCode.PRECONDITION_MISSING.value}
+        _storage.write_json(target.joinpath("manifest.json"), manifest)
     except OSError as error:
         raise SimulatorError(f"교환 묶음을 쓰지 못했다: {_reason(error)}") from error
     return {
@@ -609,6 +622,40 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
         "customers": len(customers),
         "generated_at": stamp,
     }
+
+
+def _superseded(customer: dict[str, object], now: int) -> dict[str, object] | None:
+    """`now` 의 배정이 끊는 앞선 처치 — 효과 창 안의 비-T0 배정이면 그 배정, 아니면 `None`.
+
+    끊긴 배정의 참 효과 행(같은 고객 · 같은 `at`)은 `observed_days` 일까지만 관측과 맞는다.
+    """
+    assignments = customer["assignments"]
+    if not assignments:
+        return None
+    at_ms, tid = assignments[-1]
+    window_ms = _params.active().window_days * _clock.DAY_MS
+    if tid == "T0" or not at_ms <= now < at_ms + window_ms:
+        return None
+    return {"at": _clock.timestamp(at_ms), "treatment_id": tid, "observed_days": (now - at_ms) // _clock.DAY_MS}
+
+
+_REPO_ROOT = _pathlib.Path(__file__).resolve().parents[2]
+
+
+def _source_commit() -> str | None:
+    """시뮬레이터 코드가 든 저장소의 HEAD 커밋. git 이 없거나 저장소가 아니면 `None` 이다.
+
+    작업 트리의 미커밋 변경은 드러내지 않는다 — 봉인 대조는 깨끗한 체크아웃을 전제한다(FREEZE-003).
+    """
+    try:
+        result = _subprocess.run(
+            ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT,
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, _subprocess.SubprocessError):
+        return None
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and _re.fullmatch(r"[0-9a-f]{40}", commit) else None
 
 
 # 반사실 결과 캐시 — {"before": 배정 전 상태 다이제스트, "rows": {customer_id: 행}}. 시작 상태가 바뀌면 비운다.

@@ -40,18 +40,18 @@ EXIT_INPUT_ERROR = 4
 ARMS = ("T1", "T2", "T3", "T4")
 CONTROL_ARM = "T0"
 
-#: Ground truth 한 줄(고객 1명)의 키. ``docs/simulator_api.md`` 가 정확한 키를 적지 않아
-#: 매핑으로 분리한다. 시뮬레이터 판의 실제 키와 다르면 이 dict 만 고친다.
-#:   outcomes[팔][purchased|revenue|contribution_profit|marketing_cost], tau[팔] (선택)
+#: Ground truth 한 줄(고객 1명)의 키 — ``docs/simulator_api.md`` 「참 효과 기록 형식」 이 정본이다(#167).
+#: 시뮬레이터 판의 실제 키와 다르면 이 dict 만 고친다.
+#:   outcomes[팔][purchased|revenue|contribution_profit|marketing_cost], tau_purchase[팔] (선택)
 GT_KEYS: dict[str, str] = {
     "customer_id": "customer_id",
-    "assigned": "treatment_id",
+    "assigned": "assigned",
     "outcomes": "outcomes",
     "purchased": "purchased",
     "revenue": "revenue",
     "contribution_profit": "contribution_profit",
     "marketing_cost": "marketing_cost",
-    "tau": "tau",
+    "tau": "tau_purchase",
 }
 
 #: 고객별 τ̂ 파일 — **현재 스프린트 결과에 없다**(필요한 산출물). 형식 제안:
@@ -59,7 +59,7 @@ GT_KEYS: dict[str, str] = {
 CATE_FILES = ("cate.jsonl", "cate.csv")
 CATE_KEYS: dict[str, str] = {"customer_id": "customer_id", "arm_prefix": "cate_"}
 
-PO_NAME = re.compile(r"^po-(?P<world>[^-]+)-(?P<t0>[^-]+)-(?P<state>[^-]+)-(?P<assignment>.+)$")
+PO_NAME = re.compile(r"^po-(?P<world>W-[^-]+|[^-]+)-(?P<t0>[^-]+)-(?P<state>[^-]+)-(?P<assignment>.+)$")
 
 
 class InputError(Exception):
@@ -270,6 +270,7 @@ def score_file(path: Path, cate: Mapping[str, Mapping[str, float]] | None,
 def build_report(ground_truth: Path, results: Path, guard_result: Mapping[str, Any],
                  eps: float = 0.0) -> dict[str, Any]:
     cate = load_cate(results)
+    files = ground_truth_files(ground_truth)
     return {
         "report": "s8-diagnostics/v0",
         "sealed": guard_result["sealed"],
@@ -281,8 +282,27 @@ def build_report(ground_truth: Path, results: Path, guard_result: Mapping[str, A
                    "uplift_eval_present": (results / "uplift_eval.json").is_file()},
         "outcome": "retention — 효과 창 42일 안 구매 여부 Y, τ = Y(t) − Y(T0)",
         "quadrant_eps": eps,
-        "files": [score_file(p, cate, eps) for p in ground_truth_files(ground_truth)],
+        "files": _with_superseded([score_file(p, cate, eps) for p in files], files),
     }
+
+
+def _with_superseded(blocks: list[dict[str, Any]], files: list[Path]) -> list[dict[str, Any]]:
+    """효과 창 안에서 다시 배정돼 관측이 끊긴 행 수를 파일마다 싣는다(#167).
+
+    나중 파일의 ``supersedes`` 가 앞선 배정(고객 · 시각)을 가리킨다. 그 행의 참 효과는 "더 배정하지
+    않았을 때" 의 값이다. 채점에서 뺄지는 DR-S8 이 정한다 — 여기서는 세기만 한다.
+    """
+    cut: set[tuple[str, str]] = set()
+    for path in files:
+        for row in _read_jsonl(path):
+            prior = row.get("supersedes")
+            if isinstance(prior, Mapping):
+                cut.add((str(row.get(GT_KEYS["customer_id"])), str(prior.get("at"))))
+    for block, path in zip(blocks, files):
+        block["superseded_rows"] = sum(
+            1 for row in _read_jsonl(path) if (str(row.get(GT_KEYS["customer_id"])), str(row.get("at"))) in cut
+        )
+    return blocks
 
 
 def main(argv: Sequence[str] | None = None) -> int:

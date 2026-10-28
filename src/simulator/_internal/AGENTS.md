@@ -13,8 +13,10 @@ Hidden Trait, 처치 효과 `τ_i`, Potential Outcome이 여기서 만들어진�
 | 산출물 | 저장 위치 | 용도 |
 |---|---|---|
 | Hidden Trait 15종 | `data/hidden/hidden_traits.parquet` | 행동 생성 파라미터 |
-| 처치 효과 `τ_i` | `data/ground_truth/potential_outcomes.parquet` | 4분면 정답 |
-| `Y(0)`, `Y(1)` 이중 실행 결과 | 같음 | Qini 검증용 참값 |
+| 처치 효과 `τ_i` | `data/ground_truth/simulator/po-*.jsonl` (배정 호출마다 한 파일, 형식은 `docs/simulator_api.md` 「참 효과 기록 형식」) | 4분면 정답 |
+| `Y(T0)`~`Y(T4)` 반사실 실행 결과 | 같음 | Qini 검증용 참값 |
+
+참 효과는 Parquet 이 아니라 JSONL 이다 — 시뮬레이터는 의존성 없는 표준 라이브러리로 돌아야 한다(#167).
 
 ## Potential Outcome 이중 실행
 
