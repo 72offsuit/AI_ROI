@@ -165,13 +165,17 @@ class Params:
         )
         self.message_cost_krw = _int("treatment.message_cost_krw", treatment["message_cost_krw"])
         negative = _block("treatment.negative_effect", treatment["negative_effect"], frozenset({
-            "visit_penalty_pct", "intent_penalty_pct", "onset_accel_pct",
+            "visit_penalty_pct", "intent_penalty_pct", "onset_accel_pct", "onset_at_exposure_pct",
         }))
         self.negative_visit_penalty_pct = _int("negative.visit_penalty_pct", negative["visit_penalty_pct"], 0, 100)
         self.negative_intent_penalty_pct = _int(
             "negative.intent_penalty_pct", negative["intent_penalty_pct"], 0, 100
         )
         self.negative_onset_accel_pct = _int("negative.onset_accel_pct", negative["onset_accel_pct"], 0, 1000)
+        # #196: Negative 고객이 노출되는 순간 이탈 진행(onset)에 들어갈 확률. 외부 정량 근거 없음(문헌 가정, DR-196).
+        self.negative_onset_at_exposure_pct = _int(
+            "negative.onset_at_exposure_pct", negative["onset_at_exposure_pct"], 0, 100
+        )
         repeat = _block("treatment.repeat_exposure", treatment["repeat_exposure"], frozenset({
             "note", "positive_decay_pct", "positive_floor_pct", "negative_step_pct", "negative_max_pct",
         }))

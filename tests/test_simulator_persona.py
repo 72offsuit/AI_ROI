@@ -40,6 +40,7 @@ CONFIG_PINS: dict[str, str] = {
     "sim-gen-v2": "49bfe06b2edaa9d45ca653d98175d7458b90e7707dca1d00f57a28f9e4d4006d",
     "sim-gen-v3": "66588097846aa9914aa57f62034a4d2d05bbe8cc66b2a01e3a89040b55df1157",
     "sim-gen-v4": "5328a65f2787de8e02141b9686402b1bbba1636abe82a98018f955c724f8817f",
+    "sim-gen-v5": "4b62208fc336e3290d3e225e093447a13e11a6983fcae5da1d658fdaf7441f79",
 }
 
 

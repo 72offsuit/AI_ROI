@@ -17,7 +17,8 @@ from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 # #183(sim-0.6): 구매 의향·이탈 onset·쿠폰 받기 보정, 반복 노출 감쇠, 게이트 탈락자 회복 분리로 이벤트가 바뀐다.
 # 고객 항목에 gate_churning(재구매 게이트 탈락으로 시작한 이탈 표시)이 생겨 상태 형식도 바뀐다.
 FORMAT_VERSION = "sim-state-v4"
-SIMULATOR_VERSION = "sim-0.6"
+# #196(sim-0.7): Sleeping Dog 직접 경로(Negative 노출 즉시 onset)와 Negative 비율 배율 상향으로 처치 이후 이벤트가 바뀐다.
+SIMULATOR_VERSION = "sim-0.7"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999

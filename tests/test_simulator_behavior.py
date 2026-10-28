@@ -442,6 +442,19 @@ GATE_GOLDEN: dict[str, tuple[dict[str, str], str, str]] = {
         "7b50b927c264f7d5e8f9e05f391cd930a33d820b403d2e8fca8e8069748c8ace",
         "9a3395d264c931a77352864966d0baf18f2c37b88222b4e03c8fcbd642954b7e",
     ),
+    # #196: 이 실행에는 처치가 없어 Sleeping Dog 경로가 발화하지 않는다 — 게이트 결정은 sim-0.6 과 같고 판 라벨·생성
+    # 다이제스트만 다르다.
+    "sim-0.7": (
+        {
+            "C00000043": "pass", "C00000066": "fail", "C00000081": "pass", "C00000113": "pass",
+            "C00000124": "pass", "C00000140": "pass", "C00000164": "fail", "C00000208": "pass",
+            "C00000236": "pass", "C00000244": "fail", "C00000249": "fail", "C00000253": "pass",
+            "C00000258": "pass", "C00000269": "fail", "C00000273": "fail", "C00000291": "fail",
+            "C00000297": "pass",
+        },
+        "d950478b825696b32deed1b9a1a5bcb38589a5bc6d5707f5d4ed974e4ef280b9",
+        "400be3759c02cc871208e400fca22f9048a259b4dbd30f6ba11a371fab789401",
+    ),
 }
 
 
