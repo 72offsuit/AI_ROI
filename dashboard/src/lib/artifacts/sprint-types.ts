@@ -106,6 +106,8 @@ export interface StrategyComparison extends SprintHeader {
     directional_status?: string | null;
     flags?: string[] | null;
     roi?: number | null;
+    /** "ok" or "계산 불가 — …". The screen also requires `incremental_profit_status === "ok"` (issue 169). */
+    roi_status?: string | null;
   }[];
 }
 

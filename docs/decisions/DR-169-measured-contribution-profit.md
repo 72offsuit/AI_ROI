@@ -57,12 +57,14 @@ A 안 안의 세부 선택:
 **A.**
 
 - `run_sprint.py` 분기 루트 = `out/branches/{S}/raw`. 분기 `advance(42)` 직후 그 분기 세계가 활성일 때 `sim.exchange_bundle(end)` → `out/branches/{S}/simulator_exchange`. 경제 지표는 `measured_economics()` 가 `src.measurement.publish.build_kpi_report` 로 계산하고 시뮬레이터 출처 값만 꺼낸다. 전 과정을 `strategy_details.{S}.measured_economics` 에 상태 · 사유 · 묶음 행 수와 함께 남기고, `ok` 인 값만 `metrics.measured_*` 에 싣는다(아니면 `null`). 묶음 · 측정 실패는 분기 단계를 실패시키지 않고 그 기록에 `failed` · `not_run` 으로 남는다.
+- **분기 창 금액 대조(DQ-09)** — 리뷰 R1(P1, 2026-10-27 `kwung0206`) 반영. `window_amount_check()` 가 묶음을 **그 분기 창의 시뮬레이터 출처 purchase 주문 ID** 로 좁힌 읽기 전용 뷰를 만들어 측정 계층 `validate.check_amount_equation` 에 그대로 넘긴다(대조 규칙은 측정 계층 한 벌). 결과(상태 · 대조 행 수 · 위반 수 · 표본 · 창 밖으로 뺀 묶음 주문 수 · 묶음에 없는 창 주문 수 · 못 잡는 것)는 `measured_economics.amount_check` 에 남는다. `fail` 이면 그 분기 기록이 `status: quality_failed` 가 되어 `metrics.measured_*` 가 전부 `null` — 정식 기여이익 · 증분이익 · ROI · 가드레일이 계산 불가로 나간다. 다른 분기는 각자 판정한다(S1 이 실패하면 S2~S5 증분이익이 기준선 쪽 결손으로 모두 계산 불가). 대조할 주문이 없으면 `not_run`(통과가 아니다)이고 값은 막지 않는다 — 이벤트에만 있고 묶음에 없는 주문은 `NO_COST_BASIS` 가 막는다.
 - `src/decision/roi.py`:
   - `incremental_profit_vs_S1` 은 **전략과 기준선이 같은 키로 가진 기여이익의 차이로만** 낸다. 아니면 `null` 과 `incremental_profit_status = "계산 불가 — …"`(전략 쪽 결손 · 기준선 쪽 결손 · 양쪽 결손 · 키 불일치를 구분) · 플래그 `CONTRIBUTION_PROFIT_MISSING`.
   - 그때 `roi` · `ai_roi` · `ai_net_incremental_value` 도 `null` 이고 상태가 그 사유를 말한다. `roi_status = "ok"` 는 정식 증분이익이 있을 때만 나온다.
   - 대체값은 `directional_revenue_minus_marketing_vs_S1` · `directional_status` · `directional_basis` 로 **분리**하고 플래그 `PROFIT_FALLBACK_REVENUE_BASED` 를 유지한다(대시보드가 읽는다). ROI · AI ROI · 가드레일에는 쓰지 않는다. 정식 값이 있으면 대체값은 만들지 않는다(`not_run`).
   - `guardrails.revenue_up_profit_down` · `guardrails.retention_up_cost_surge` 는 `status: ok | not_run` · `triggered: true | false | null` · `basis` · `reason`. 판정 못 하면 `not_run` 과 플래그 `REVENUE_UP_PROFIT_DOWN_NOT_RUN` · `RETENTION_UP_COST_SURGE_NOT_RUN`. 발동하면 기존처럼 `revenue_up_profit_down` · `retention_up_cost_surge` 플래그.
   - 마케팅비 후보 순서에 `measured_marketing_cost` 가 계획 비용보다 앞선다 — 정상 실행에서 ROI 분모는 실현 비용이 되고 `MARKETING_COST_PLANNED_NOT_REALIZED` 는 붙지 않는다.
+- **대시보드 전략 화면** — 리뷰 R2(P2) 반영. 증분이익 칸 · 막대는 `incremental_profit_status === "ok"` 일 때만, ROI 칸 · 막대는 그에 더해 `roi_status === "ok"` 일 때만 숫자로 그린다(DG-5). `roi_status` 만 보지 않는 것은 #169 이전 형식(구형 결과)의 `roi_status` 가 대체값 위에서도 `ok` 이기 때문이다. `incremental_profit_status` 가 없는 행은 구형 결과로 보고 두 값을 그리지 않은 채 재생성 안내를 붙인다 — 방향 확인용 줄도 그 행에는 내지 않는다(구형에는 `directional_*` 가 없다). 로더가 구형 파일을 거부하지는 않으므로 매출 · 마케팅비 등 다른 열은 그대로 보인다. 목업 6행에도 두 상태 필드를 넣었다.
 
 **근거:** 기여이익을 못 얻은 원인은 측정 계층이 아니라 호출 경로였다(위 첫 두 줄). 시뮬레이터가 이미 공개 계약으로 교환 묶음을 내고 측정 계층이 그것으로 COGS 를 계산하므로, 오케스트레이션이 그 둘을 이어 주기만 하면 실측 기여이익이 나온다. 결손을 정식 칸에 대체값으로 채우는 것은 MEA-003 이 금지한 추정이고, 소규모 실행이 보이듯 그 값은 방향도 보장하지 않는다.
 
@@ -86,6 +88,8 @@ A 안 안의 세부 선택:
 - 분기마다 `measured_contribution_profit / measured_revenue` 가 소수점까지 같으면 COGS 가 원가율 곱으로 만들어지고 있다는 뜻이다(EC-1). 처치 구성이 다른 분기는 비율이 달라야 한다.
 - 필터한 이벤트로 낸 경제 지표가 전량으로 낸 값과 다르면 필터가 `publish` 조립과 어긋난 것이다 — `tests/test_orchestration_sprint.py` 가 같은 분기에서 둘을 대조한다. 측정 계층이 조립에 다른 이벤트 유형을 쓰기 시작하면 이 테스트가 실패해야 한다.
 - 가드레일이 `ok · triggered=false` 인데 매출↑ · 이익↓ 인 행이 있으면 판정 키가 어긋난 것이다.
+- 상태 필드가 없는 구형 `strategy_comparison.json` 으로 전략 화면을 열었을 때 증분이익 · ROI 칸이나 막대에 숫자가 보이면 화면 게이트가 빠진 것이다. 대시보드에는 단위 테스트 · CI 빌드 게이트가 없어 자동으로 잡히지 않는다 — 2026-10-29 개발 서버 렌더로 구형 · 신형 · 목업 3종을 확인했고, 같은 구형 파일을 이 수정 전 페이지로 열면 `+₩60` · `1.50` 이 막대에 그려지는 것(리뷰가 지적한 상태)을 대조군으로 확인했다.
+- 교환 묶음이 있는 정상 실행에서 `amount_check` 가 `pass` 가 아니거나 대조 행 수가 창의 purchase 주문 수와 다르면 뷰를 좁히는 규칙이 틀린 것이다. 좁히지 않은 묶음은 같은 실행에서 `fail` 이어야 한다(창 이전 주문) — `tests/test_orchestration_sprint.py` 가 둘을 함께 본다.
 
 ## 민감도
 
@@ -95,8 +99,9 @@ A 안 안의 세부 선택:
 
 ## 남은 불확실성
 
-- **분기 창의 DQ-09(이벤트 ↔ 묶음 금액)는 돌리지 않는다.** 묶음은 계보 전량이고 이벤트는 분기 창뿐이라 그대로 넣으면 거짓 위반이 난다. 묶음에 없는 주문은 `NO_COST_BASIS` 로 잡히지만 금액 불일치는 잡히지 않는다. 측정 계층에 창 단위 대조가 생기면 해소된다.
+- **분기 창 DQ-09 는 묶음에만 있고 창 purchase 이벤트가 빠진 주문을 못 잡는다.** `ExchangeOrder` 에 주문 시각이 없어 묶음 주문이 창 안인지 알 수 없다 — 그래서 뷰를 이벤트 쪽 주문 ID 로 좁혔다. 이 공백은 `amount_check.not_detected` 에 그대로 싣는다. 교환 계약에 주문 시각이 생기거나 측정 계층에 창 단위 대조가 생기면 해소된다.
 - 측정 기여이익은 분기 창의 **전 고객** 주문이다. `revenue_krw` · `churn_rate`(이벤트 결과)는 Feature(t2) 모집단이다. 전략 비교표의 `revenue` 열이 이제 `measured_revenue` 를 먼저 쓰므로 표의 매출 · 마케팅비 · 기여이익은 같은 모집단이고 이탈률만 다르다. 같은 스냅샷 · 같은 난수라 비처치 고객의 차이는 전략 효과에 포함된다고 본다 — 확인한 사실이 아니라 `docs/simulator_api.md` restore 계약에 기댄 가정이다.
 - 시뮬레이터 묶음의 `discount` 는 쿠폰 처치 단가 그대로다(교환 계약 §11, 가정 A-DISCOUNT). 실제 커머스 할인과 다를 수 있다. 환불은 차감하지 않는다(A-REFUND).
 - S4 · S5 의 가치(CLV × `margin_rate`)는 여전히 `economic_config` 가중 마진을 계획 가정으로 쓴다 — #171 범위.
-- 대시보드 전략 화면은 대체값 줄을 `directional_*` 로 옮기는 최소 수정만 했다. 가드레일 `not_run` 표시는 후속이다.
+- 대시보드 전략 화면의 가드레일 `not_run` 표시, 측정 실패 분기 행의 매출 · 마케팅비 기준(basis) 표시(리뷰 N1)는 후속이다.
+- 목업 `dashboard/fixtures/sprint-v0/strategy_comparison.json` 의 ROI 값(S1 0.205 · S2~S5)은 `roi.py` 정의와 맞지 않는다 — 다섯 행 모두 S1 보다 마케팅비가 적거나 같아(S1 은 자기 자신) 정의대로라면 `계산 불가 — 추가 마케팅비 ≤ 0` 이다. #147 때 손으로 만든 값이고 이 PR 이 만든 결함이 아니어서 값은 고치지 않고 상태 필드만 넣었다. 별도 이슈로 다룬다.

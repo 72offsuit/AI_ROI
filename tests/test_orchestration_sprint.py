@@ -15,6 +15,7 @@ import importlib.util
 import io
 import json
 import math
+import shutil
 import sys
 import tempfile
 import types
@@ -450,6 +451,111 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         self.assertIn("PROFIT_FALLBACK_REVENUE_BASED", row["flags"])
         self.assertEqual("not_run", row["guardrails"]["revenue_up_profit_down"]["status"])
 
+    # #237 R1 — 분기 창 금액 대조(DQ-09) ---------------------------------------------
+    def test_every_branch_runs_window_amount_check(self) -> None:
+        """정상 실행에서 분기 창 DQ-09 가 실제로 대조하고(0행이 아니다) 통과한다."""
+        for strategy in rs.STRATEGIES:
+            check = self._economics(strategy)["amount_check"]
+            self.assertEqual("pass", check["status"], strategy)
+            self.assertGreater(check["examined_rows"], 0, strategy)
+            self.assertEqual(0, check["violations"], strategy)
+            self.assertEqual(check["n_window_purchase_orders"], check["examined_rows"], strategy)
+            self.assertEqual(0, check["n_window_orders_missing_from_bundle"], strategy)
+            self.assertEqual(rs.WINDOW_AMOUNT_CHECK_GAP, check["not_detected"], strategy)
+
+    def test_full_bundle_against_window_events_is_a_false_violation(self) -> None:
+        """대조군 — 묶음을 좁히지 않으면 창 이전 주문이 전부 "purchase 없음" 위반이 된다(실제 묶음)."""
+        from src.measurement import exchange as ex
+        from src.measurement import publish as mp
+        from src.measurement import validate
+        from src.measurement.sink import EventSource
+
+        record = self._economics("S2")
+        bundle = ex.read_exchange(Path(record["bundle_root"]), EventSource.SIMULATOR)
+        events = mp.partition_by_source(rs.economic_events(Path(record["raw_root"]))).simulator
+        self.assertGreater(record["amount_check"]["n_bundle_orders_outside_window"], 0)
+        self.assertEqual("fail", validate.check_amount_equation([(bundle, events)]).status)
+        self.assertEqual("pass", rs.window_amount_check(bundle, events)["status"])
+
+    def _branch_with(self, bundle_root: Path, events: list[dict]) -> dict:
+        """``branch_economics`` 를 실제 측정 경로로 — 묶음 위치와 읽을 이벤트만 바꾼다."""
+        with mock.patch.object(rs.sim, "exchange_bundle", return_value={"status": "ok", "path": str(bundle_root)}), \
+                mock.patch.object(rs, "economic_events", return_value=events):
+            return rs.branch_economics(Path("unused"), datetime(2025, 5, 1, tzinfo=KST))
+
+    def _assert_blocks_official_values(self, branch: dict) -> None:
+        from src.decision import roi
+
+        self.assertEqual("quality_failed", branch["status"])
+        self.assertIn("DQ-09", branch["reason"])
+        self.assertEqual("fail", branch["amount_check"]["status"])
+        self.assertTrue(branch["amount_check"]["samples"])  # 근거가 산출물에 남는다
+        # 측정 계층만 보면 기여이익은 ok 다 — 이 경로가 #237 R1 이 막는 것이다
+        self.assertEqual("ok", branch["metrics"]["contribution_profit"]["status"])
+        details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
+        ai = dict(details["S2"]["metrics"])
+        for key in rs.MEASURED_KEYS:
+            ai[f"measured_{key}"] = rs.measured_value(branch, key)
+            self.assertIsNone(ai[f"measured_{key}"], key)
+        row = roi.summarize_strategy(ai, details["S1"]["metrics"], ai_investment_cost=1_000.0)
+        self.assertIsNone(row["incremental_profit_vs_S1"])
+        self.assertNotEqual("ok", row["incremental_profit_status"])
+        self.assertIsNone(row["roi"])
+        self.assertNotEqual("ok", row["roi_status"])
+        self.assertNotEqual("ok", row["ai_roi_status"])
+        self.assertNotEqual("ok", row["guardrails"]["revenue_up_profit_down"]["status"])
+
+    def test_event_amount_conflict_blocks_official_values(self) -> None:
+        """이벤트 ↔ 묶음 금액 충돌 — 그 분기의 정식 기여이익 · 증분이익 · ROI · 가드레일이 계산 불가다."""
+        record = self._economics("S2")
+        events = [dict(e) for e in rs.economic_events(Path(record["raw_root"]))]
+        purchase = next(e for e in events if e.get("event_type") == "purchase")
+        purchase["order_amount"] = int(purchase["order_amount"]) + 200_000
+        branch = self._branch_with(Path(record["bundle_root"]), events)
+        self._assert_blocks_official_values(branch)
+        self.assertEqual(1, branch["amount_check"]["violations"])
+        self.assertIn(f"{purchase['order_id']}: 이벤트", branch["amount_check"]["samples"][0])
+
+    def test_bundle_internal_conflict_blocks_official_values(self) -> None:
+        """묶음 내부 등식 충돌(품목 − 할인 ≠ 주문 금액) — 같은 차단."""
+        record = self._economics("S2")
+        events = [dict(e) for e in rs.economic_events(Path(record["raw_root"]))]
+        order_id = next(str(e["order_id"]) for e in events if e.get("event_type") == "purchase")
+        with tempfile.TemporaryDirectory() as tmp:
+            bundle_root = Path(tmp) / "simulator_exchange"
+            shutil.copytree(record["bundle_root"], bundle_root)
+            orders = bundle_root / "orders.jsonl"
+            rows = [json.loads(line) for line in orders.read_text(encoding="utf-8").splitlines() if line.strip()]
+            for row in rows:
+                if row["order_id"] == order_id:
+                    row["order_amount"] -= 10_000
+            orders.write_text("".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows), encoding="utf-8")
+            branch = self._branch_with(bundle_root, events)
+        self._assert_blocks_official_values(branch)
+        self.assertEqual(1, branch["amount_check"]["violations"])
+        self.assertIn(f"{order_id}: 교환 파일", branch["amount_check"]["samples"][0])
+
+    def test_quality_failure_blocks_only_its_branch_and_s1_blocks_every_increment(self) -> None:
+        """한 전략만 실패하면 그 행만, 기준선 S1 이 실패하면 S2~S5 증분이익이 모두 계산 불가다."""
+        from src.decision import roi
+
+        details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
+
+        def failed(strategy: str) -> dict:
+            record = {**details[strategy]["measured_economics"], "status": "quality_failed"}
+            return {**details[strategy]["metrics"],
+                    **{f"measured_{key}": rs.measured_value(record, key) for key in rs.MEASURED_KEYS}}
+
+        base = details["S1"]["metrics"]
+        self.assertIsNone(roi.summarize_strategy(failed("S2"), base)["incremental_profit_vs_S1"])
+        for strategy in ("S3", "S4", "S5"):
+            row = roi.summarize_strategy(details[strategy]["metrics"], base)
+            self.assertEqual("ok", row["incremental_profit_status"], strategy)
+        for strategy in ("S2", "S3", "S4", "S5"):
+            row = roi.summarize_strategy(details[strategy]["metrics"], failed("S1"))
+            self.assertIsNone(row["incremental_profit_vs_S1"], strategy)
+            self.assertIn("기준선 쪽 contribution_profit 결손", row["incremental_profit_status"], strategy)
+
     def test_dashboard_shapes(self) -> None:
         churn = _read(self.run_dir, "churn_eval")
         self.assertIsInstance(churn["models"], list)  # 평가 결과가 최상위에 펼쳐진다
@@ -568,6 +674,99 @@ class TestSprintSimulatorFailure(unittest.TestCase):
             self.assertEqual("not_run", status["strategy_S0"]["status"])
             for name in rs.RESULT_FILES:
                 self.assertTrue((run_dir / f"{name}.json").is_file(), name)
+
+
+@unittest.skipUnless(_DEPS, _SKIP_REASON)
+class TestWindowAmountCheck(unittest.TestCase):
+    """#237 R1 — 분기 창 DQ-09 의 합성 반례. 실제 묶음 경로는 ``TestSprintWithFakeDecision`` 이 본다."""
+
+    @staticmethod
+    def _bundle(**orders: tuple[int, int, int]) -> object:
+        """``order_id=(품목 단가, 할인, 주문 금액)`` — 품목 1줄 · 수량 1."""
+        from src.measurement import economics as ec
+        from src.measurement import exchange as ex
+        from src.measurement.sink import EventSource
+
+        return ex.ExchangeBundle(
+            source=EventSource.SIMULATOR, root=Path("unused"), manifest={},
+            generated_at=datetime(2025, 5, 1, tzinfo=KST), signup_dates={}, product_ids=frozenset({"p1"}),
+            orders={order_id: ex.ExchangeOrder(
+                order_id=order_id, customer_id="c1", order_amount=amount, discount=discount,
+                shipping_fee=0, shipping_charged=0,
+                items=(ec.OrderItem(product_id="p1", quantity=1, unit_price=price, unit_cost=price // 2),),
+            ) for order_id, (price, discount, amount) in orders.items()},
+        )
+
+    @staticmethod
+    def _purchase(order_id: str, amount: int, *, simulator: bool = True) -> dict:
+        event = {"event_type": "purchase", "order_id": order_id, "order_amount": amount}
+        if simulator:
+            event.update(simulator_version="test", random_seed=1)
+        return event
+
+    def test_normal_orders_with_discount_pass(self) -> None:
+        bundle = self._bundle(o1=(100_000, 0, 100_000), o2=(100_000, 10_000, 90_000))
+        check = rs.window_amount_check(bundle, [self._purchase("o1", 100_000), self._purchase("o2", 90_000)])
+        self.assertEqual("pass", check["status"])
+        self.assertEqual(2, check["examined_rows"])
+        self.assertEqual(0, check["violations"])
+
+    def test_orders_before_the_window_are_left_out(self) -> None:
+        from src.measurement import validate
+
+        bundle = self._bundle(old=(50_000, 0, 50_000), o1=(100_000, 0, 100_000))
+        events = [self._purchase("o1", 100_000)]
+        check = rs.window_amount_check(bundle, events)
+        self.assertEqual("pass", check["status"])
+        self.assertEqual(1, check["examined_rows"])
+        self.assertEqual(1, check["n_bundle_orders_outside_window"])
+        self.assertEqual("fail", validate.check_amount_equation([(bundle, events)]).status)  # 대조군
+
+    def test_event_and_bundle_conflict_fails(self) -> None:
+        check = rs.window_amount_check(self._bundle(o1=(100_000, 0, 100_000)), [self._purchase("o1", 300_000)])
+        self.assertEqual("fail", check["status"])
+        self.assertEqual(1, check["violations"])
+        self.assertIn("o1: 이벤트 300000 ≠ 교환 파일 100000", check["samples"][0])
+
+    def test_bundle_internal_conflict_fails(self) -> None:
+        check = rs.window_amount_check(self._bundle(o1=(100_000, 0, 90_000)), [self._purchase("o1", 90_000)])
+        self.assertEqual("fail", check["status"])
+        self.assertIn("o1: 교환 파일 90000 ≠ 품목 100000 − 할인 0", check["samples"][0])
+
+    def test_commerce_event_with_the_same_order_id_is_not_compared(self) -> None:
+        """출처 분리가 필수다 — 같은 주문 ID 의 커머스 이벤트를 넘기면 거짓 위반이 난다."""
+        from src.measurement import publish as mp
+
+        bundle = self._bundle(o1=(100_000, 0, 100_000))
+        events = [self._purchase("o1", 100_000), self._purchase("o1", 300_000, simulator=False)]
+        split = mp.partition_by_source(events)
+        self.assertEqual("pass", rs.window_amount_check(bundle, split.simulator)["status"])
+        self.assertEqual("fail", rs.window_amount_check(bundle, split.commerce)["status"])  # 대조군
+
+    def test_nothing_to_compare_is_not_run_not_pass(self) -> None:
+        bundle = self._bundle(o1=(100_000, 0, 100_000))
+        empty = rs.window_amount_check(bundle, [])
+        self.assertEqual("not_run", empty["status"])
+        self.assertIsNone(empty["violations"])
+        self.assertIn("purchase 가 없다", empty["reason_detail"])
+        missing = rs.window_amount_check(bundle, [self._purchase("o9", 100_000)])
+        self.assertEqual("not_run", missing["status"])
+        self.assertEqual(1, missing["n_window_orders_missing_from_bundle"])
+        self.assertIn("NO_COST_BASIS", missing["reason_detail"])
+
+    def test_branch_economics_propagates_fail_but_keeps_evidence(self) -> None:
+        end = datetime(2025, 5, 1, tzinfo=KST)
+        ok_metrics = {key: {"status": "ok", "value": 1.0} for key in rs.MEASURED_KEYS}
+        for status, expected in (("fail", "quality_failed"), ("pass", "ok"), ("not_run", "ok")):
+            economics = {"amount_check": {"status": status, "reason_detail": "1행 중 1행이 위반했다"},
+                         "metrics": ok_metrics}
+            with mock.patch.object(rs.sim, "exchange_bundle", return_value={"status": "ok", "path": "x"}), \
+                    mock.patch.object(rs, "measured_economics", return_value=economics):
+                record = rs.branch_economics(Path("unused"), end)
+            self.assertEqual(expected, record["status"], status)
+            self.assertEqual(ok_metrics, record["metrics"], status)  # 값은 근거로 남는다
+            for key in rs.MEASURED_KEYS:
+                self.assertEqual(None if status == "fail" else 1.0, rs.measured_value(record, key), status)
 
 
 @unittest.skipUnless(_DEPS, _SKIP_REASON)
