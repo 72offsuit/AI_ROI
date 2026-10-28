@@ -145,7 +145,7 @@ python -m src.simulator guardrails --seed N [--customers N] [--profile NAME] --w
 | `init` | `api.init` → (`--days` 가 있으면) `api.advance` → `api.save_state` |
 | `advance` | 출력 루트의 마지막 실행이 끝난 상태를 불러(`api.load_state`) N 일 진행하고 저장한다 |
 | `resume` | 지정한 `state_id` 를 불러 N 일 진행하고 저장한다. `--output-root` 가 비어 있으면 새 루트로 이어간다 |
-| `guardrails` | 시뮬레이터 팀 도구(S7-lite). 새 세계를 `--warmup-days` 진행한 시점에서 생성 이탈률 · 처치별 ATE · 쿠폰 사용률 · Sleeping Dog 비율을 계산해 시뮬레이터 숨김 영역 `ground_truth/guardrails/` 에 JSON 으로 쓰고 표로 출력한다. 봉인은 하지 않는다. 시스템 팀은 쓰지 않는다 |
+| `guardrails` | 시뮬레이터 팀 도구(S7-lite). 새 세계를 `--warmup-days` 진행한 시점에서 생성 이탈률 · 처치별 ATE · 쿠폰 사용률 · Sleeping Dog 비율을 계산해 시뮬레이터 숨김 영역 `ground_truth/guardrails/` 에 JSON 으로 쓰고 표로 출력한다. 판정 모집단은 이탈률이 직전 42일 구매 고객, 처치 지표가 data_spec §4.1 eligible 이다(`DR-194-population`) — JSON 최상위 값이 판정값이고 다른 모집단 값은 `role: 참고` 로 함께 싣는다. 봉인은 하지 않는다. 시스템 팀은 쓰지 않는다 |
 
 | 종료 코드 | 뜻 |
 |---|---|
