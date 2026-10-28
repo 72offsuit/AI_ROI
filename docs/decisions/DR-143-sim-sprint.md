@@ -72,7 +72,7 @@ S1~S3 판은 구매·처치 반응이 없어 `purchase`·`coupon_use` 가 0건�
 | C | 정답지가 생성 규칙과 다른 식에서 나온다 |
 | 쿠폰 자동 적용 | 사용률 72~79% — 외부 0.02~16.6% 와 크게 어긋났다 |
 | 탐색 세션 담기 고정 가중치 | 장바구니가 쌓여 객단가 71,809원·이탈 81.2% — Trait 과 무관한 값이 됐다 |
-| Sleeping Dog 를 반응 성향 유형 비율로 판정 | 4분면(잠재결과)과 정의가 달라 항등식이 성립하지 않는다(리드 지시). 참고값 `negative_response_trait_bp_reference` 로만 싣는다 |
+| Sleeping Dog 를 반응 성향 유형 비율로 판정 | 4분면(잠재결과)과 정의가 달라 항등식이 성립하지 않는다(리드 지시). 참고값 `negative_response_customer_bp_reference`(#167 에서 `negative_response_trait_bp_reference` 를 고친 이름 — Negative 는 처치와 무관한 고객 단위 성향이라 T1 로 물은 값이 곧 고객 비율이다)로만 싣는다 |
 
 ## 이 결정이 틀렸다면 어떻게 드러나나
 
