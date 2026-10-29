@@ -14,6 +14,8 @@
 schema_version: 1
 
 churn:
+  # #179: Test 위험도 기준선의 사전 고정 사양. Train 내부·Test 점수로 선택하지 않는다.
+  risk_baseline_model: logistic_regression
   # Stratified K-Fold — 4 모델(baseline 2 · 제안 2)을 같은 fold 로 평가한다 (SRS ML-003).
   # 소수 클래스가 이보다 적으면 그 수로 줄인다(churn.fold_indices).
   cv_folds: 5

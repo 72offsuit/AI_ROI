@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import unittest
 
-from tests.test_feature_sprint_table import FIXTURE_T0, HAVE_ML, SKIP_REASON, make_events
+from tests.test_feature_sprint_table import FIXTURE_T0, HAVE_ML, SKIP_REASON, make_events, fixture_observation
 
 
 @unittest.skipUnless(HAVE_ML, SKIP_REASON)
@@ -22,7 +22,7 @@ class TestCLV(unittest.TestCase):
 
         events = _coerce(pd.DataFrame.from_records(make_events(n_customers=160)))
         cls.X = build_feature_table(events, FIXTURE_T0)
-        cls.y = build_outcomes(events, FIXTURE_T0)
+        cls.y = build_outcomes(events, FIXTURE_T0, observation=fixture_observation())
 
     def test_eval_contract(self) -> None:
         from src.decision.clv import evaluate_clv

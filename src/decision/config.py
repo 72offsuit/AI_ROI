@@ -129,6 +129,7 @@ def _choice(*values: str) -> Rule:
 MODEL_SCHEMA: Mapping[str, Any] = {
     "schema_version": _int(SCHEMA_VERSION, SCHEMA_VERSION),
     "churn": {
+        "risk_baseline_model": _choice("logistic_regression", "random_forest", "hist_gb"),
         "cv_folds": _int(2),
         "threshold_inner_folds": _int(2),
         "shap_sample": _int(1),
@@ -265,6 +266,7 @@ def _read(path: Path, label: str) -> Mapping[str, Any]:
 
 @dataclass(frozen=True)
 class ChurnConfig:
+    risk_baseline_model: str
     cv_folds: int
     threshold_inner_folds: int
     shap_sample: int
@@ -326,6 +328,7 @@ def model_config_from(raw: Any, source: str = "<model_config>", path: Path = MOD
     return ModelConfig(
         path=path,
         churn=ChurnConfig(
+            risk_baseline_model=churn["risk_baseline_model"],
             cv_folds=churn["cv_folds"],
             threshold_inner_folds=churn["threshold_inner_folds"],
             shap_sample=churn["shap_sample"],

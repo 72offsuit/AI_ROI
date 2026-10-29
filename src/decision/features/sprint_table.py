@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from collections.abc import Mapping
 
 import numpy as np
 import pandas as pd
@@ -433,41 +434,133 @@ def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
     return table
 
 
+def outcome_observation_status(index_time, window_days: int, observation: Mapping | None) -> dict:
+    """공개 관측·쓰기 근거의 판정. 이벤트 최댓값으로 근거를 만들지 않는다 (#179)."""
+    t0 = to_index_time(index_time)
+    if type(window_days) is not int or window_days <= 0:
+        raise ValueError("라벨 창 일수는 양의 정수여야 한다")
+    end = t0 + pd.Timedelta(days=window_days)
+    evidence = observation if isinstance(observation, Mapping) else {}
+    reasons = []
+    bounds = {}
+    for key in ("start", "end"):
+        try:
+            stamp = pd.Timestamp(evidence.get(key))
+            bounds[key] = stamp.tz_convert(TIMEZONE) if not pd.isna(stamp) and stamp.tzinfo else None
+        except (TypeError, ValueError, OverflowError):
+            bounds[key] = None
+    start, observed_end = bounds["start"], bounds["end"]
+    complete = start is not None and observed_end is not None and start <= t0 and observed_end >= end
+    if not complete:
+        reasons.append("LABEL_WINDOW_INCOMPLETE_OR_UNKNOWN")
+    run_id = evidence.get("run_id")
+    if not isinstance(run_id, str) or not run_id.strip():
+        reasons.append("RUN_ID_MISSING")
+    rejected = evidence.get("rejected")
+    writing_complete = type(rejected) is int and rejected == 0 and "RUN_ID_MISSING" not in reasons
+    if type(rejected) is not int or rejected < 0:
+        reasons.append("WRITE_EVIDENCE_UNKNOWN")
+    elif rejected > 0:
+        reasons.append("WRITE_REJECTED")
+    generated = evidence.get("purchase_generated")
+    read_complete = evidence.get("read_complete") is True
+    if not read_complete:
+        reasons.append("EVENT_READ_INCOMPLETE_OR_UNKNOWN")
+    if generated is not True:
+        reasons.append("PURCHASE_NOT_OBSERVABLE" if generated is False else "PURCHASE_OBSERVATION_UNKNOWN")
+    return {
+        "status": "not_run" if reasons else "ok", "reasons": reasons,
+        "run_id": run_id if isinstance(run_id, str) else None,
+        "rejected": rejected if type(rejected) is int and rejected >= 0 else None,
+        "label_window_complete": bool(complete), "writing_complete": writing_complete,
+        "read_complete": read_complete, "read_detail": evidence.get("read_detail"), "root": evidence.get("root"),
+        "purchase_generated": generated if type(generated) is bool else None,
+        "window_start": t0.isoformat(), "window_end": end.isoformat(),
+        "observation_start": None if start is None else start.isoformat(),
+        "observation_end": None if observed_end is None else observed_end.isoformat(),
+        "write_detail": evidence.get("write_detail"), "purchase_detail": evidence.get("purchase_detail"),
+    }
+
+
 def build_outcomes(events: pd.DataFrame, index_time, window_days: int = 42, *,
-                   allow_incomplete: bool = False) -> pd.DataFrame:
+                   observation: Mapping | None = None, allow_incomplete: bool = False) -> pd.DataFrame:
     """index=customer_id(=`population`), 컬럼 `churn`·`purchases`·`revenue`.
 
     라벨 창은 `[T0, T0 + window_days)`. `churn = 1` ⇔ 창 안 구매 0 회.
     `purchases`·`revenue` 의 0 은 **관측된 0** 이다(창 안에 주문이 없었다).
     주문 금액이 결손인 주문이 있는 고객의 `revenue` 는 NaN 이다(0 으로 채우지 않는다).
 
-    관측 데이터가 라벨 창 끝까지 닿지 않으면 라벨이 검열(censoring)되어 이탈이 부풀려진다.
-    그 경우 `ValueError` 를 던진다 — `allow_incomplete=True` 면 `attrs` 에 표시만 한다.
+    명시적 observation(start/end/run_id/rejected/read_complete/purchase_generated)이 필요하다.
+    근거 미충족은 ValueError. allow_incomplete=True는 진단용 null 행을 보존하며 라벨을 만들지 않는다.
     """
     t0 = to_index_time(index_time)
     end = t0 + pd.Timedelta(days=window_days)
     ids = population(events, t0)
+    audit = outcome_observation_status(t0, window_days, observation)
+    if audit["status"] != "ok" and not allow_incomplete:
+        raise ValueError("라벨 관측 근거 미충족: " + ", ".join(audit["reasons"]))
+    if audit["status"] != "ok":
+        out = pd.DataFrame(np.nan, index=ids, columns=["churn", "purchases", "revenue"])
+        out.attrs.update(label_def=f"index 이후 {window_days}일 무구매", window_days=window_days,
+                         index_time=t0.isoformat(), label_window_complete=audit["label_window_complete"],
+                         outcome_observation=audit)
+        return out
     frame = _clean(events)
-    data_end = frame["timestamp"].max() if len(frame) else None
-    complete = data_end is not None and data_end >= end - pd.Timedelta(days=1)
-    if not complete and not allow_incomplete:
-        raise ValueError(
-            f"라벨 창이 관측 범위를 넘는다: 창 끝 {end.isoformat()} > 마지막 이벤트 "
-            f"{None if data_end is None else data_end.isoformat()}")
     future = frame[(frame["timestamp"] >= t0) & (frame["timestamp"] < end)
                    & frame["customer_id"].isin(ids)]
     orders = _orders(future)
     grouped = orders.groupby("customer_id")
     purchases = grouped.size().reindex(ids).fillna(0).astype(int)
     revenue = grouped["_amount"].sum(min_count=1).reindex(ids)
-    has_missing_amount = grouped["_amount"].apply(lambda s: s.isna().any()).reindex(ids).fillna(False)
+    has_missing_amount = grouped["_amount"].apply(lambda s: (~np.isfinite(s)).any()).reindex(ids).fillna(False)
     revenue = revenue.where(purchases > 0, 0.0).where(~has_missing_amount.astype(bool))
     out = pd.DataFrame({"churn": (purchases == 0).astype(int), "purchases": purchases,
                         "revenue": revenue.astype(float)}, index=ids)
     out.index.name = "customer_id"
     out.attrs.update(label_def=f"index 이후 {window_days}일 무구매", window_days=window_days,
-                     index_time=t0.isoformat(), label_window_complete=bool(complete))
+                     index_time=t0.isoformat(), label_window_complete=True, outcome_observation=audit)
     return out
+
+
+def summarize_outcomes(outcomes: pd.DataFrame, population) -> dict:
+    """고정 모집단의 필드별 완전성. observed_* 부분합은 정식 ROI 후보와 분리한다 (#179)."""
+    frame = outcomes.reindex(population)
+    n = len(frame)
+    audit = outcomes.attrs.get("outcome_observation", {})
+    evidence_ok = audit.get("status") == "ok"
+    result = {"n_population": n, "n_with_outcome": int(frame.notna().any(axis=1).sum()),
+              "n_outcome_missing": int(frame.isna().all(axis=1).sum()),
+              "outcome_observation": dict(audit), "field_observation": {}}
+    for field in ("churn", "revenue", "purchases"):
+        raw = frame[field] if field in frame else pd.Series(np.nan, index=frame.index)
+        numeric = pd.to_numeric(raw, errors="coerce").astype(float)
+        valid = numeric.notna() & np.isfinite(numeric)
+        if field == "churn":
+            valid &= numeric.isin([0, 1])
+        else:
+            valid &= numeric >= 0
+            if field == "purchases":
+                valid &= numeric == np.floor(numeric)
+        count = int(valid.sum())
+        complete = n > 0 and count == n and evidence_ok
+        result["field_observation"][field] = {
+            "status": "ok" if complete else "not_run", "n_valid": count,
+            "n_missing": int(raw.isna().sum()), "n_invalid": int((raw.notna() & ~valid).sum()),
+            "reason": None if complete else ("OUTCOME_OBSERVATION_UNCONFIRMED" if not evidence_ok
+                                              else "EMPTY_POPULATION" if not n else "FIELD_INCOMPLETE"),
+        }
+        observed_sum = float(numeric[valid].sum()) if count else None
+        total = observed_sum if complete else None
+        if field == "churn":
+            rate = total / n if complete else None
+            result.update(churn_rate=rate, retention_rate=None if rate is None else 1.0 - rate,
+                          observed_churn_sum=observed_sum)
+        elif field == "revenue":
+            result.update(revenue_krw=total, revenue_per_customer_krw=total / n if complete else None,
+                          observed_revenue_sum_krw=observed_sum)
+        else:
+            result.update(purchases=total, observed_purchases_sum=observed_sum)
+    return result
 
 
 def make_preprocessor(clip_quantiles: tuple[float, float] = (0.01, 0.99)):
