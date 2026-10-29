@@ -1,5 +1,7 @@
 # DR-179-independent-read-verification — 선택적 모델과 읽기 검증 분리
 
+> 이 문서의 N2 미해결·실제 학습 미실행 기록은 eb5fb28/cdc9233 당시 상태다. 후속 시스템 구현과 실제 개발 검증은 [DR-179-restored-branch-read](DR-179-restored-branch-read.md) 및 [MC-179-development-evaluation](MC-179-development-evaluation.md)을 따른다. 새 공유 계약 합의를 받은 것은 아니며 독립 재검수는 별도다.
+
 | | |
 |---|---|
 | 태스크 | #179, PR #251의 대체 읽기 회귀 |

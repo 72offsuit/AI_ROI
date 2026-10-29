@@ -1,5 +1,7 @@
 # MC-179-risk-baseline — Test 전용 고정 위험도 기준선
 
+> 아래 표는 최초 합성 연결 시험의 기록이다. 후속 실제 공개 시뮬레이터 개발 실행(seed42, 위험도 fit309/Test265)의 계보·수치는 [MC-179-development-evaluation](MC-179-development-evaluation.md)에 별도로 남겼다. 두 모집단과 성능 근거를 합치지 않는다.
+
 | | |
 |---|---|
 | 태스크 | #179 R3, 시스템 팀 |

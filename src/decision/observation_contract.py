@@ -11,9 +11,38 @@ import hashlib
 import json
 import re
 from collections.abc import Mapping
+from datetime import timezone
 from pathlib import Path
 
-from src.measurement.schema import TIMEZONE
+from src.measurement.schema import EVENT_FIELDS, TIMEZONE
+from src.measurement.timeparse import parse_datetime
+
+
+def event_content_hash(record: Mapping) -> bytes:
+    """공개 이벤트 22필드의 내용 지문. 행 순서·저장 형식과 무관하게 전량을 대조한다.
+
+    누락 필드는 null과 같으며 숫자 0으로 대치하지 않는다. 시각은 기존 공용 파서로
+    같은 순간을 정규화한다. 같은 ID도 내용·중복 횟수가 다르면 다른 전량이다.
+    """
+    values = []
+    for spec in EVENT_FIELDS:
+        value = record.get(spec.name)
+        if spec.name == "timestamp" and value is not None:
+            stamp = parse_datetime(str(value))
+            if stamp.tzinfo is None:
+                raise ValueError("공개 이벤트 시각에 시간대가 없다")
+            value = stamp.astimezone(timezone.utc).isoformat(timespec="microseconds")
+        values.append(value)
+    return hashlib.sha256(json.dumps(values, ensure_ascii=True, allow_nan=False,
+                                    separators=(",", ":")).encode()).digest()
+
+
+def event_content_digest(hashes: list[bytes]) -> dict:
+    """정렬한 행 지문을 이어 해시한다. 같은 행의 중복도 제거하지 않는다."""
+    digest = hashlib.sha256()
+    for value in sorted(hashes):
+        digest.update(value)
+    return {"rows": len(hashes), "sha256": digest.hexdigest()}
 
 
 def read_event_part(path: Path):

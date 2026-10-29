@@ -618,10 +618,22 @@ class TestOutcomeObservationContract(unittest.TestCase):
             return SimpleNamespace(start=start, end=end, run_id=rid, event_count=len(rows))
 
         def snapshot():
-            return clock["now"]
+            clock["snapshot_at"] = clock["now"]
+            return "opaque-fixture-token"
 
         def restore(token, *, output_root):
-            clock.update(now=token, root=output_root)
+            assert token == "opaque-fixture-token"
+            clock.update(now=clock["snapshot_at"], root=output_root)
+
+        def public_records(frame):
+            # 공개 이벤트의 결손은 null이다. DataFrame의 NaN/pd.NA를 API 값으로 내보내지 않는다.
+            return frame.astype(object).where(frame.notna(), None).to_dict("records")
+
+        def events(until):
+            # 공개 events 계약: 현재 분기와 본선의 과거를 전량 제공한다.
+            parts = [frame for root, frame in frames.items() if key(root) == "main" or root == clock["root"]]
+            all_rows = pd.concat(parts, ignore_index=True)
+            yield from public_records(all_rows.loc[all_rows["timestamp"] < until])
 
         def metrics(start, end):
             world = key(clock["root"])
@@ -646,6 +658,7 @@ class TestOutcomeObservationContract(unittest.TestCase):
             return {"name": "fixture", "scheme": "synthetic connection only", "n_test": len(y_test)}
 
         def verify(root, rid, *, history_evidence=None):
+            root = next(p for p in records if p.resolve() == Path(root).resolve())
             run_rejections = {**((history_evidence or {}).get("run_rejections", {})),
                               **{r["run_id"]: r["rejected"] for r in records[root]}}
             return {"status": "not_run" if key(root) == read_fail and rid != "public-fixture-1" else "ok",
@@ -682,7 +695,7 @@ class TestOutcomeObservationContract(unittest.TestCase):
             return root / rid
 
         api = SimpleNamespace(init=init, advance=advance, apply_treatment=lambda assignments: None,
-                              snapshot=snapshot, restore=restore, discard_snapshot=lambda token: None, metrics=metrics)
+                              snapshot=snapshot, restore=restore, discard_snapshot=lambda token: None, metrics=metrics, events=events)
         selected = frozenset({"simulate_warmup", "read_events_t1", "rct_assign", "features_t1", "simulate_rct",
                               "read_events_t2", "outcomes_t1", "training_set", "churn", "features_t2", "snapshot_t2",
                               "strategy_S0", "strategy_S1", "roi_summary", "churn_temporal_holdout"})
@@ -712,6 +725,8 @@ class TestOutcomeObservationContract(unittest.TestCase):
             stack.enter_context(mock.patch.object(rs, "customer_signups", return_value={
                 f"C{i:08d}": datetime(2026, 1, 1, tzinfo=KST).date() for i in range(1, 41)}))
             stack.enter_context(mock.patch.object(sink, "run_records", side_effect=lambda root: records.get(root, [])))
+            stack.enter_context(mock.patch.object(sink, "read_events", side_effect=lambda root: public_records(next(
+                frame for path, frame in frames.items() if path.resolve() == Path(root).resolve()))))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
             rs.run(rs.SprintConfig(seed=7, num_customers=40, profile="smoke", warmup_days=90,

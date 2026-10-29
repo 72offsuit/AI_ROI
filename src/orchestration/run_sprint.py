@@ -62,7 +62,7 @@ from typing import Any, Callable, Iterator, Mapping
 from src.decision.config import load_experiment_config, load_model_config
 from src.decision.observation_contract import (
     outcome_observation_status as _contract_observation_status,
-    verify_event_run,
+    event_content_hash, event_content_digest, verify_event_run,
 )
 from src.measurement import contracts as mc
 from src.simulator import api as sim
@@ -487,6 +487,9 @@ class EventReader:
     """
 
     def __init__(self) -> None:
+        self._last_read = None
+        self._snapshots: dict[str, dict[str, Any]] = {}
+        self._active_branch = None
         try:
             self._load_events = decision_fn("load_events")
             self.source = "src.decision.data.load_events"
@@ -496,33 +499,169 @@ class EventReader:
             self.source = "src.simulator.api.events"
             self.fallback_reason = str(reason)
 
+    @staticmethod
+    def _frame_signature(frame: Any) -> str:
+        """변환 결과를 재계산하지 않고 이미 받은 history의 변경만 감지한다."""
+        digest = hashlib.sha256()
+        digest.update(repr([(str(c), str(d)) for c, d in zip(frame.columns, frame.dtypes)]).encode())
+        digest.update(_pd().util.hash_pandas_object(frame, index=True).to_numpy().tobytes())
+        digest.update(json.dumps(frame.attrs.get("run_read_evidence"), sort_keys=True).encode())
+        return digest.hexdigest()
+
+    @staticmethod
+    def _unchanged_files(root: Path, proof: Mapping) -> None:
+        for name, signature in proof.get("fingerprints", {}).items():
+            stat = (root / name).stat()
+            if [stat.st_size, stat.st_mtime_ns] != signature:
+                raise NotRun("읽기 도중 이벤트 파일이 바뀌었다")
+
+    def _check_history(self, capture: Mapping, *, verify_files: bool = True) -> None:
+        if self._frame_signature(capture["history"]) != capture["signature"]:
+            raise NotRun("스냅샷에 결속한 history 내용 또는 읽기 근거가 바뀌었다")
+        proof = capture["proof"]
+        if verify_files:
+            current = verify_event_run(Path(proof["root"]), proof["run_id"])
+            if current != proof:
+                raise NotRun("스냅샷 본선의 실행·파일 근거가 바뀌었거나 검증되지 않는다")
+        else:
+            self._unchanged_files(Path(proof["root"]), proof)
+
+    def snapshot(self, history: Any, until: datetime) -> str:
+        """이 리더가 방금 검증한 본선 읽기에 공개 스냅샷을 결속한다."""
+        last = self._last_read
+        if last is None or last["history"] is not history or last["until"] != until:
+            raise NotRun("이 리더의 최근 본선 읽기와 스냅샷 history·시각이 다르다")
+        if last["proof"].get("status") != "ok":
+            raise NotRun("스냅샷에는 검증된 본선 실행이 필요하다")
+        self._check_history(last)
+        self._active_branch = None
+        from src.measurement.sink import read_events
+        hashes = [event_content_hash(row) for row in read_events(Path(last["proof"]["root"]))]
+        expected = event_content_digest(hashes)
+        actual = event_content_digest([event_content_hash(row) for row in sim.events(until)])
+        if expected != actual:
+            raise NotRun("활성 세계의 공개 이력이 검증된 본선 내용과 다르다")
+        self._check_history(last)
+        token = sim.snapshot()
+        if not isinstance(token, str):
+            raise NotRun("공개 snapshot 토큰이 문자열이 아니다")
+        self._snapshots[token] = {**last, "raw_hashes": hashes, "raw_content": expected}
+        return token
+
+    def restore(self, token: str, *, output_root: Path) -> None:
+        """불투명 토큰을 공개 API에 그대로 넘긴다. 실패한 복원은 연결 근거가 아니다."""
+        self._active_branch = None
+        capture = self._snapshots.get(token)
+        if capture is None:
+            raise NotRun("이 리더가 history에 결속하지 않은 스냅샷이다")
+        self._check_history(capture)
+        sim.restore(token, output_root=output_root)
+        self._active_branch = {"capture": capture, "root": Path(output_root).resolve(),
+                               "snapshot_reference": hashlib.sha256(token.encode()).hexdigest(),
+                               "summary": None}
+
+    def advance(self, days: int) -> Any:
+        """성공한 복원 뒤의 실제 RunSummary만 분기 읽기에 사용한다."""
+        context = self._active_branch
+        self._active_branch = None
+        if context is None or context["summary"] is not None:
+            raise NotRun("새로운 restore 뒤에 한 번 advance해야 한다")
+        summary = sim.advance(days)
+        context["summary"] = {k: getattr(summary, k, None) for k in ("run_id", "start", "end")}
+        self._active_branch = context
+        return summary
+
+    def _branch_proof(self, context: Mapping, root: Path, run_id: str | None,
+                      until: datetime, history: Any) -> dict:
+        capture, summary = context["capture"], context["summary"]
+        if (summary is None or root.resolve() != context["root"] or history is not capture["history"]
+                or run_id != summary["run_id"] or until != summary["end"]
+                or summary["start"] != capture["until"] or until <= capture["until"]):
+            raise NotRun("복원·진행 기록과 분기 root·run_id·history·관측 창이 다르다")
+        self._check_history(capture)
+        parent = capture["proof"]
+        # root-local 사슬은 독립 검증. 명시적 외부 부모는 기존 정확한 머리 검사로만 해소한다.
+        proof = verify_event_run(root, run_id)
+        if proof.get("status") != "ok":
+            proof = verify_event_run(root, run_id, history_evidence=parent)
+            if proof.get("status") != "ok":
+                raise NotRun(f"이벤트 원시 읽기 근거 미충족: {proof.get('reason')}")
+            local_ids = set(proof["verified_run_ids"]) - set(parent["verified_run_ids"])
+        else:
+            local_ids = set(proof["verified_run_ids"])
+            if local_ids & set(parent["verified_run_ids"]):
+                raise NotRun("분기와 history가 같은 실행 ID를 중복 주장한다")
+        rejections = {**parent["run_rejections"], **proof["run_rejections"]}
+        proof.update(verified_run_ids=sorted(rejections), run_rejections=rejections,
+                     chain_rejected_total=sum(rejections.values()),
+                     ancestor_rejected_total=sum(v for k, v in rejections.items() if k != run_id),
+                     history_head_run_id=parent["run_id"], history_link_status="pending_public_stream",
+                     history_link_method="controlled-snapshot-restore-advance-events-v1",
+                     snapshot_reference=context["snapshot_reference"], branch_run_ids=sorted(local_ids),
+                     snapshot_until=capture["until"].isoformat(),
+                     summary_start=summary["start"].isoformat(), summary_end=until.isoformat())
+        return proof
+
     def read(self, root: Path, until: datetime, history: Any = None, *, run_id: str | None = None) -> Any:
-        """`root` 의 이벤트(`timestamp < until`). 분기 루트는 분기 이전 이력을 `history` 로 붙인다."""
+        """일반 파일 경로는 정확한 부모, 통제된 복원 분기는 공개 API 전량 읽기를 함께 요구한다."""
+        root = Path(root)
+        context = self._active_branch
+        self._active_branch = None  # 실패·오입력·중간 오류 뒤 같은 연결을 재사용하지 않는다.
         proof = {"status": "not_run", "reason": "실행 ID 미제공", "verified_run_ids": []}
         history_proof = history.attrs.get("run_read_evidence") if history is not None else None
         if history is not None and (run_id is None or not isinstance(history_proof, Mapping)
                                     or history_proof.get("status") != "ok"):
             raise NotRun("분기 실행 ID와 검증된 history 머리 근거가 필요하다")
-        if run_id is not None:
+        if context is not None:
+            proof = self._branch_proof(context, root, run_id, until, history)
+        elif run_id is not None:
             proof = verify_event_run(root, run_id, history_evidence=history_proof)
             if proof.get("status") != "ok":
                 raise NotRun(f"이벤트 원시 읽기 근거 미충족: {proof.get('reason')}")
         try:
+            observed_hashes = []
+            if context is not None:
+                from src.measurement.sink import read_events
+                raw_hashes = [event_content_hash(row) for row in read_events(root)]
+                expected_content = event_content_digest(context["capture"]["raw_hashes"] + raw_hashes)
+
+            def checked_stream():
+                for record in sim.events(until):
+                    if context is not None:
+                        observed_hashes.append(event_content_hash(record))
+                    yield record
+
             if self._load_events is None:
-                frame = frame_from_stream(sim.events(until))
-            elif proof.get("status") == "ok" and not proof.get("fingerprints") and proof.get("raw_rows") == 0:
-                frame = self._load_events(root, allow_verified_empty=True)
+                frame = frame_from_stream(checked_stream())
             else:
-                frame = self._load_events(root)
-            for name, signature in proof.get("fingerprints", {}).items():
-                stat = (root / name).stat()
-                if [stat.st_size, stat.st_mtime_ns] != signature:
-                    raise NotRun("읽기 도중 이벤트 파일이 바뀌었다")
+                if context is not None:
+                    for _ in checked_stream():
+                        pass  # 전량 정상 종료가 필수. 일부만 소비하거나 예외를 삼키지 않는다.
+                if proof.get("status") == "ok" and not proof.get("fingerprints") and proof.get("raw_rows") == 0:
+                    frame = self._load_events(root, allow_verified_empty=True)
+                else:
+                    frame = self._load_events(root)
+            self._unchanged_files(root, proof)
+            if context is not None:
+                actual_content = event_content_digest(observed_hashes)
+                if actual_content != expected_content:
+                    raise NotRun("공개 이벤트 전량이 검증된 history·분기 내용과 다르다")
+                self._check_history(context["capture"])
+                # 읽기 사이 실행 기록도 바뀌지 않았는지 같은 검증으로 확인한다.
+                if self._branch_proof(context, root, run_id, until, history) != proof:
+                    raise NotRun("분기 읽기 도중 실행 근거가 바뀌었다")
+                proof["history_link_status"] = "ok"
+                proof["public_stream_complete"] = True
+                proof["public_stream_content"] = actual_content
+                proof["history_content"] = context["capture"]["raw_content"]
         except (OSError, ValueError) as error:
             raise NotRun(f"이벤트 읽기를 완료하지 못했다: {type(error).__name__}: {error}") from error
         if history is not None and self._load_events is not None:
             frame = _pd().concat([history, frame], ignore_index=True)
         frame.attrs.update(run_read_evidence=proof, verified_run_ids=proof.get("verified_run_ids", []))
+        if history is None and proof.get("status") == "ok":
+            self._last_read = {"history": frame, "until": until, "signature": self._frame_signature(frame),
+                               "proof": json.loads(json.dumps(proof))}
         return frame
 
 
@@ -1471,7 +1610,7 @@ def run(config: SprintConfig) -> Path:
 
         with log.stage("snapshot_t2", requires=("simulate_rct", "read_events_t2")):
             skip_if_not_run(log, "snapshot_t2")
-            ctx["snapshot"] = sim.snapshot()
+            ctx["snapshot"] = reader.snapshot(ctx["events_t2"], ctx["t2"])
 
         # 분기 결과 집계의 모집단 = Eligible(t2) — 전략이 배정할 수 있는 고객과 같다(DR-234).
         population = ctx.get("eligible_t2")
@@ -1504,7 +1643,7 @@ def run(config: SprintConfig) -> Path:
                     entry["budget_krw"] = budget
                     assignments = dict(call_plan(strategy, scores, budget, costs))
                 branch_root = branch_raw_root(out, strategy)
-                sim.restore(ctx["snapshot"], output_root=branch_root)
+                reader.restore(ctx["snapshot"], output_root=branch_root)
                 if assignments:
                     sim.apply_treatment(assignments)
                 strategy_file = write_assignment_file(
@@ -1513,7 +1652,7 @@ def run(config: SprintConfig) -> Path:
                     note="plan 이 고른 처치 대상만(T0 미포함). 같은 t2 스냅샷의 분기 — RCT 배정표와 섞지 않는다",
                 )
                 assignment_files["strategies"][strategy] = strategy_file
-                summary = sim.advance(LABEL_WINDOW_DAYS)
+                summary = reader.advance(LABEL_WINDOW_DAYS)
                 ctx["timeline"]["end"] = summary.end
                 counts = Counter(assignments.values())
                 entry["n_assigned"] = len(assignments)

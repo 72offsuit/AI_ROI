@@ -113,6 +113,24 @@ def _isolated_probe(mode):
             frame = reader.read(branch, t0, history=history, run_id="b")
             out["branch"] = {"rows": len(frame), "status": frame.attrs["run_read_evidence"]["status"],
                              "parent": frame.attrs["run_read_evidence"]["external_parent_run_id"]}
+            # 실제 모델·파일 로더 import가 차단된 프로세스에서도 복원 분기를 검증한다.
+            restored = base / "restored"
+            api.events.return_value = iter(rows)
+            api.snapshot = lambda: "opaque-test-token"
+            api.restore = lambda token, output_root: None
+            def advance(days):
+                write(restored, "restored", [extra])
+                return SimpleNamespace(run_id="restored", start=t0, end=t0 + timedelta(days=days))
+            api.advance = advance
+            token = reader.snapshot(history, t0)
+            reader.restore(token, output_root=restored)
+            advanced = reader.advance(42)
+            api.events.return_value = iter(rows + [extra])
+            restored_frame = reader.read(restored, advanced.end, history=history, run_id="restored")
+            restored_proof = restored_frame.attrs["run_read_evidence"]
+            out["restored"] = {"rows": len(restored_frame), "status": restored_proof["status"],
+                               "link": restored_proof["history_link_status"],
+                               "parent": restored_proof["external_parent_run_id"]}
             out["refused"] = {}
             for label, parent in (("none", None), ("ancestor", "a0"), ("unknown", "unknown"),
                                   ("corrupt", "a"), ("unclaimed", "a")):
@@ -204,6 +222,17 @@ with tempfile.TemporaryDirectory() as root:
         self.assertEqual(0, result.returncode, result.stderr)
         self.assertEqual({"status": "ok", "rows": 0}, json.loads(result.stdout))
 
+    def test_public_content_hash_keeps_null_zero_and_duplicates_distinct(self):
+        from src.decision.observation_contract import event_content_hash, event_content_digest
+        row = {"event_id": "fixture", "timestamp": "2026-10-22T00:00:00+09:00"}
+        absent = event_content_hash(row)
+        self.assertEqual(absent, event_content_hash({**row, "order_amount": None}))
+        self.assertNotEqual(absent, event_content_hash({**row, "order_amount": 0}))
+        self.assertEqual(absent, event_content_hash({**row, "timestamp": "2026-10-21T15:00:00Z"}))
+        with self.assertRaises(ValueError): event_content_hash({**row, "order_amount": float("nan")})
+        with self.assertRaises(ValueError): event_content_hash({**row, "timestamp": "2026-10-22T00:00:00"})
+        self.assertNotEqual(event_content_digest([absent]), event_content_digest([absent, absent]))
+
     def test_contract_checks_are_not_optional_model_registry_entries(self):
         tree = ast.parse((ROOT / "src/orchestration/run_sprint.py").read_text())
         assignment = next(node for node in tree.body if isinstance(node, ast.AnnAssign)
@@ -221,6 +250,7 @@ class TestModelIndependentEventReader(unittest.TestCase):
         self.assertEqual([], result["attempts_on_import"])
         self.assertEqual({"rows": 2, "status": "ok", "source": "src.simulator.api.events"}, result["main"])
         self.assertEqual({"rows": 3, "status": "ok", "parent": "a"}, result["branch"])
+        self.assertEqual({"rows": 3, "status": "ok", "link": "ok", "parent": None}, result["restored"])
         for label, status in result["refused"].items():
             with self.subTest(label=label):
                 self.assertEqual("not_run", status["status"], status)
@@ -388,6 +418,246 @@ class TestModelIndependentEventReader(unittest.TestCase):
                 self.runner.outcome_observation_status(FIXTURE_T0, 0, {})
         self.assertEqual("failed", log.status("observation"))
         self.assertIn("ValueError", log.stages[-1]["reason"])
+
+
+
+@unittest.skipUnless(HAVE_DATA, NEEDS_DATA)
+class TestRestoredBranchReads(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        from tests.test_feature_sprint_table import _contract_runner
+        cls.runner = _contract_runner()
+
+    @classmethod
+    def tearDownClass(cls):
+        sys.modules.pop(cls.runner.__name__, None)
+
+    def world(self, root, *, loader=True, parent=None, empty=False, rejected=0, ancestor_rejected=0, branch_id="b"):
+        from src.decision.data import load_events
+        from src.measurement.sink import EventSink
+        from tests.test_feature_sprint_table import FIXTURE_T0
+        import pandas as pd
+        rs, t0 = self.runner, FIXTURE_T0
+        past = {"event_id": str(UUID(int=100, version=4)), "customer_id": "C00000001",
+                "timestamp": (t0-timedelta(days=1)).isoformat(), "event_type": "session_start",
+                "page_type": "home", "session_id": f"S-C00000001-{int((t0-timedelta(days=1)).timestamp()*1000)}",
+                "simulator_version": "fixture", "random_seed": 7,
+                "service_version": "fixture", "customer_version": "fixture"}
+        future = {**past, "event_id": str(UUID(int=101, version=4)),
+                  "timestamp": (t0+timedelta(days=1)).isoformat()}
+        main, branch = root/"main", root/"branch"
+        rows = [] if empty else [past]
+        later = [] if empty else [future]
+        with EventSink(main, fmt="jsonl.gz", run_id="a") as sink:
+            sink.write_events(rows)
+            for _ in range(ancestor_rejected):
+                sink.write_events([{**past, "event_id": "not-a-uuid"}])
+        api = SimpleNamespace(snapshot=mock.Mock(return_value="opaque-token"), restore=mock.Mock(),
+                              events=mock.Mock(side_effect=lambda until: iter(rows)))
+        def advance(days):
+            with EventSink(branch, fmt="jsonl.gz", run_id=branch_id, parent_run_id=parent) as sink:
+                sink.write_events(later)
+                for _ in range(rejected):
+                    sink.write_events([{**future, "event_id": "not-a-uuid"}])
+            api.events.side_effect = lambda until: iter(rows+later)
+            return SimpleNamespace(run_id=branch_id, start=t0, end=t0+timedelta(days=days), event_count=len(later))
+        api.advance = mock.Mock(side_effect=advance)
+        rs.sim = api
+        with mock.patch.object(rs, "decision_fn", return_value=load_events,
+                               side_effect=None if loader else rs.NotRun("모델 로더 없음")):
+            reader = rs.EventReader()
+        history = reader.read(main, t0, run_id="a")
+        token = reader.snapshot(history, t0)
+        return SimpleNamespace(reader=reader, api=api, main=main, branch=branch, history=history,
+                               token=token, t0=t0, rows=rows, later=later)
+
+    def start(self, w):
+        w.reader.restore(w.token, output_root=w.branch)
+        return w.reader.advance(42)
+
+    def read(self, w, summary, **kwargs):
+        args = {"root": w.branch, "until": summary.end, "history": w.history, "run_id": summary.run_id}
+        args.update(kwargs)
+        return w.reader.read(**args)
+
+    def test_root_local_and_explicit_parent_with_and_without_loader(self):
+        for loader in (False, True):
+            for parent in (None, "a"):
+                for empty in (False, True):
+                    with self.subTest(loader=loader, parent=parent, empty=empty), tempfile.TemporaryDirectory() as tmp:
+                        w = self.world(Path(tmp), loader=loader, parent=parent, empty=empty)
+                        summary = self.start(w)
+                        frame = self.read(w, summary)
+                        proof = frame.attrs["run_read_evidence"]
+                        self.assertEqual(0 if empty else 2, len(frame))
+                        self.assertEqual("ok", proof["history_link_status"])
+                        self.assertEqual(parent, proof["external_parent_run_id"])
+                        self.assertEqual("a", proof["history_head_run_id"])
+                        self.assertEqual(["a", "b"], proof["verified_run_ids"])
+                        self.assertTrue(proof["public_stream_complete"])
+                        self.assertEqual(3 if not loader else 2, w.api.events.call_count)
+                        self.assertNotEqual(w.token, proof["snapshot_reference"])
+                        self.assertEqual(64, len(proof["snapshot_reference"]))
+
+    def test_snapshot_rejects_unowned_or_changed_history(self):
+        for mutation in ("copy", "time", "value", "evidence"):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp))
+                history, when = w.history, w.t0
+                if mutation == "copy": history = history.copy()
+                if mutation == "time": when += timedelta(microseconds=1)
+                if mutation == "value": history.loc[0, "customer_id"] = "C00000002"
+                if mutation == "evidence": history.attrs["run_read_evidence"]["rejected"] = 123
+                with self.assertRaises(self.runner.NotRun):
+                    w.reader.snapshot(history, when)
+                self.assertEqual(1, w.api.snapshot.call_count)
+
+    def test_bad_context_and_reuse_are_rejected(self):
+        for case in ("no_advance", "wrong_root", "wrong_run", "wrong_end", "wrong_history", "start", "reuse"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp))
+                w.reader.restore(w.token, output_root=w.branch)
+                summary = (SimpleNamespace(run_id="b", end=w.t0+timedelta(days=42)) if case == "no_advance"
+                           else w.reader.advance(42))
+                kwargs = {}
+                if case == "wrong_root": kwargs["root"] = w.main
+                if case == "wrong_run": kwargs["run_id"] = "wrong"
+                if case == "wrong_end": kwargs["until"] = summary.end-timedelta(microseconds=1)
+                if case == "wrong_history": kwargs["history"] = w.history.copy()
+                if case == "start": w.reader._active_branch["summary"]["start"] += timedelta(microseconds=1)
+                if case == "reuse": self.read(w, summary)
+                before = w.api.events.call_count
+                with self.assertRaises(self.runner.NotRun):
+                    self.read(w, summary, **kwargs)
+                self.assertEqual(before, w.api.events.call_count)
+
+    def test_failed_restore_or_advance_cannot_authorize_read(self):
+        for case in ("unknown_token", "restore_failure", "advance_failure"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp))
+                if case == "unknown_token":
+                    with self.assertRaises(self.runner.NotRun): w.reader.restore("other", output_root=w.branch)
+                    w.api.restore.assert_not_called()
+                elif case == "restore_failure":
+                    w.api.restore.side_effect = RuntimeError("fixture restore error")
+                    with self.assertRaises(RuntimeError): w.reader.restore(w.token, output_root=w.branch)
+                else:
+                    w.reader.restore(w.token, output_root=w.branch)
+                    w.api.advance.side_effect = RuntimeError("fixture advance error")
+                    with self.assertRaises(RuntimeError): w.reader.advance(42)
+                self.assertIsNone(w.reader._active_branch)
+                with self.assertRaises(self.runner.NotRun): w.reader.advance(42)
+
+    def test_file_and_history_tampering_is_not_bypassed(self):
+        from src.measurement import sink
+        for case in ("history_value", "parent_file", "parent_record", "branch_file", "unclaimed", "missing"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp))
+                summary = self.start(w)
+                root = w.main if case.startswith("parent") else w.branch
+                path = root/sink.run_records(root)[0]["files"][0]
+                if case == "history_value": w.history.loc[0, "customer_id"] = "C00000002"
+                elif case == "parent_record":
+                    record = root/"runs/run-a.json"
+                    data = json.loads(record.read_text()); data["rejected"] = 1
+                    record.write_text(json.dumps(data))
+                elif case == "missing": path.unlink()
+                elif case == "unclaimed": path.with_name("part-99999.jsonl.gz").write_bytes(path.read_bytes())
+                else: path.write_bytes(path.read_bytes()+b"changed")
+                with self.assertRaises(self.runner.NotRun): self.read(w, summary)
+                self.assertEqual(1, w.api.events.call_count)
+
+    def test_wrong_explicit_parent_and_duplicate_run_ids_remain_invalid(self):
+        for parent in ("unknown", "b"):
+            with self.subTest(parent=parent), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp), parent=parent)
+                summary = self.start(w)
+                with self.assertRaises(self.runner.NotRun): self.read(w, summary)
+                self.assertEqual(1, w.api.events.call_count)
+
+    def test_repeated_run_id_and_changes_during_stream_are_rejected(self):
+        for case in ("duplicate_run", "parent_record", "branch_record", "history_value"):
+            with self.subTest(case=case), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp), branch_id="a" if case == "duplicate_run" else "b")
+                summary = self.start(w)
+                if case != "duplicate_run":
+                    def changing(until):
+                        yield from w.rows+w.later
+                        if case == "history_value":
+                            w.history.loc[0, "customer_id"] = "C00000002"
+                        else:
+                            path = w.main/"runs/run-a.json" if case == "parent_record" else w.branch/"runs/run-b.json"
+                            record = json.loads(path.read_text()); record["rejected"] = 1
+                            path.write_text(json.dumps(record))
+                    w.api.events.side_effect = changing
+                with self.assertRaises(self.runner.NotRun): self.read(w, summary)
+
+    def test_partial_api_failure_discards_branch_and_consumes_context(self):
+        for loader in (False, True):
+            with self.subTest(loader=loader), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp), loader=loader)
+                summary = self.start(w)
+                def incomplete(until):
+                    yield w.rows[0]
+                    raise RuntimeError("fixture public stream failure")
+                w.api.events.side_effect = incomplete
+                with self.assertRaisesRegex(RuntimeError, "public stream failure"):
+                    self.read(w, summary)
+                self.assertIsNone(w.reader._active_branch)
+                with self.assertRaises(self.runner.NotRun): self.read(w, summary)
+
+    def test_public_stream_must_match_expected_content_not_just_finish(self):
+        for case in ("missing", "extra", "foreign", "same_id_changed", "duplicate"):
+            for loader in (False, True):
+                with self.subTest(case=case, loader=loader), tempfile.TemporaryDirectory() as tmp:
+                    w = self.world(Path(tmp), loader=loader)
+                    summary = self.start(w)
+                    rows = [dict(row) for row in w.rows+w.later]
+                    if case == "missing": rows.pop()
+                    elif case == "extra": rows.append({**rows[0], "event_id": str(UUID(int=102, version=4))})
+                    elif case == "foreign": rows[0]["customer_id"] = "C00000002"
+                    elif case == "same_id_changed": rows[0]["page_type"] = "detail"
+                    elif case == "duplicate": rows[1] = dict(rows[0])
+                    w.api.events.side_effect = lambda until: iter(rows)
+                    with self.assertRaisesRegex(self.runner.NotRun, "전량"):
+                        self.read(w, summary)
+
+    def test_snapshot_detects_different_active_world_before_making_token(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            w = self.world(Path(tmp))
+            w.api.events.side_effect = lambda until: iter([])
+            with self.assertRaisesRegex(self.runner.NotRun, "활성 세계"):
+                w.reader.snapshot(w.history, w.t0)
+            self.assertEqual(1, w.api.snapshot.call_count)
+
+    def test_order_and_timezone_spellings_do_not_change_content(self):
+        from datetime import timezone
+        from src.measurement.timeparse import parse_datetime
+        with tempfile.TemporaryDirectory() as tmp:
+            w = self.world(Path(tmp), loader=False)
+            summary = self.start(w)
+            rows = [{**row, "timestamp": parse_datetime(row["timestamp"]).astimezone(timezone.utc).isoformat()}
+                    for row in reversed(w.rows+w.later)]
+            w.api.events.side_effect = lambda until: iter(rows)
+            proof = self.read(w, summary).attrs["run_read_evidence"]
+            self.assertEqual("ok", proof["history_link_status"])
+            self.assertEqual(2, proof["public_stream_content"]["rows"])
+
+    def test_current_rejection_blocks_outcomes_and_ancestor_is_retained(self):
+        from tests.test_feature_sprint_table import TestOutcomeObservationContract
+        for refused in (0, 1):
+            with self.subTest(rejected=refused), tempfile.TemporaryDirectory() as tmp:
+                w = self.world(Path(tmp), rejected=refused, ancestor_rejected=1)
+                summary = self.start(w)
+                frame = self.read(w, summary)
+                proof = frame.attrs["run_read_evidence"]
+                self.assertEqual({"a": 1, "b": refused}, proof["run_rejections"])
+                self.assertEqual(1, proof["ancestor_rejected_total"])
+                observation = self.runner.outcome_observation(summary, w.branch,
+                    TestOutcomeObservationContract.raw_metrics(), proof)
+                status = self.runner.outcome_observation_status(w.t0, 42, observation)
+                self.assertEqual("not_run" if refused else "ok", status["status"])
+                if refused: self.assertIn("WRITE_REJECTED", status["reasons"])
 
 
 if __name__ == "__main__":
