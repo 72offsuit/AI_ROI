@@ -349,6 +349,7 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
     now = world["now_ms"]
     customers = world["customers"]
     ordered = {cid: assignments[cid] for cid in sorted(assignments)}
+    cut = _superseded(session, {cid: customers[_wd.customer_index(cid)] for cid in ordered}, now)
     try:
         # 같은 시작 상태(스냅샷에서 갈라진 전략 분기)의 반사실은 배정과 무관하게 같다 — 고객별로 재사용한다.
         if _PO_CACHE.get("before") != before:
@@ -359,7 +360,7 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
         for row in _treatment.potential_outcomes(world, missing):
             cache[str(row["customer_id"])] = row
         rows = [
-            {**cache[cid], "assigned": tid, "supersedes": _superseded(customers[_wd.customer_index(cid)], now)}
+            {**cache[cid], "assigned": tid, "supersedes": cut.get(cid)}
             for cid, tid in ordered.items()
         ]
         assignment_digest = _wd.digest(_rng_json(ordered))
@@ -624,32 +625,76 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
     }
 
 
-def _superseded(customer: dict[str, object], now: int) -> dict[str, object] | None:
-    """`now` 의 배정이 끊는 앞선 처치 — 효과 창 안의 비-T0 배정이면 그 배정, 아니면 `None`.
+def _superseded(
+    session: _runtime.Session, customers: dict[str, dict[str, object]], now: int
+) -> dict[str, dict[str, object]]:
+    """`now` 의 배정이 끊는 앞선 처치 — 효과 창 안의 비-T0 배정이 있는 고객만 `{customer_id: 표시}`.
 
-    끊긴 배정의 참 효과 행(같은 고객 · 같은 `at`)은 `observed_days` 일까지만 관측과 맞는다.
+    표시는 `{file, at, treatment_id, observed_days}` 다. `file` 은 끊긴 배정의 참 효과 파일 이름(확장자 없이)이라
+    world · 스냅샷 분기가 달라도 그 파일의 그 고객 행 하나를 가리킨다(#167 리뷰). 그 행은 `observed_days` 일까지만
+    관측과 맞는다. 파일 이름은 계보에 남은 배정 기록(배정 전 상태 다이제스트 · 배정 내용)으로 다시 만든다.
     """
-    assignments = customer["assignments"]
-    if not assignments:
-        return None
-    at_ms, tid = assignments[-1]
-    window_ms = _params.active().window_days * _clock.DAY_MS
-    if tid == "T0" or not at_ms <= now < at_ms + window_ms:
-        return None
-    return {"at": _clock.timestamp(at_ms), "treatment_id": tid, "observed_days": (now - at_ms) // _clock.DAY_MS}
+    params = _params.active()
+    found: dict[str, dict[str, object]] = {}
+    for cid, customer in customers.items():
+        prior = _treatment.active_assignment(customer, now, params)
+        if prior is not None:
+            at_ms, tid = prior
+            found[cid] = {
+                "file": None, "at": _clock.timestamp(at_ms), "treatment_id": tid,
+                "observed_days": (now - at_ms) // _clock.DAY_MS, "_at_ms": at_ms,
+            }
+    if found:
+        _attach_assignment_files(session, found)
+    for mark in found.values():
+        del mark["_at_ms"]
+    return found
+
+
+def _attach_assignment_files(session: _runtime.Session, found: dict[str, dict[str, object]]) -> None:
+    """계보를 거꾸로 따라가며(진행 중 기록 → 실행 사이드카) 각 고객의 끊긴 배정이 쓴 참 효과 파일 이름을 채운다."""
+    world_id = session.world["world_id"]
+    missing = set(found)
+
+    def scan(mutations: list[dict[str, object]]) -> None:
+        for mutation in reversed(mutations):
+            if mutation.get("kind") != "apply_treatment":
+                continue
+            assignments = mutation["assignments"]
+            hits = [cid for cid in missing if cid in assignments and found[cid]["_at_ms"] == mutation["at_ms"]]
+            if not hits:
+                continue
+            stem = (
+                f"po-{world_id}-{mutation['at_ms']}-{str(mutation['before_digest'])[:16]}-"
+                f"{_wd.digest(_rng_json(assignments))[:16]}"
+            )
+            for cid in hits:
+                found[cid]["file"] = stem
+                missing.discard(cid)
+
+    scan(session.pending)
+    run_id = session.lineage_head
+    while missing and run_id is not None:
+        record = _storage.read_sidecar(session.hidden_root, str(run_id))
+        if record is None:
+            break
+        scan(list(record.get("mutations") or []))
+        run_id = record.get("parent_run_id")
 
 
 _REPO_ROOT = _pathlib.Path(__file__).resolve().parents[2]
 
 
 def _source_commit() -> str | None:
-    """시뮬레이터 코드가 든 저장소의 HEAD 커밋. git 이 없거나 저장소가 아니면 `None` 이다.
+    """`src/simulator` 를 마지막으로 바꾼 커밋 — 계약(commerce-exchange/v1 README §2)이 정한 `simulator_commit` 과
+    같은 규칙(`src/orchestration/run_sprint.py` `provenance()`). git 이 없거나 저장소가 아니면 `None` 이다.
 
-    작업 트리의 미커밋 변경은 드러내지 않는다 — 봉인 대조는 깨끗한 체크아웃을 전제한다(FREEZE-003).
+    저장소 HEAD 가 아니다 — 문서만 바꾼 커밋이 들어와도 값이 그대로여야 FREEZE-003 대조가 거짓 불일치를 내지 않는다.
+    작업 트리의 미커밋 변경은 드러내지 않는다 — 봉인 대조는 깨끗한 체크아웃을 전제한다.
     """
     try:
         result = _subprocess.run(
-            ["git", "rev-parse", "HEAD"], cwd=_REPO_ROOT,
+            ["git", "log", "-1", "--format=%H", "--", "src/simulator"], cwd=_REPO_ROOT,
             capture_output=True, text=True, timeout=5, check=False,
         )
     except (OSError, _subprocess.SubprocessError):

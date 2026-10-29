@@ -33,7 +33,7 @@
 
 | 안 | 내용 | 장점 | 단점 |
 |---|---|---|---|
-| R-A | 새 참 효과 행에 `supersedes`(끊긴 앞 배정의 시각 · 처치 · 끊기기 전 일수)를 싣고, 채점기가 파일마다 해당 행 수를 센다 | 기록만 늘고 동작 · 이벤트 · 골든이 그대로다. 채점 정책(뺄지)은 DR-S8 에 남긴다 | 소비자가 파일 사이를 맞춰 봐야 한다 |
+| R-A | 새 참 효과 행에 `supersedes`(끊긴 앞 배정의 파일 · 시각 · 처치 · 끊기기 전 일수)를 싣고, 채점기가 파일마다 해당 행 수를 센다 | 기록만 늘고 동작 · 이벤트 · 골든이 그대로다. 채점 정책(뺄지)은 DR-S8 에 남긴다 | 소비자가 파일 사이를 맞춰 봐야 한다 |
 | R-B | 효과 창 안 재배정을 `AssignmentError` 로 거부 | 어긋남이 생기지 않는다 | 공개 API 계약 변경. `T0` 으로 효과를 끝내는 기존 의미(#143)와 그 테스트를 깬다 |
 | R-C | 앞 참 효과 파일을 다시 써서 끊긴 날 이후를 잘라낸다 | 한 파일만 보면 된다 | 이미 쓴 정답지를 고치는 경로가 생긴다. 잘린 창의 반사실은 다시 돌려야 한다(비용 · 정의 문제) |
 
@@ -49,7 +49,7 @@
 
 | 안 | 내용 | 장점 | 단점 |
 |---|---|---|---|
-| C-A | 값을 계약에 맞춘다 — `git rev-parse HEAD`, 얻지 못하면 `null` + `null_reason`. 판 이름은 `simulator_version` 으로 따로 싣는다 | 시뮬레이터 팀 안에서 끝난다. 측정 계층 `repo_commit()` 과 같은 규칙 | 미커밋 변경은 드러나지 않는다 |
+| C-A | 값을 계약에 맞춘다 — `git log -1 --format=%H -- src/simulator`(`src/simulator` 를 마지막으로 바꾼 커밋), 얻지 못하면 `null` + `null_reason`. 판 이름은 `simulator_version` 으로 따로 싣는다 | 시뮬레이터 팀 안에서 끝난다. 계약이 가리키는 `simulator_commit` 과 같은 규칙(오케스트레이션 `run_sprint.py` `provenance()`) | 미커밋 변경은 드러나지 않는다 |
 | C-B | 계약 문구를 "판 이름"으로 고친다 | 코드 변경 없음 | `docs/contracts/**` 는 `shared_read_only` — 한 팀이 단독으로 고치지 않는다. FREEZE-003 대조가 약해진다 |
 
 ## 조사한 것
@@ -71,9 +71,9 @@
 | # | 결정 (제안) |
 |---|---|
 | U1 | **F-A.** 참 효과는 JSONL. 행 형식의 정본은 `docs/simulator_api.md` 「참 효과 기록 형식」. `_internal/AGENTS.md` 표를 실제 경로 · 형식으로 고친다. 채점기 `GT_KEYS` 를 실제 키(`assigned` · `tau_purchase`)로 고치고, 파일 이름 정규식이 `world_id`(`W-` 뒤 16진수)의 하이픈을 견디게 한다 |
-| U2 | **R-A.** 참 효과 행에 `supersedes` — 이 배정이 앞선 비-`T0` 처치의 효과 창 안이면 `{at, treatment_id, observed_days}`, 아니면 `null`. 채점 보고서는 파일마다 `superseded_rows` 를 싣는다. 채점에서 뺄지는 DR-S8(#224) |
+| U2 | **R-A.** 참 효과 행에 `supersedes` — 이 배정이 앞선 비-`T0` 처치의 효과 창 안이면 `{file, at, treatment_id, observed_days}`, 아니면 `null`. `file` 은 끊긴 배정의 참 효과 파일 이름(확장자 없이)으로, 계보에 남은 배정 기록(배정 전 상태 다이제스트 · 배정 내용)에서 다시 만든다 — 고객 ID · 배정 시각은 world · 스냅샷 분기 사이에서 겹치므로 파일까지 가리켜야 한다(#167 리뷰). 효과 창 판정은 `treatment.active_assignment` 한 곳이 한다. 채점 보고서는 파일마다 `superseded_rows` 를 (파일, 고객)으로 센다. 채점에서 뺄지는 DR-S8(#224) |
 | U3 | **P-A.** 실측 분해를 남긴다. 측정 계층 몫(59%)의 최적화는 시스템 팀과의 합의 안건으로 올린다(아래 "남은 불확실성"). 시뮬레이터 쪽은 이번에 바꾸지 않는다 |
-| U4 | **C-A.** `source_commit` = 저장소 HEAD 커밋 또는 `null` + `null_reason.source_commit = PRECONDITION_MISSING`. `simulator_version` 필드를 더한다(읽는 쪽은 모르는 키를 무시한다 — `exchange.read_exchange`) |
+| U4 | **C-A.** `source_commit` = `src/simulator` 를 마지막으로 바꾼 커밋(`git log -1 --format=%H -- src/simulator`, 계약의 `simulator_commit` 규칙) 또는 `null` + `null_reason.source_commit = PRECONDITION_MISSING`. 저장소 HEAD 가 아니다 — 문서만 바꾼 커밋에도 값이 바뀌면 FREEZE-003 대조가 거짓 불일치를 낸다(#167 리뷰, 첫 구현은 HEAD 였다). `simulator_version` 필드를 더한다(읽는 쪽은 모르는 키를 무시한다 — `exchange.read_exchange`) |
 | U5 | 가드레일 금액 평균을 `_bp` 와 같은 반올림(`_round_div`, 0.5 는 +∞ 쪽)으로. `_bp` 값은 정수 입력에서 이전과 같다(테스트로 대조). 참고값 이름을 `negative_response_customer_bp_reference` 로 — Negative 는 처치와 무관한 고객 단위 성향이라 T1 로 물은 값이 곧 고객 비율이다 |
 
 **근거:** 형식 어긋남의 뿌리는 정본 문서에 형식이 없었다는 것이다. 형식을 적고 실제 파일로 채점기를 시험해 다시 어긋나지 않게 한다. 재배정 · 성능 · 커밋은 각각 공개 API · 측정 계약 · 공유 계약을 건드리지 않는 안을 골랐다. 그 셋은 GATE 1 직전에 한 팀이 단독으로 바꿀 것이 아니다.
@@ -94,7 +94,8 @@
 - 채점기가 실제 참 효과 파일에서 `InputError` 를 내거나 `tau_mismatch` 가 0 이 아니면 U1 이 깨진 것이다 — `tests/test_simulator_ground_truth.py` 가 시뮬레이터가 쓴 파일로 확인한다.
 - 창 안 재배정인데 `supersedes` 가 `null` 이거나, 창 밖(`advance(42)` 뒤 · 앞 배정 `T0`)인데 값이 있으면 U2 가 깨진 것이다(같은 테스트).
 - 이미 드러났다: #243(sim-0.6)에서 20K × 600일이 **10.2분**으로 10분을 넘는다. 그래서 U3 의 측정 계층 안건은 "나중에"가 아니라 **스프린트 3 계획(10/29)에 올린다**. 그때도 합의가 안 되면 10분 목표 자체(출처가 PR #160 본문뿐이다)를 리드가 다시 정한다.
-- 커밋을 얻을 수 있는 체크아웃에서 `source_commit` 이 `null` 이면 U4 구현 결함이다.
+- 같은 체크아웃의 `git log -1 --format=%H -- src/simulator` 와 `source_commit` 이 다르면 U4 구현 결함이다 — 테스트가 직접 대조하고, git 이 없을 때의 `null` + 사유도 확인한다.
+- 다른 world 나 같은 스냅샷의 형제 분기 파일이 같은 숨김 영역에 있을 때 그 파일의 행이 `superseded_rows` 에 잡히면 U2 가 깨진 것이다(리뷰 재현 두 상황을 테스트로 고정).
 
 ## 민감도
 

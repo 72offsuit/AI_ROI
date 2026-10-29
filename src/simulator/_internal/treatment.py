@@ -38,14 +38,23 @@ def response_type(seed: int, customer_id: str, traits: dict[str, int], tid: str,
     return NEUTRAL
 
 
-def _active(window, customer: dict[str, object], at_ms: int) -> str | None:
+def active_assignment(customer: dict[str, object], at_ms: int, p: params.Params) -> tuple[int, str] | None:
+    """`at_ms` 에 효과가 살아 있는 배정 `(배정 시각, 처치)` — 마지막 배정이 비-`T0` 이고 효과 창 안일 때만.
+
+    효과 창의 유일한 판정이다. 엔진(`effect`)과 창 안 재배정 표시(`api.apply_treatment` 의 `supersedes`)가 함께 쓴다.
+    """
     assignments = customer["assignments"]
     if not assignments:
         return None
     assigned_at, tid = assignments[-1]
-    if tid == "T0" or not assigned_at <= at_ms < assigned_at + window.params.window_days * clock.DAY_MS:
+    if tid == "T0" or not assigned_at <= at_ms < assigned_at + p.window_days * clock.DAY_MS:
         return None
-    return tid
+    return assigned_at, tid
+
+
+def _active(window, customer: dict[str, object], at_ms: int) -> str | None:
+    found = active_assignment(customer, at_ms, window.params)
+    return None if found is None else found[1]
 
 
 def effect(window, customer: dict[str, object], at_ms: int) -> tuple[params.Arm | None, str | None]:

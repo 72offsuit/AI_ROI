@@ -30,7 +30,8 @@ ARMS = treatment.ARMS
 
 
 def _round_div(numerator: int, denominator: int) -> int:
-    """정수 나눗셈 반올림(0.5 는 +∞ 쪽). 부호와 무관하게 같은 규칙이라 음수 평균도 한쪽으로 치우치지 않는다."""
+    """정수 나눗셈 반올림(0.5 는 +∞ 쪽). `denominator > 0` 전제 — 분자의 부호와 무관하게 같은 규칙이라 음수 평균도
+    한쪽으로 치우치지 않는다(호출처의 분모는 모두 고객 수다)."""
     return (2 * numerator + denominator) // (2 * denominator)
 
 

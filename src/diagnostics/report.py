@@ -289,18 +289,19 @@ def build_report(ground_truth: Path, results: Path, guard_result: Mapping[str, A
 def _with_superseded(blocks: list[dict[str, Any]], files: list[Path]) -> list[dict[str, Any]]:
     """효과 창 안에서 다시 배정돼 관측이 끊긴 행 수를 파일마다 싣는다(#167).
 
-    나중 파일의 ``supersedes`` 가 앞선 배정(고객 · 시각)을 가리킨다. 그 행의 참 효과는 "더 배정하지
-    않았을 때" 의 값이다. 채점에서 뺄지는 DR-S8 이 정한다 — 여기서는 세기만 한다.
+    나중 파일의 ``supersedes.file`` 이 끊긴 배정의 파일 이름(확장자 없이)을, 그 행의 고객이 끊긴 고객을 가리킨다.
+    고객 ID 와 배정 시각은 world · 스냅샷 분기 사이에서 겹치므로 파일 이름까지 맞아야 센다(#167 리뷰). 그 행의
+    참 효과는 "더 배정하지 않았을 때" 의 값이다. 채점에서 뺄지는 DR-S8 이 정한다 — 여기서는 세기만 한다.
     """
     cut: set[tuple[str, str]] = set()
     for path in files:
         for row in _read_jsonl(path):
             prior = row.get("supersedes")
-            if isinstance(prior, Mapping):
-                cut.add((str(row.get(GT_KEYS["customer_id"])), str(prior.get("at"))))
+            if isinstance(prior, Mapping) and prior.get("file"):
+                cut.add((str(prior["file"]), str(row.get(GT_KEYS["customer_id"]))))
     for block, path in zip(blocks, files):
         block["superseded_rows"] = sum(
-            1 for row in _read_jsonl(path) if (str(row.get(GT_KEYS["customer_id"])), str(row.get("at"))) in cut
+            1 for row in _read_jsonl(path) if (path.stem, str(row.get(GT_KEYS["customer_id"]))) in cut
         )
     return blocks
 
