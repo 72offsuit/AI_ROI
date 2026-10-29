@@ -34,6 +34,7 @@ PRD NFR-04 는 `Python >= 3.10` 이고 SRS SYS-003 · 머리말(`Target Runtime:
 | endoflife.date API `python.json` (2026-10-23 조회) | 3.10 지원 종료 **2026-10-01**, 3.12 지원 종료 2028-10-31 | 3.10 은 이미 보안 수정도 끝난 판이다. 끝난 판에서 돌게 하려고 1년 반 된 라이브러리로 내리는 것(B)은 맞지 않는 거래다 |
 | PRD NFR-04 · SRS SYS-003 원문(`Plan/`) | `Python >= 3.10` 한 줄뿐이다. "모든 판 지원" 인지 "하한" 인지 더 적혀 있지 않다 | **해석의 근거를 찾지 못했다.** 문구 그대로 하한으로 읽으면 3.12 로 충족된다. D 처럼 읽을 근거도 없다 |
 | `python:3.10-slim` 컨테이너에서 의존성 없는 스위트 (2026-10-23 실행) | `Ran 1263 tests` · `OK (skipped=349)`. skip 은 대부분 의존성 미설치 사유 | 측정 계층이 3.10 에서 돈다는 사실은 `python-compat.yml` 과 같은 조건으로 확인됐다 |
+| 합성 빌드 컨텍스트 `FROM scratch` · `COPY . /` → `docker build -o type=local` (Docker 29.6.1, 2026-10-29 — PR #240 리뷰 R1) | 가짜 `_state/audit-log.jsonl.audit-key` · `.lock` 을 둔 컨텍스트에서 수정 전 `.dockerignore` 는 둘을 그대로 복사했다. 수정 후에는 둘이 빠지고 커밋되는 `_state` 파일(`audit-log.jsonl` · `wave-log.md`)은 남았다. `Plan/` 은 둘 다 빠졌다 | `.gitignore` 는 커밋만 막는다 — 키가 있는 개발 체크아웃에서 `docker build` 하면 `COPY . .` 가 감사 로그 서명 키를 이미지에 굽는다. 실제 키는 읽지 않았고 키가 든 이미지도 만들지 않았다 |
 | `requirements.txt` 머리 주석 · `.github/workflows/tests-with-deps.yml` | 고정 버전은 3.12 에서 해석했고 CI 전체 테스트 잡 2종은 3.12 다 | 스프린트 1 결과(모델 수치)는 이 고정 버전 + 3.12 에서 나왔다 |
 
 ## 결정
@@ -46,8 +47,10 @@ PRD NFR-04 는 `Python >= 3.10` 이고 SRS SYS-003 · 머리말(`Target Runtime:
 ```
 
 - Dockerfile 은 `python:3.12.15-slim-trixie`(다이제스트 고정)다.
+  - 빌드 컨텍스트에서 `.agent-team/_state/*.audit-key` · `*.lock` 을 뺀다 — `.gitignore` 와 같은 줄(PR #240 리뷰 R1). `.agent-team` 전체는 빼지 않는다: 이미지에 함께 들어가는 `tests/` 중 4개(`test_publish_contract` · `test_publish_pipeline` · `test_contract_enforcement` · `test_schema`)가 `.agent-team/04-architecture/` 의 스키마 · 예시를 읽는다. 런타임(대시보드 · 파이프라인 명령)은 쓰지 않는다. `tests/test_docker_context.py` 가 `.gitignore` 의 `_state` 줄이 `.dockerignore` 에 있는지 대조한다(Docker 매칭 자체는 위 합성 빌드로 1회 확인).
 - README · TEAM_SETUP · AGENTS.md 에 "전체는 3.12, 3.10 은 측정 계층까지" 를 적는다.
 - `tests/test_runtime_declaration.py` 가 두 줄을 Dockerfile · CI 3종 · 설치된 패키지의 `Requires-Python` 과 대조한다. 선언 런타임이 "실제로 필요한 최소 판" 인지도 본다. 고정 의존성이 더 낮은 판을 허용하게 바뀌면 선언의 근거가 사라졌다고 실패한다.
+  - `Requires-Python` 은 Dockerfile 의 **정확한 판**(3.12.15)으로 판정한다(PR #240 리뷰 R2). major.minor 하한 · 상한만 보던 이전 판정은 `>=3.12,!=3.12.*` · `~=3.10.0` · `>=3.12.16` 을 통과시켰다. 이제 절마다 PEP 440 의 정식 판 비교(크기 비교 4종 · `==` · `!=` · 와일드카드 `.*` · `~=`)로 보고, 하한은 실제로 만족하는 가장 낮은 판으로 찾는다(`>3.11` → 3.11). 그 밖의 절(`===` · 사전 배포판 · 환경 표지 등)은 **통과가 아니라 실패**다. 표준 파서(`packaging`)는 개발 의존성을 하나 늘리므로 택하지 않았다 — 지금 고정 9종의 조건은 전부 `>=X.Y` 다.
 
 **근거:** NFR-04 는 문구상 하한이고 3.12 는 그 하한을 넘는다. 3.12 를 요구하는 것은 의사결정 계층 의존성 셋(조사 1행)뿐이다. 그 셋을 내리는 비용(조사 2행 — 메이저 하향과 결과 재생성)이 이미 지원이 끝난 판(조사 3행)을 지원하는 이득보다 크다. 3.10 잡을 유지하는 이유는 측정 계층 코드가 3.10 문법·표준 라이브러리로 깨지는 것(`#62` 의 `fromisoformat` 같은 것)을 계속 잡기 위해서다. 그 보증 범위를 이제 이름으로 적는다.
 

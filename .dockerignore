@@ -4,6 +4,13 @@
 #   같은 이미지를 만들게 한다. 대시보드 토큰은 커밋된 tokens.generated.css 를 쓴다.
 Plan
 
+# ★ 비밀값 · 실행 부산물 — .gitignore 와 같은 줄(#240 리뷰 R1). docker build 는 로컬 작업 폴더를
+#   그대로 컨텍스트로 쓴다. .gitignore 는 커밋만 막고 이미지는 막지 않는다 — 키가 있는 개발
+#   체크아웃에서 빌드하면 `COPY . .` 가 감사 로그 서명 키(32바이트 대칭키)를 이미지에 굽는다.
+#   tests/test_docker_context.py 가 .gitignore 의 .agent-team/_state 줄이 여기 있는지 대조한다.
+.agent-team/_state/*.audit-key
+.agent-team/_state/*.lock
+
 # git 메타데이터 · 로컬 도구
 .git
 .claude

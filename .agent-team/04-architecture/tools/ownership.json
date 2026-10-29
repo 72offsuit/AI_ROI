@@ -404,7 +404,12 @@
     {
       "pattern": ".dockerignore",
       "owner": "phillip",
-      "why": "빌드 컨텍스트 제외 (#207). ★ Plan/ 을 빼 private 기획 문서를 이미지에 굽지 않는다"
+      "why": "빌드 컨텍스트 제외 (#207). ★ Plan/ 을 빼 private 기획 문서를 이미지에 굽지 않는다 · 감사 로그 서명 키를 이미지에 굽지 않는다(PR #240 R1)"
+    },
+    {
+      "pattern": "tests/test_docker_context.py",
+      "owner": "phillip",
+      "why": ".gitignore 의 _state 비밀값 줄 ↔ .dockerignore 대조 (PR #240 리뷰 R1). .dockerignore 와 같은 소유"
     },
     {
       "pattern": "tests/test_runtime_declaration.py",
