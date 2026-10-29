@@ -8,6 +8,10 @@
 
 ## 5분 안에 돌려 보기
 
+> **Python 3.12** 가 전체 파이프라인의 지원 런타임이다. 고정 의존성(numpy 2.5.4 · scipy 1.18.1 · shap 0.54.1)이
+> 3.12 이상에서만 설치된다. 3.10 은 **측정 계층 하한**이다 — 아래 ①(의존성 0)과 측정 계층은 3.10 에서도 돌지만
+> `pip install -r requirements.txt` 는 3.12 부터 된다. 근거 `docs/decisions/DR-207-python-runtime.md` (PRD NFR-04 `>= 3.10` 은 3.12 로 충족).
+
 ```bash
 git clone https://github.com/72offsuit/AI_ROI.git
 cd AI_ROI
@@ -58,12 +62,25 @@ python src/main.py --help                                            # 모드별
 ```bash
 cd dashboard
 npm install
-npm run dev            # http://127.0.0.1:3001
+npm run dev            # http://127.0.0.1:3001  (AIROI_DASHBOARD_HOST 로 바인딩 주소를 바꾼다)
 ```
 
 `results/` 의 게시물을 **읽기만** 한다. 계산하지 않는다.
 
-> `npm run tokens:generate` 가 `Plan/DESIGN.md` 를 읽으므로 **`Plan/` 접근 권한이 필요하다.** 없으면 대시보드는 건너뛰고 측정 계층만으로 진행한다 — 나머지 전부가 그것 없이 돈다.
+> **`Plan/` 없이도 빌드된다** (#207). 디자인 토큰 CSS(`dashboard/src/styles/tokens.generated.css`)를 커밋해 두었고,
+> `Plan/DESIGN.md` 가 있으면 `npm run dev`·`build` 가 그것과 대조한다. 없으면 `tokens:check 미실행` 을 출력하고 커밋본을 쓴다 —
+> **대조하지 않았다는 뜻이다.** 토큰을 다시 생성(`npm run tokens:generate`)하려면 `Plan/` 접근 권한이 필요하다.
+
+### Docker (초안 — 빌드까지)
+
+```bash
+docker build -t airoi .                                  # 서브모듈 없는 클론에서 된다 — Plan/ 은 이미지에 넣지 않는다
+docker run --rm -p 3001:3001 airoi                       # 대시보드 → http://localhost:3001
+docker run --rm airoi python -m src.measurement.publish  # 파이프라인 명령 예
+docker build --build-arg WITH_TORCH=1 -t airoi .         # 선택: CPU torch(requirements-ml.txt)
+```
+
+Python 3.12 + Node 22 이미지 하나다. `docker-compose`(파이프라인 → `results/` 볼륨 → 대시보드)는 **아직 없다** — 다음 스프린트(#231).
 
 ---
 
@@ -155,7 +172,7 @@ python3 -m unittest discover -s tests
 
 > ★ **PyYAML 이 없으면 봉인 해시 대조가 `not_run` 이 된다.** 그것은 통과가 아니라 *"대조하지 않았다"* 다. 무의존 실행만 보고 초록이라고 판단하지 않는다 — 실제로 봉인 변조를 잡은 것은 의존성 있는 잡뿐이었다.
 
-CI 4종이 PR 마다 돈다: 격리 경계 · 의존성 설치 후 전건 · **Python 3.10**(SRS 가 선언한 최소 버전) · 대시보드 경로 격리.
+CI 4종이 PR 마다 돈다: 격리 경계 · 의존성 설치 후 전건(3.12) · **Python 3.10**(SRS 가 선언한 최소 버전 — 의존성 없이, 측정 계층까지) · 대시보드 경로 격리.
 
 `npm run tokens:test` 는 **CI 에 없다** — `Plan/` 이 private 이라 체크아웃되지 않는다. **사람이 돌려야 하는 검사다.**
 

@@ -91,6 +91,7 @@ python3 -m unittest tests.test_isolation -v
 
 - 스택은 Python으로 확정. 의존성 매니페스트는 `requirements.txt`(`pyarrow`·`PyYAML`)와 `requirements-dev.txt`(`jsonschema`·`referencing`) 2종이며, **버전은 CI와 같은 3.12에서 해석해 고정했다.**
   - SRS NFR-004의 `>= 3.10` 선언에 **코드를 맞췄다** (이슈 `#62`, 결정 B). `datetime.fromisoformat()`의 `Z` 접미사가 3.11부터 지원되므로(bpo-35829) `src/measurement/timeparse.py`가 파싱 전에 `Z` → `+00:00`으로 정규화한다. **`datetime.fromisoformat`을 직접 부르지 않는다** — `tests/test_timeparse.py`가 AST로 강제하고, `python-compat.yml`이 3.10에서 실제로 돌려 확인한다.
+  - ★ **지원 런타임은 둘로 선언한다** (이슈 `#207`) — **전체 파이프라인 3.12** · **측정 계층 하한 3.10**. 고정 의존성 numpy 2.5.4 · scipy 1.18.1 · shap 0.54.1 이 `Requires-Python >=3.12` 라 3.10·3.11 에서는 `pip install -r requirements.txt` 가 실패한다. NFR-04 `>= 3.10` 은 3.12 로 충족한다. 선언은 `requirements.txt` 머리 두 줄이고 `tests/test_runtime_declaration.py` 가 Dockerfile · CI · 설치된 메타데이터와 대조한다. 근거: `docs/decisions/DR-207-python-runtime.md`.
 - `src/measurement/`는 구현 완료(M-01~M-09). `src/simulator/`·`decision/`·`diagnostics/`·`orchestration/`은 **여전히 지침 파일만 있고 `.py` 가 0개다.** 그것이 C2 가 채울 자리다.
   - 여기에도 **모듈 개수를 적지 않는다.** 이전 판은 `모듈 10개` 라고 적었고 `timeparse.py`·`coverage.py` 가 들어오며 낡았다 — 테스트 건수와 같은 종류의 낡음이다 (`#59`). `ls src/measurement/*.py` 가 답한다.
 - **C2 에서 추가된 것** (이슈 `#63`·`#97`·`#99`·`#101`·`#100`·`#106`·`#108`·`#110`·`#116`·`#117`):
@@ -104,8 +105,9 @@ python3 -m unittest tests.test_isolation -v
   - `treatment_cost.*.occurs_at` 은 **`EventType` 어휘**다. 로딩 시 실재 여부를 거부하고, `tests/test_treatment_accrual.py` 가 `economics.py` 의 실제 계상 근거와 대조한다.
 - `dashboard/`(Next.js, `:3001`)에 **라우트 8종**이 구현됨(d-01·d-02) — 게시물 연동 6(`V1`~`V6`) + 정적 1(`/triggers`, C1 작동 0종) + 개요 1(`/`). `results/`의 게시물을 **읽기만** 한다(`DB-012`·`DB-013`·`DB-014`).
 - GATE 1은 **부분 봉인(`PARTIAL_FREEZE`)** 상태다. 완전 봉인(`LOCKED`)은 **0종**.
-- CI는 **4종**이다 — `isolation.yml`(의존성 없이, 3.12) · `tests-with-deps.yml`(의존성 설치 후, 3.12) · `python-compat.yml`(**3.10**, 의존성 없이 — SRS 가 선언한 최소 버전을 실제로 도는 유일한 잡) · `dashboard.yml`(경로 격리 · 상태 매핑).
+- CI는 **4종**이다 — `isolation.yml`(의존성 없이, 3.12) · `tests-with-deps.yml`(의존성 설치 후, 3.12) · `python-compat.yml`(**3.10**, 의존성 없이 — SRS 가 선언한 최소 버전을 실제로 도는 유일한 잡. **측정 계층과 의존성 없는 스위트만 보증한다**) · `dashboard.yml`(경로 격리 · 상태 매핑).
   - ★ **`tokens:test`는 CI에 없다.** `scripts/tokens/verify.mjs`가 `Plan/DESIGN.md`를 읽는데 `Plan`은 private 서브모듈이라 CI가 체크아웃하지 않는다. **사람이 돌려야 하는 검사다** — 대시보드 검증 3종 중 2종만 자동이다.
+  - 대시보드 **빌드**는 Plan 없이 된다 (`#207`). `dashboard/src/styles/tokens.generated.css` 를 **커밋**하고("생성물을 커밋하지 않는다"의 문서화된 예외), `predev`·`prebuild` 는 Plan 이 있을 때만 `tokens:check` 로 대조한다 — 없으면 `tokens:check 미실행` 을 출력한다. 커밋본 ↔ 정본 대조도 `tokens:test` 처럼 **CI 에 없다.** 근거: `docs/decisions/DR-207-plan-free-tokens.md`.
 - **결정 기록 제도가 있다** — `docs/DECISION_RECORDS.md`. 이슈는 태스크 목록이 아니라 *무엇을 정하고·무엇을 조사하고·무엇을 증거로 남길지*의 안내서이며, **체크박스를 다 채워도 결정 기록이 없으면 그 태스크는 끝난 것이 아니다.** 강제는 `tests/test_decision_records.py`.
 - 저장소 전체 검증은 `python3 -m unittest discover -s tests` 이며 lint·build·타입 검사는 여전히 미정의.
   - 여기에 **건수를 적지 않는다.** 이전 판은 `407건` 이라고 적었고 테스트를 추가한 바로 다음 커밋에 낡았다 — 아무도 대조하지 않는 숫자를 문서에 두는 것이 이슈 `#59` 가 닫은 결함의 모양이다. 건수는 명령을 실행하면 나온다.

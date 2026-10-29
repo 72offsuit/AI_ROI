@@ -1,6 +1,7 @@
 # 저장소 루트 .gitignore 가 이미 덮는 것 — 여기서 중복 정의하지 않는다:
-#   dashboard/node_modules/ · dashboard/.next/ · dashboard/src/styles/tokens.generated.css
+#   dashboard/node_modules/ · dashboard/.next/
 # (루트 .gitignore 는 Phillip 소유다. 같은 규칙을 두 곳에 두면 한쪽만 고치는 사고가 난다.)
+# ★ src/styles/tokens.generated.css 는 ignore 하지 않는다 — 커밋하는 생성물이다 (#207).
 #
 # 아래는 루트가 덮지 않는 것만 적는다.
 
