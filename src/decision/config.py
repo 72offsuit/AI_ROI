@@ -185,7 +185,6 @@ EXPERIMENT_SCHEMA: Mapping[str, Any] = {
     },
     "rct": {
         "control_share": _PROBABILITY,
-        "active_days": _int(1),
     },
     "ab_test": {
         "alpha": _PROBABILITY,
@@ -302,7 +301,6 @@ class HoldoutConfig:
 @dataclass(frozen=True)
 class RctConfig:
     control_share: float
-    active_days: int
 
 
 @dataclass(frozen=True)

@@ -24,11 +24,11 @@ holdout:
   # Final Holdout(GATE 4) seed 는 아직 없다 — 모델 저장(#184 잔여)과 함께 정한다. 두 seed 는 달라야 한다.
   development_seed: 42
 
-# 탐색 RCT — t1 에 활동 고객을 T0~T4 로 무작위 배정한다.
+# 탐색 RCT — t1 의 Eligible 고객을 T0~T4 로 무작위 배정한다.
+# 모집단은 설정값이 아니라 정본 정의다 — data_spec §4.1 Eligible(#194 · #164 공유), run_sprint.ELIGIBLE_*.
+# 예전의 active_days(t1 직전 90일 활동 고객)는 #234 에서 없앴다 — docs/decisions/DR-234-population-experiment-scale.md.
 rct:
   control_share: 0.5     # T0 비율. 나머지를 T1~T4 에 균등(각 12.5%)
-  # 모집단 = t1 직전 이 일수 안에 이벤트 1건 이상. S1 규칙의 상한(90일)과 같은 근거(data_spec §12.1)
-  active_days: 90
 
 # 가상 A/B 분석 (SRS AB-001~005 · CFG-003 ab_test).
 ab_test:

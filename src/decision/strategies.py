@@ -303,28 +303,53 @@ def plan(strategy_id: str, scores: Mapping[str, Any], budget_krw: int | None,
     """전략 ID → ``{customer_id: "T1".."T4"}``. 미배정(T0) 고객은 넣지 않는다.
 
     scores 키: ``churn_p``(Series) · ``cate``(DataFrame T1~T4) · ``clv``(Series|None) ·
-    ``days_since_last_purchase``(Series) · 선택 ``lifetime_order_count`` · ``eligible`` ·
-    ``margin_rate``. 필요한 점수(``REQUIRED_SCORES``)가 없으면 ``NotComputable`` — 빈 배정으로
+    ``days_since_last_purchase``(Series) · ``eligible``(Series, S1~S5 필수) · 선택
+    ``lifetime_order_count`` · ``margin_rate``. 필요한 점수(``REQUIRED_SCORES``)가 없으면 ``NotComputable`` — 빈 배정으로
     대신하지 않는다. ``costs`` 는 처치별 고객당 단가 dict(``T0`` 키가 있어도 된다).
     S2~S5 는 ``budget_krw`` 가 None 이면 ValueError(호출 오류 — 모든 AI 전략 ≤ C_rule).
+
+    ★ S1~S5 는 **``eligible`` 이 참인 고객 안에서만** 고른다(data_spec §4.1 · #194 · DR-234). 전략마다
+      고를 수 있는 고객이 다르면 S1 대비 증분이 "더 잘 골랐다" 가 아니라 "더 넓은 곳에서 골랐다" 가
+      된다. 거르기는 플래너보다 **먼저** 한다 — 고른 뒤에 빼면 예산을 부적격 고객에게 쓰고 남긴다.
     """
     if strategy_id not in _PLANNERS:
         raise KeyError(f"알 수 없는 전략: {strategy_id!r} (S0~S5)")
     missing = [k for k in REQUIRED_SCORES[strategy_id] if scores.get(k) is None]
     if missing:
         raise NotComputable(f"{strategy_id} 에 필요한 점수가 없다: {missing}")
+    if "eligible" in REQUIRED_SCORES[strategy_id]:
+        scores = within_eligible(scores)
     return _PLANNERS[strategy_id](scores, budget_krw, costs)
 
 
+def within_eligible(scores: Mapping[str, Any]) -> dict[str, Any]:
+    """고객별 점수를 ``eligible`` 이 참인 고객으로 좁힌 사본. 결손 플래그는 거짓으로 본다(판정할 수 없다).
+
+    Series · DataFrame 은 인덱스로, dict 는 키로 거른다. 스칼라(``margin_rate``)는 그대로 둔다.
+    """
+    flags = _as_mapping(scores["eligible"])
+    keep = {cid for cid, flag in flags.items() if not _missing(flag) and bool(flag)}
+    out: dict[str, Any] = {}
+    for key, value in scores.items():
+        if hasattr(value, "index") and hasattr(value, "loc"):
+            out[key] = value.loc[[str(cid) in keep for cid in value.index]]
+        elif isinstance(value, Mapping):
+            out[key] = {cid: v for cid, v in value.items() if str(cid) in keep}
+        else:
+            out[key] = value
+    return out
+
+
 #: 전략별 필수 점수. 없으면 ``plan`` 이 ``NotComputable`` 을 던진다(빈 배정으로 대신하지 않는다).
-#: S1 의 ``lifetime_order_count`` · ``eligible`` 은 선택 — 없으면 그 조건이 not_run(``s1_eligibility``).
+#: S1~S5 는 ``eligible`` 이 필수다 — 그 안에서만 고른다(DR-234). 없으면 전략이 not_run 이다.
+#: S1 의 ``lifetime_order_count`` 는 선택 — 없으면 그 조건이 not_run(``s1_eligibility``).
 REQUIRED_SCORES: dict[str, tuple[str, ...]] = {
     "S0": (),
-    "S1": ("days_since_last_purchase",),
-    "S2": ("churn_p",),
-    "S3": ("churn_p", "cate"),
-    "S4": ("cate", "clv"),
-    "S5": ("cate", "clv"),
+    "S1": ("days_since_last_purchase", "eligible"),
+    "S2": ("churn_p", "eligible"),
+    "S3": ("churn_p", "cate", "eligible"),
+    "S4": ("cate", "clv", "eligible"),
+    "S5": ("cate", "clv", "eligible"),
 }
 
 

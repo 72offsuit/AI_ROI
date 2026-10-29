@@ -44,7 +44,8 @@ if _DEPS:
         def predict_clv(self, model, X):
             return (X["n_carts"] * 1_000_000.0).rename("clv")
 
-SMALL = ["--seed", "7", "--customers", "240", "--profile", "smoke", "--warmup-days", "45"]
+# warmup 60일 — RCT 모집단이 Eligible(가입 ≥ 60일)이라 45일이면 0명이다(test_orchestration_sprint.SMALL · DR-234).
+SMALL = ["--seed", "7", "--customers", "240", "--profile", "smoke", "--warmup-days", "60"]
 BUDGET = 100_000
 STDLIB_TOP = {"__future__", "argparse", "hashlib", "importlib", "json", "math", "shutil", "sys", "textwrap",
               "time", "dataclasses", "datetime", "pathlib", "typing"}
