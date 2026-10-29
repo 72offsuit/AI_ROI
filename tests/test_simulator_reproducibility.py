@@ -48,18 +48,20 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "d0cbfc345a5efa2707e1de03593e1c4359336da752ded1c46ebb91e38bcfe255",
         1160,
     ),
-    # #183(sim-gen-v4): 구매 의향·이탈 onset·쿠폰 받기 보정으로 14일 창의 이벤트가 바뀐다. 반복 노출 감쇠·게이트 탈락
-    # 회복 분리는 이 창에서 발화하지 않는다(각각 tests/test_simulator_fatigue.py · test_simulator_gate_recovery.py).
+    # #183(sim-gen-v4): 구매 의향 보정으로 이 14일 창의 이벤트가 sim-0.5 와 달라진다. 이탈 onset·쿠폰 받기는 이 창의 이벤트를
+    # 바꾸지 않고 상태에 든 config 다이제스트(상태 sha)로만 드러난다 — onset 은 GATE_GOLDEN(test_simulator_behavior.py)이,
+    # 쿠폰 받기는 CONFIG_PINS 가 고정한다. 반복 노출 감쇠·게이트 탈락 회복 분리는 이 창에서 발화하지 않는다(각각
+    # tests/test_simulator_fatigue.py · test_simulator_gate_recovery.py).
     "sim-0.6": (
         "6d96c7def2a4818963165c1f20d3e8ebbc44b7e0003d1316f69871d93d24f6ed",
-        "e77089a96146e1f5b13674ee1a31b1aaccba229327c52372a1ea36ee6fde513b",
+        "65e275c9ae40f5bbe23a3149e04ea74a41e89876bb09193d7aab07136149ce3f",
         1213,
     ),
     # #196(sim-gen-v5): Sleeping Dog 직접 경로는 처치 노출 때만 발화한다. 이 14일 창에는 처치가 없어 판 라벨과
     # 생성 다이제스트(상태)만 다르다. 경로 자체는 tests/test_simulator_sleeping_dog.py 가 고정한다.
     "sim-0.7": (
         "b8199d8a01c7c5bd1b47a93a1b77808d2cd5c3631f08f3a7d155690c0940fe15",
-        "62851a3d4f2c7ee7a7d31cd03eb894a80ce5c6409699e92446a279b8a21621b7",
+        "27e4c11d8b7885275c9c24fa1b106e472f3809f939cab9e5fd4c858896a87f13",
         1213,
     ),
 }

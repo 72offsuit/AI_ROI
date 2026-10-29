@@ -9,12 +9,12 @@
 > | **코드** | `src/simulator/_internal/{genconfig,traits,fixedpoint,persona,world}.py` |
 > | **설명**(이 문서) | 위 셋을 한 흐름으로 묶는다. 숫자를 새로 정하지 않는다 |
 >
-> 현재 생성 config: `sim-gen-v5` · 생성 부분 다이제스트 `4b62208fc336e3290d3e225e093447a13e11a6983fcae5da1d658fdaf7441f79` · `SIMULATOR_VERSION` `sim-0.7`
+> 현재 생성 config: `sim-gen-v5` · 생성 부분 다이제스트 `28e8e6f2a4145afaefbc8b327f94d50c941fba8411fd2120df74a921ec680411` · `SIMULATOR_VERSION` `sim-0.7`
 > (S3 #77: P6 `signup_day_range` 추가 — `docs/decisions/DR-S3-p6-signup.md`. 페르소나·Trait 값은 `sim-gen-v1` 과 같다)
 > (#183: 관측 중 가입 고객의 첫 구매 뒤 재구매 게이트로 `sim-0.5` — `docs/decisions/DR-183-purchase-calibration.md`. 생성 config·Trait 값은 그대로다)
 > (S4~S6 #143: `behavior`·`catalog` 블록 추가 — Trait 이 행동·이탈·처치 반응을 구동한다. `docs/decisions/DR-143-sim-sprint.md`. 페르소나·Trait 값은 그대로다)
 > (#183 `sim-gen-v4`·`sim-0.6`: `behavior` 의 구매 의향·이탈 onset·쿠폰 받기 보정, 반복 노출 감쇠(`treatment.repeat_exposure`), 게이트 탈락 이탈의 회복 배율(`churn.gate_recovery_scale_pct`) — `docs/decisions/DR-183-purchase-calibration.md` · `DR-183-repeat-exposure.md`. 상태 형식 `sim-state-v4`. 페르소나·Trait 값은 그대로다)
-> (#196 `sim-gen-v5`·`sim-0.7`: Sleeping Dog 직접 경로 — Negative 고객은 노출 순간 이탈 진행에 들어간다(`treatment.negative_effect.onset_at_exposure_pct`), Negative 비율 배율 40 → 70, 반복 노출 상한 60 → 90 — `docs/decisions/DR-196-sleeping-dog-path.md`. 상태 형식·페르소나·Trait 값은 그대로다)
+> (#196 `sim-gen-v5`·`sim-0.7`: Sleeping Dog 직접 경로 — Negative 고객은 노출 순간 이탈 진행에 들어간다(`treatment.negative_effect.onset_at_exposure_pct`), Negative 비율 배율 40 → 100, 반복 노출 상한 60 → 100 — `docs/decisions/DR-196-sleeping-dog-path.md`. 상태 형식·페르소나·Trait 값은 그대로다)
 
 ---
 
@@ -341,7 +341,7 @@ world_id      = "W-" + sha256(["sim-world-v2", seed, n, profile, start_ms, confi
 1. **GATE 1 전.** 구성비·모수를 바꿀 수 있다. 근거는 **가드레일(생성 이탈률 15~25%, ATE 3~6%p, 쿠폰 사용률 5~20% — 분모: 쿠폰 처치군(T2·T3) 전체 중 유효기간 안 사용(2026-10-22 교정, `docs/research/data_grounding.md` §3-1), Sleeping Dog 8~15%)과 외부 자료뿐**이다.
    1. 해당 DR 을 번복하거나 새 DR 을 쓴다(`docs/DECISION_RECORDS.md`).
    2. `config/simulator_config.yaml` 을 고치고 `config_version` 을 올린다.
-   3. `tests/test_simulator_persona.py` 의 `CONFIG_PINS` 에 새 다이제스트를 **줄로 더한다. 기존 줄의 값은 고치지 않는다** — 같은 판 이름의 해시를 바꿔 쓰면 테스트가 통과해 버린다. 리뷰에서 `CONFIG_PINS` 기존 줄 diff 가 0 인지 확인한다.
+   3. `tests/test_simulator_persona.py` 의 `CONFIG_PINS` 에 새 다이제스트를 **줄로 더한다. 기존 줄의 값은 고치지 않는다** — 같은 판 이름의 해시를 바꿔 쓰면 테스트가 통과해 버린다. 리뷰에서 `CONFIG_PINS` 기존 줄 diff 가 0 인지 확인한다. 예외는 main 에 한 번도 나가지 않은 판(같은 PR 안에서 다시 보정)뿐이고, 그때는 덮어쓴 사실·이전 다이제스트를 DR 에 남긴다(#183 `sim-gen-v4`, DR-183-purchase-calibration).
    4. 이 문서 4.1절 표를 config 에 맞춘다(테스트가 대조한다). 부록을 `python -m tests.test_simulator_trait_distribution report` 로 다시 만든다.
    5. 정확도 테스트(`tests/test_simulator_trait_distribution.py`)가 새 모양에서 통과하는지 본다. 로더의 검증 범위를 넓혀야 하면 정확도부터 확인한다. 관문 (b) 의 `RESOLUTION_CEILINGS` 는 `report` 로 다시 재서 고친다.
    6. 생성 골든(`GENERATION_GOLDEN`)과 상태 골든을 새로 고정한다. 옛 상태·계보는 거부된다 — 새로 생성한다.

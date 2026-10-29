@@ -65,7 +65,9 @@ export default defineConfig({
   },
   projects: [{ name: "chromium", use: { ...devices["Desktop Chrome"] } }],
   webServer: {
-    // `npm start` runs `next start --port 3001`; prebuild already generated the tokens.
+    // `npm start` runs `next start --port 3001 --hostname 127.0.0.1` via scripts/serve.mjs;
+    // prebuild already checked the committed tokens against Plan/DESIGN.md (or reported
+    // that it could not, when Plan/ is absent — #207).
     command: "npm run build && npm start",
     // /triggers renders without any artifact, so it is ready even for an empty fixture.
     url: `${baseURL}/triggers`,

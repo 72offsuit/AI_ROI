@@ -9,8 +9,8 @@ target 은 `build_outcomes(..., window_days=horizon_days)["revenue"]` — index 
 **이익(CLV)이 아니라 매출이다.** 원가·쿠폰 비용 반영은 측정 계층 경제 규칙(#101·#108)과
 합쳐야 하고 스프린트 범위 밖이다.
 
-평가: 5-Fold OOF 예측으로 MAE · RMSE · Spearman · 상위 20% 적중률(실제 상위 20% 중 예측
-상위 20% 에 든 비율). 미래 매출 결손(NaN)·기준선 입력 결손 고객은 평가에서 빼고 각각 그 수를 남긴다.
+평가: K-Fold OOF(``config/model_config.yaml`` clv.cv_folds, 기본 5) 예측으로 MAE · RMSE · Spearman ·
+상위 20% 적중률(실제 상위 20% 중 예측 상위 20% 에 든 비율). 회귀기 하이퍼파라미터도 그 파일에서 온다(#206). 미래 매출 결손(NaN)·기준선 입력 결손 고객은 평가에서 빼고 각각 그 수를 남긴다.
 """
 
 from __future__ import annotations
@@ -20,10 +20,13 @@ import math
 import numpy as np
 import pandas as pd
 
+from src.decision.config import load_model_config
 from src.decision.features.sprint_table import make_preprocessor, model_columns
 
 BASELINE_FEATURE = "monetary_90d"
 BASELINE_DAYS = 90
+#: config/model_config.yaml `clv` (#206) — fold 수 · 회귀기 하이퍼파라미터. 값은 그 파일 한 곳에만 있다.
+CONFIG = load_model_config().clv
 
 
 def fit_clv(X: pd.DataFrame, future_value, *, seed: int = 0):
@@ -35,8 +38,7 @@ def fit_clv(X: pd.DataFrame, future_value, *, seed: int = 0):
     if (y[keep] < 0).any():
         raise ValueError("미래 매출이 음수다 — poisson 손실 전제가 깨진다")
     model = make_pipeline(make_preprocessor(), HistGradientBoostingRegressor(
-        loss="poisson", learning_rate=0.05, max_iter=200, max_leaf_nodes=15,
-        l2_regularization=1.0, min_samples_leaf=20, early_stopping=False, random_state=seed))
+        **CONFIG.hist_gb, random_state=seed))
     features = model_columns(X)
     model.fit(X.loc[keep, features].astype(float), y[keep].to_numpy())
     model.features_ = features
@@ -70,7 +72,7 @@ def _scores(actual: np.ndarray, pred: np.ndarray) -> dict[str, float]:
 
 
 def evaluate_clv(X: pd.DataFrame, future_value, *, horizon_days: int = 42, seed: int = 0,
-                 n_splits: int = 5) -> dict:
+                 n_splits: int = CONFIG.cv_folds) -> dict:
     from sklearn.model_selection import KFold
 
     y = pd.Series(future_value).reindex(X.index).astype(float)

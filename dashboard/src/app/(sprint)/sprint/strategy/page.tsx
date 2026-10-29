@@ -13,14 +13,31 @@ import { Txt, Val } from "@/components/sprint/Value";
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "스프린트 결과 · 전략·ROI" };
 
+/** A row without `incremental_profit_status` predates issue 169's format. */
+const LEGACY_TEXT = "구형 결과(#169 이전 형식) — 증분이익 상태 필드가 없습니다.";
+
 export default async function StrategyPage() {
   const source = sprintSource();
   const st = await loadSprint("strategy_comparison");
   const rows = st.kind === "ok" ? (st.artifact.strategies ?? []) : [];
-  const label = (s: (typeof rows)[number]) => `${s.id} ${typeof s.name === "string" ? s.name : ""}`.trim();
-  // 증분이익의 계산 근거(DG-13). 실측 기여이익이 없으면 roi.py 가 매출 기준 대체 계산에 이 플래그를 붙인다.
-  const revenueFallback = (s: (typeof rows)[number]) => (s.flags ?? []).includes("PROFIT_FALLBACK_REVENUE_BASED");
+  type Row = (typeof rows)[number];
+  const label = (s: Row) => `${s.id} ${typeof s.name === "string" ? s.name : ""}`.trim();
+  // 정식 증분이익 · ROI 는 상태가 "ok" 일 때만 숫자로 그린다(DG-5 · #169). 상태 필드가 없는 행은 #169 이전
+  // 형식의 구형 결과다 — 그때는 정식 필드에 Δ(매출 − 마케팅 비용) 대체값이 들어갈 수 있었다. ROI 는
+  // roi_status 만 보지 않는다: 구형 결과의 roi_status 는 그 대체값 위에서도 "ok" 다.
+  const legacy = (s: Row) => typeof s.incremental_profit_status !== "string";
+  const profitOk = (s: Row) => s.incremental_profit_status === "ok";
+  const profitShown = (s: Row) => (profitOk(s) ? s.incremental_profit_vs_S1 : null);
+  const roiShown = (s: Row) => (profitOk(s) && s.roi_status === "ok" ? s.roi : null);
+  const anyLegacy = rows.some(legacy);
+  // 증분이익의 계산 근거(DG-13). 실측 기여이익이 없으면 증분이익은 계산 불가이고, roi.py 가 방향 확인용
+  // 대체값을 별도 필드(directional_revenue_minus_marketing_vs_S1)에 싣고 이 플래그를 붙인다(#169).
+  // 구형 결과에는 플래그만 있고 그 필드가 없다 — 재생성 안내로 대신한다.
+  const revenueFallback = (s: Row) => !legacy(s) && (s.flags ?? []).includes("PROFIT_FALLBACK_REVENUE_BASED");
   const anyFallback = rows.some(revenueFallback);
+  const legacyNote = anyLegacy
+    ? ` ⚠ ${LEGACY_TEXT} 증분이익 · ROI 를 숫자로 그리지 않습니다. 결과를 다시 생성하세요 (이슈 #169).`
+    : "";
 
   return (
     <div className="flex flex-col gap-lg">
@@ -102,13 +119,21 @@ export default async function StrategyPage() {
                         <Val text={fmtPct(s.churn_rate)} />
                       </td>
                       <td className={TDR}>
-                        <Val text={fmtKrw(s.incremental_profit_vs_S1, true)} />
+                        <Val text={fmtKrw(profitShown(s), true)} />
+                        {legacy(s) ? (
+                          <span className="block text-text-secondary">{LEGACY_TEXT} 재생성 필요</span>
+                        ) : !profitOk(s) ? (
+                          <span className="block text-text-secondary">{s.incremental_profit_status}</span>
+                        ) : null}
                         {revenueFallback(s) ? (
-                          <span className="block whitespace-nowrap text-text-secondary">매출 기준 대체 · COGS 미차감</span>
+                          <span className="block whitespace-nowrap text-text-secondary">
+                            방향 확인용 Δ(매출 − 마케팅 비용){" "}
+                            <Val text={fmtKrw(s.directional_revenue_minus_marketing_vs_S1, true)} /> · COGS 미차감 — 증분이익 아님
+                          </span>
                         ) : null}
                       </td>
                       <td className={TDR}>
-                        <Val text={fmtDec(s.roi, 2)} />
+                        <Val text={fmtDec(roiShown(s), 2)} />
                       </td>
                     </tr>
                   );
@@ -121,32 +146,32 @@ export default async function StrategyPage() {
             <Section
               title="증분이익 (vs S1)"
               note={
-                anyFallback
-                  ? "0 선 왼쪽은 S1 보다 손해입니다. ⚠ 실측 공헌이익이 없어 Δ(매출 − 마케팅 비용) 대체 계산입니다 — 원가(COGS)를 빼지 않아 과대평가될 수 있습니다 (이슈 #169)."
-                  : "0 선 왼쪽은 S1 보다 손해입니다."
+                (anyFallback
+                  ? "0 선 왼쪽은 S1 보다 손해입니다. ⚠ 실측 공헌이익이 없는 전략은 증분이익이 계산 불가입니다. 표의 '방향 확인용' 값은 Δ(매출 − 마케팅 비용)으로 원가(COGS)를 빼지 않아 증분이익이 아니며 막대에 그리지 않습니다 (이슈 #169)."
+                  : "0 선 왼쪽은 S1 보다 손해입니다.") + legacyNote
               }
             >
               <BarChart
                 ariaLabel="전략별 S1 대비 증분이익"
-                rows={rows.map((s) => ({
-                  key: s.id,
-                  label: label(s),
-                  emphasis: true,
-                  value: isNum(s.incremental_profit_vs_S1) ? s.incremental_profit_vs_S1 : null,
-                  display: fmtKrw(s.incremental_profit_vs_S1, true),
-                }))}
+                rows={rows.map((s) => {
+                  const v = profitShown(s);
+                  return { key: s.id, label: label(s), emphasis: true, value: isNum(v) ? v : null, display: fmtKrw(v, true) };
+                })}
               />
             </Section>
-            <Section title="ROI" note="파일에 ROI 값이 없는 전략(예: 마케팅 비용이 0 이라 분모가 없는 경우)은 0 이 아니라 계산 불가로 표시합니다.">
+            <Section
+              title="ROI"
+              note={
+                "파일에 ROI 값이 없는 전략(예: 마케팅 비용이 0 이라 분모가 없는 경우)과 정식 증분이익이 계산 불가인 전략은 0 이 아니라 계산 불가로 표시합니다." +
+                legacyNote
+              }
+            >
               <BarChart
                 ariaLabel="전략별 ROI"
-                rows={rows.map((s) => ({
-                  key: s.id,
-                  label: label(s),
-                  emphasis: true,
-                  value: isNum(s.roi) ? s.roi : null,
-                  display: fmtDec(s.roi, 2),
-                }))}
+                rows={rows.map((s) => {
+                  const v = roiShown(s);
+                  return { key: s.id, label: label(s), emphasis: true, value: isNum(v) ? v : null, display: fmtDec(v, 2) };
+                })}
               />
             </Section>
           </div>

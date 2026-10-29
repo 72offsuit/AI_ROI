@@ -36,6 +36,11 @@ class TestGuardrailPopulations(SimulatorCase):
         self.assertEqual(report["active42"]["churn_rate_bp"], report["churn_rate_bp"])
         for key in TREATMENT_KEYS:
             self.assertEqual(report["eligible_spec41"][key], report[key], key)
+        # 블록의 처치 지표 키가 하나도 빠짐없이 최상위에 있다(손으로 고른 목록에 기대지 않는다).
+        treatment_keys = set(report["eligible_spec41"]) - {"customers", "evaluated_customers", "churn_rate_bp"}
+        self.assertTrue(set(TREATMENT_KEYS) <= treatment_keys)
+        for key in treatment_keys:
+            self.assertEqual(report["eligible_spec41"][key], report[key], key)
         self.assertEqual(report["active_customers"], report["active42"]["customers"])
         self.assertEqual(report["eligible_customers"], report["eligible_spec41"]["customers"])
 

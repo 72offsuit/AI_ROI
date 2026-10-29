@@ -48,13 +48,16 @@
 - 라벨 창 42일(`LABEL_WINDOW_DAYS` 3곳)은 config 로 옮기지 않는다.
 - **정본 값 고정:** `churn` 블록은 생성 다이제스트·`CONFIG_PINS`·GATE 1 해시 어디에도 들지 않는다. 그래서 `tests/test_config_loader.py` 가 정본 config 의 블록 = `kpi.DEFAULT_CHURN_DEFINITION` = 28/42/60·OR 을 단언한다 — 값을 바꾸면 config·kpi 기본값·이 DR 을 함께 고쳐야 테스트가 통과한다. `definition` 을 넘기지 않는 호출자와 게시가 같은 정의를 쓰는 것도 이 단언이 보장한다.
 
-**근거:** CFG-001·data_spec 이 지정한 위치이고, 다이제스트 밖에 두면 시뮬레이터 판·골든이 흔들리지 않는다. 기본값에서는 미접속 경과일 ≤ 미구매 경과일이라 OR(42/60)이 미구매 조건 하나와 같다 — 기존 지표 값이 바뀌지 않는다(기존 테스트 전부 통과).
+- **소유와 변경 절차(PR #243 리뷰 반영):** 파일은 시뮬레이터 팀 소유(`docs/team_boundaries.json` `owned.sim` 의 `config/simulator*.yaml`)지만 `churn` 블록은 시스템 팀 KPI(`churn_rate`·`retention_rate`·`winback_rate`·파생 상태 수)를 정한다. 그래서 **블록 값 변경은 양 팀 합의 사항**이다 — 시뮬레이터 팀이 단독으로 바꾸지 않는다. 블록은 생성 다이제스트 밖이라 값을 바꿔도 `SIMULATOR_VERSION`·`world_id` 가 바뀌지 않는다. 변경은 게시물의 `params_used` 와 위 핀 테스트로만 드러난다. GATE 1 봉인 편입은 리드 결정(아래 "남은 불확실성").
+- **"기본값에서 결과 불변" 의 범위:** 지표 **값**은 그대로다. 게시물 **메타**는 4가지가 바뀐다 — ① `churn_rate`·`retention_rate`·`winback_rate`·`derived_state_count` 의 `source_events`(지표 메타·basis)에 `session_start` 추가, ② `params_used` 에 `rule_operator` 추가, ③ `CHURN_THRESHOLDS_UNCONFIRMED` 알림 문구가 정의 문자열을 싣도록 변경, ④ 공개 상수 `kpi.AT_RISK_DAYS`·`NO_PURCHASE_DAYS`·`NO_LOGIN_DAYS` 제거(→ `kpi.ChurnDefinition`·`DEFAULT_CHURN_DEFINITION`). 대시보드는 `params_used` 를 키·값 그대로 나열하고(`dashboard/src/lib/format/metric.ts:165`) `source_events` 는 타입 선언만 있다. `src/decision` 은 시뮬레이터 팀이 읽을 수 없어 상수 참조 여부를 확인하지 못했다 — 전체 테스트·CI 는 통과했고, 시스템 팀 리뷰로 확인한다.
+
+**근거:** CFG-001(SRS `Plan/AI_Customer_Retention_ROI_SRS_v2.0.md:345-372`, 제목이 `config/simulator_config.yaml` 이고 그 안에 `churn: no_purchase_days · no_login_days · rule_operator`)과 data_spec §5.1 5단계("두 조건을 만족하면 `config/simulator_config.yaml` 에 기록하고 GATE 1 에서 Lock")가 지정한 위치다. 다이제스트 밖에 두면 시뮬레이터 판·골든이 흔들리지 않는다. 기본값에서는 미접속 경과일 ≤ 미구매 경과일이라 OR(42/60)이 미구매 조건 하나와 같다 — 기존 지표 값이 바뀌지 않는다(기존 테스트 전부 통과).
 
 ## 기각한 안과 기각 사유
 
 | 안 | 왜 택하지 않았나 |
 |---|---|
-| B(별도 파일) | CFG-001 위치와 다르고 소유 경로를 새로 정해야 한다(사용자 선택 A) |
+| B(별도 파일, 예: `config/churn_definition.yaml`) | CFG-001·data_spec §5.1 이 지정한 위치와 다르고 소유 경로를 새로 정해야 한다(사용자 선택 A). PR #243 리뷰가 격리 관점에서 분리를 제안했지만, 요구 원문 위치를 지키고 대신 소유·변경 절차(양 팀 합의)와 "블록만 읽는다" 규율을 명시했다 |
 | `kpi.py` 가 config 를 직접 읽음 | `test_neutrality` 의 I/O 금지·출처 리터럴 금지를 깬다 |
 | `economic_config.yaml` 에 둠 | GATE 1 정본 해시 대상이라 고치면 `FREEZE_MISMATCH` — 재봉인이 필요하다 |
 | "미접속" = `session_start` 만 | 구매 이벤트만 남은 출처(커머스 일부)에서 미구매보다 미접속이 길어지는 모순이 생긴다 |

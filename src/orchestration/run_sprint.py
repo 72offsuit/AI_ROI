@@ -6,18 +6,25 @@
 흐름 (지휘자는 명령만 내린다 — `src/orchestration/AGENTS.md`):
 
 1. ``sim.init`` → ``sim.advance(warmup)``. 끝 시각이 ``t1``.
-2. **탐색 RCT** — ``t1`` 직전 ``active_days`` 일 안에 이벤트가 있는 고객을 T0 50% · T1~T4 각 12.5% 로
+2. **탐색 RCT** — ``t1`` 의 data_spec §4.1 Eligible 고객을 T0 50% · T1~T4 각 12.5% 로
    무작위 배정(``random.Random(seed)``)하고 ``apply_treatment`` → ``advance(42)``. 끝 시각이 ``t2``.
+   Eligible 은 시뮬 팀이 #164 에 공유한 정본 정의다(#194 · DR-234). 가입일은 교환 묶음의 고객 명부에서 읽는다.
    - X = Feature(t1, 이벤트 < t1), 결과 = outcomes(t1, 42일), 처치 = 배정표.
    - churn 은 T0 군으로, uplift 는 전 군으로, CLV 는 전 군 42일 매출로 학습한다.
 3. **전략 비교** — ``t2`` 에서 ``snapshot()`` 한 토큰 **하나**로 S0~S5 를 각각 새 빈 루트에 ``restore`` 해
    같은 시점·같은 난수에서 출발시킨다. Feature(t2) 로 점수를 내고(``t1`` 에서 학습한 모델)
    ``plan`` → ``apply_treatment`` → ``advance(42)`` → ``sim.metrics(t2, t2+42)`` + 이벤트 기반 결과.
    기준은 S1 이다(PRD §63). S1 은 상한 없이 실행하고 그 계획 비용 합(C_rule)을 S2~S5 의 예산으로 쓴다(DR-145).
+   분기마다 그 세계가 활성일 때 ``sim.exchange_bundle`` 로 교환 묶음을 받고, 측정 계층
+   ``publish.build_kpi_report`` 로 분기 창의 매출·마케팅비·**실측 기여이익**(묶음의 주문 시점 원가로
+   COGS 차감)을 계산해 ``measured_*`` 로 넘긴다(DR-169). 분기 창 금액 대조(DQ-09)나 주문당 purchase
+   1건(DQ-02b)이 실패하면 그 분기 값은 넘기지 않는다(``quality_failed``). 분기 루트는 ``out/branches/{S}/raw`` —
+   묶음이 그 형제 ``simulator_exchange/`` 에 분기별로 남는다.
    S4·S5 의 가치는 CLV × margin_rate 다 — 측정 계층 실현 기여이익률, 없으면 economic_config 매출 가중 마진.
    결과 JSON 은 대시보드 sprint 로더 타입(dashboard/src/lib/artifacts/sprint-types.ts)의 키로 낸다.
    S1 입력(마지막 구매 경과일·누적 주문 수·eligible)은 이벤트에서 계산한다 — purchase 를 만들지 않는
-   시뮬레이터 판이면 계산하지 않고 S1 은 not_run 이다.
+   시뮬레이터 판이면 계산하지 않고 S1 은 not_run 이다. S1~S5 는 모두 Eligible(t2) 안에서만 고르고
+   (``strategies.plan``), 분기의 이벤트 결과도 Eligible(t2) 고객으로 집계한다(DR-234).
 4. ``<results_root>/sprint-v0/<run_id>/`` 에 JSON 7종과 ``latest`` 를 쓴다. ``docs/research/realism_report.json``
    이 있으면 같은 폴더로 사본을 둔다(대시보드는 docs/ 를 읽지 못한다).
 
@@ -52,6 +59,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
+from src.decision.config import load_experiment_config, load_model_config
 from src.measurement import contracts as mc
 from src.simulator import api as sim
 
@@ -61,6 +69,10 @@ SPRINT = "sprint-v0"
 KST = timezone(timedelta(hours=9), "KST")
 
 # ── 실험 상수 ───────────────────────────────────────────────────────────────
+# config/experiment_config.yaml (#206) — 배정 비율 · 모집단 창 · 실행 기본값은 그 파일 한 곳에만 있다.
+# 모델 config 도 여기서 한 번 읽어 검증한다: 잘못된 config 는 시뮬레이션을 시작하기 전에 import 에서 멈춘다.
+EXPERIMENT = load_experiment_config()
+load_model_config()
 # 프로파일별 권장 warmup — docs/data_spec.html §2.2 표. `small` 은 시간축이 `short` 와 같다
 # (docs/decisions/DR-S3-p6-signup.md U11). `--warmup-days` 로 덮어쓸 수 있다.
 PROFILE_WARMUP_DAYS: dict[str, int] = {
@@ -74,10 +86,9 @@ BASELINE_STRATEGY = "S1"
 # 전략별 필수 점수는 의사결정(`strategies.REQUIRED_SCORES`)이 정한다 — 없으면 plan 이 NotComputable(→ not_run).
 
 RCT_ARMS: tuple[str, ...] = ("T0", "T1", "T2", "T3", "T4")
-RCT_CONTROL_SHARE = 0.5  # T0 50% · 나머지를 T1~T4 에 균등(각 12.5%)
-# 탐색 RCT 모집단 = t1 직전 90일 안에 이벤트가 1건 이상인 고객.
-# 90일은 S1 규칙의 상한과 같은 근거다(data_spec §12.1 "90일을 넘기면 회수 확률이 급감").
-DEFAULT_ACTIVE_DAYS = 90
+RCT_CONTROL_SHARE = EXPERIMENT.rct.control_share  # T0 비율 · 나머지를 T1~T4 에 균등
+# 탐색 RCT 모집단 = t1 의 Eligible(아래 ELIGIBLE_*). 예전의 "t1 직전 90일 활동 고객"(active_days)은
+# 정본 모집단(#194)과 달라 없앴다 — DR-234.
 
 # 예산 기본값 — data_spec §12.2 설계 추정치 C_rule ≈ 8,833,000원(26,000명 기준)을 고객 수에
 # 비례해 환산한다. 정확한 C_rule 은 GATE 2 에서 S1 을 실측해 Lock 한다 — 이 값은 그 전의 추정이다.
@@ -88,11 +99,18 @@ ECONOMIC_CONFIG = REPO_ROOT / "config" / "economic_config.yaml"
 # 대시보드가 docs/ 를 읽지 못하므로 있으면 결과 폴더로 사본을 둔다(없으면 not_run).
 REALISM_REPORT = REPO_ROOT / "docs" / "research" / "realism_report.json"
 
-# S1 의 eligible_flag — data_spec §4.1: 가입 ≥ 60일 · 구매 ≥ 1 · 마지막 구매 ≥ 14일.
-# 가입일은 이벤트 계약에 없다(customers 테이블 부재, measurement_contract §6.4) — 첫 관측 이벤트 시각으로 근사한다.
+# Eligible — data_spec §4.1 · #164 정본 정의(#194): 가입 ≥ 60일 · T0 이전 구매 ≥ 1 · 마지막 구매 ≥ 14일.
+# RCT 배정 · S1~S5 배정 · 분기 결과 집계가 같은 정의를 쓴다(DR-234). 세 조건 모두 T0 **이전** 관측만 본다.
+# 일수는 KST 날짜 차다(정의가 "가입일" · "마지막 구매일" 이다). 가입일은 이벤트 계약에 없어(measurement_contract
+# §6.4) 교환 묶음의 고객 명부(`customers.signup_date`, 교환 계약 v1)에서 읽는다 — 예전의 첫 관측 근사는 없앴다.
 ELIGIBLE_MIN_TENURE_DAYS = 60
 ELIGIBLE_MIN_ORDERS = 1
 ELIGIBLE_MIN_DAYS_SINCE_PURCHASE = 14
+ELIGIBLE_DEFINITION = (
+    f"data_spec §4.1 Eligible(#194) — T0 − 가입일 ≥ {ELIGIBLE_MIN_TENURE_DAYS}일 · T0 이전 구매 ≥ "
+    f"{ELIGIBLE_MIN_ORDERS}건 · T0 − 마지막 구매일 ≥ {ELIGIBLE_MIN_DAYS_SINCE_PURCHASE}일 (KST 날짜 차, "
+    "가입일은 교환 묶음 고객 명부)"
+)
 
 RESULT_FILES: tuple[str, ...] = (
     "run_meta", "churn_eval", "clv_eval", "uplift_eval", "segments", "strategy_comparison", "ab_test",
@@ -117,6 +135,7 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "plan": ("src.decision.strategies", "plan"),
     "planning_costs": ("src.decision.strategies", "planning_costs"),
     "s1_eligibility": ("src.decision.strategies", "s1_eligibility"),
+    "within_eligible": ("src.decision.strategies", "within_eligible"),
     "segment_stats": ("src.decision.segments", "segment_stats"),
     "what_if": ("src.decision.optimize", "what_if"),
     "what_if_budgets": ("src.decision.optimize", "what_if_budgets"),
@@ -138,10 +157,16 @@ def _log(message: str) -> None:
 
 
 class StageLog:
-    """단계별 `status: ok|not_run|failed` · 사유 · 소요시간."""
+    """단계별 `status: ok|not_run|failed` · 사유 · 소요시간.
 
-    def __init__(self) -> None:
+    `selected` 가 있으면 그 밖의 단계는 시도하지 않고 not_run 으로 적는다 — 사유에 `scope` 를 쓴다
+    (`src/main.py --mode` 가 실행 범위를 정한다, #206). None 이면 전 구간이다.
+    """
+
+    def __init__(self, selected: frozenset[str] | None = None, scope: str = "") -> None:
         self.stages: list[dict[str, Any]] = []
+        self.selected = selected
+        self.scope = scope
 
     def status(self, name: str) -> str | None:
         for stage in reversed(self.stages):
@@ -162,15 +187,20 @@ class StageLog:
     @contextmanager
     def stage(self, name: str, *, requires: tuple[str, ...] = ()) -> Iterator[None]:
         """`with log.stage(...)` 안에서 `NotRun` 은 not_run, 그 밖의 예외는 failed 로 적고 삼킨다."""
+        out_of_scope = self.selected is not None and name not in self.selected
         missing = [r for r in requires if not self.ok(r)]
-        if missing:
-            self.record(name, "not_run", f"선행 단계가 ok 가 아니다: {', '.join(missing)}")
-            # contextmanager 는 본문을 건너뛸 수 없다. `requires` 를 둔 본문은 첫 줄에서
-            # `skip_if_not_run` 을 불러 `_SkipBody` 로 빠져나오고, 여기서 삼킨다.
+        if out_of_scope or missing:
+            self.record(name, "not_run",
+                        f"실행 범위 밖이다({self.scope or '선택한 단계'}) — 시도하지 않았다" if out_of_scope
+                        else f"선행 단계가 ok 가 아니다: {', '.join(missing)}")
+            # contextmanager 는 본문을 건너뛸 수 없다. 본문은 첫 줄에서 `skip_if_not_run` 을 불러
+            # `_SkipBody` 로 빠져나오고, 여기서 삼킨다.
             try:
                 yield
             except _SkipBody:
-                pass
+                return
+            if out_of_scope:  # 범위 밖인데 본문이 돌았다 — 그 본문에 skip_if_not_run 이 없다
+                raise RuntimeError(f"단계 {name} 는 실행 범위 밖인데 본문이 실행됐다 (skip_if_not_run 없음)")
             return
         _log(f"{name}: 시작")
         started = time.perf_counter()
@@ -462,12 +492,67 @@ def observed_values(frame: Any, column: str) -> list[Any]:
     return sorted({v for v in frame[column].dropna().unique().tolist()}, key=str)
 
 
-def active_customers(events: Any, until: datetime, days: int) -> list[str]:
-    """`[until - days, until)` 에 이벤트가 1건 이상인 고객 — 탐색 RCT 모집단 정의."""
+def customer_signups(until: datetime) -> dict[str, Any]:
+    """활성 세계의 고객 명부 — ``sim.exchange_bundle(until)`` 의 ``customers.signup_date`` (교환 계약 v1).
+
+    이벤트 계약에는 가입일이 없다(measurement_contract §6.4). 명부는 공개 계약이고 측정 계층
+    ``exchange.read_exchange`` 로 읽는다. 받지 못하면 ``NotRun`` — 가입일을 다른 값으로 근사하지 않는다.
+    """
+    from src.measurement import exchange as ex
+    from src.measurement.sink import EventSource
+
+    bundle = sim.exchange_bundle(until)
+    if bundle.get("status") != "ok":
+        raise NotRun(f"sim.exchange_bundle 상태 {bundle.get('status')!r} — 가입일 명부가 없다")
+    read = ex.read_exchange(Path(str(bundle["path"])), EventSource.SIMULATOR)
+    if read is None:
+        raise NotRun("교환 묶음을 읽지 못했다 — 가입일 명부가 없다")
+    return dict(read.signup_dates)
+
+
+def _kst_dates(stamps: Any) -> Any:
+    """이벤트 시각 → KST 날짜. 시각이 naive 면 이미 KST 다(측정 계층이 저장 시 정규화한다)."""
+    if stamps.dt.tz is not None:
+        stamps = stamps.dt.tz_convert(KST)
+    return stamps.dt.date
+
+
+def eligibility(events: Any, index_time: datetime, population: Any,
+                signups: Mapping[str, Any]) -> dict[str, Any]:
+    """``population`` 고객의 data_spec §4.1 Eligible 여부(``ELIGIBLE_DEFINITION``) — ``index_time`` 미만 이벤트만 본다.
+
+    - 가입일이 명부에 없는 고객은 **Eligible 이 아니다**(판정할 수 없다). 그 수를 ``n_signup_missing`` 에 남긴다.
+    - 구매는 ``purchase`` 이벤트이고, 같은 ``order_id`` 는 1건이다.
+    반환: ``flags``(Series, bool) · ``counts``(모집단 · Eligible · 조건별 탈락 수 — 한 고객이 여러 조건에 걸릴 수 있다).
+    """
+    pd = _pd()
     stamps = _timestamps(events)
-    end = until if stamps.dt.tz is not None else until.astimezone(KST).replace(tzinfo=None)
-    window = (stamps >= end - timedelta(days=days)) & (stamps < end)
-    return sorted(events.loc[window, "customer_id"].dropna().unique().tolist())
+    end = index_time if stamps.dt.tz is not None else index_time.astimezone(KST).replace(tzinfo=None)
+    t0_day = index_time.astimezone(KST).date()
+    before = events.loc[stamps < end].assign(_day=_kst_dates(stamps[stamps < end]))
+    purchases = before[before["event_type"] == "purchase"]
+    key = purchases["order_id"].where(purchases["order_id"].notna(), "evt:" + purchases["event_id"].astype(str))
+    orders = purchases.assign(_key=key).drop_duplicates(subset=["customer_id", "_key"])
+    count = orders.groupby("customer_id").size().reindex(population, fill_value=0)
+    last_day = orders.groupby("customer_id")["_day"].max().reindex(population)
+    signup = pd.Series([signups.get(cid) for cid in population], index=population, dtype=object)
+    tenure = pd.Series([None if d is None else (t0_day - d).days for d in signup], index=population, dtype=float)
+    recency = pd.Series([None if pd.isna(d) else (t0_day - d).days for d in last_day], index=population, dtype=float)
+    tenure_ok = tenure >= ELIGIBLE_MIN_TENURE_DAYS
+    orders_ok = count >= ELIGIBLE_MIN_ORDERS
+    recency_ok = recency >= ELIGIBLE_MIN_DAYS_SINCE_PURCHASE
+    flags = (tenure_ok & orders_ok & recency_ok).astype(bool).rename("eligible")
+    return {
+        "flags": flags,
+        "counts": {
+            "n_population": int(len(population)),
+            "n_eligible": int(flags.sum()),
+            "n_signup_missing": int(signup.isna().sum()),
+            "n_excluded_tenure": int((~tenure_ok).sum()),
+            "n_excluded_no_purchase": int((~orders_ok).sum()),
+            "n_excluded_recent_purchase": int((orders_ok & ~recency_ok).sum()),
+        },
+    }
 
 
 def event_count_by_type(frame: Any) -> dict[str, int]:
@@ -476,12 +561,13 @@ def event_count_by_type(frame: Any) -> dict[str, int]:
     return {str(k): int(v) for k, v in frame["event_type"].value_counts().sort_index().items()}
 
 
-def s1_inputs(events: Any, index_time: datetime, population: Any) -> dict[str, Any]:
+def s1_inputs(events: Any, index_time: datetime, population: Any, eligible: Any) -> dict[str, Any]:
     """S1 규칙 입력 — `index_time` 미만 이벤트에서 고객별로 계산한다.
 
     - ``days_since_last_purchase``: 마지막 주문부터의 일수(소수). 주문이 없으면 NaN(0 으로 채우지 않는다).
+      S1 규칙(28~90일)이 이 값을 쓴다 — Eligible 의 날짜 차와는 따로다(DR-234).
     - ``lifetime_order_count``: 주문 수(``purchase`` 1행 = 주문 1건, 같은 order_id 는 1건).
-    - ``eligible``: data_spec §4.1 — 첫 관측 ≥ 60일(가입일 근사) · 주문 ≥ 1 · 마지막 주문 ≥ 14일.
+    - ``eligible``: 호출자가 ``eligibility`` 로 낸 플래그를 ``population`` 에 맞춰 싣는다(data_spec §4.1).
 
     ★ 주문 수의 0 은 **이 시뮬레이터 판이 purchase 를 만들 때만** 관측된 0 이다. 호출자가 확인한다.
     """
@@ -495,14 +581,10 @@ def s1_inputs(events: Any, index_time: datetime, population: Any) -> dict[str, A
     count = orders.groupby("customer_id").size().reindex(population, fill_value=0).astype(float)
     last = orders.groupby("customer_id")["_ts"].max().reindex(population)
     days = (end - last).dt.total_seconds() / 86400.0
-    first_seen = before.groupby("customer_id")["_ts"].min().reindex(population)
-    tenure = (end - first_seen).dt.total_seconds() / 86400.0
-    eligible = ((tenure >= ELIGIBLE_MIN_TENURE_DAYS) & (count >= ELIGIBLE_MIN_ORDERS)
-                & (days >= ELIGIBLE_MIN_DAYS_SINCE_PURCHASE))
     return {
         "days_since_last_purchase": pd.Series(days.to_numpy(), index=population, name="days_since_last_purchase"),
         "lifetime_order_count": pd.Series(count.to_numpy(), index=population, name="lifetime_order_count"),
-        "eligible": pd.Series(eligible.to_numpy(dtype=bool), index=population, name="eligible"),
+        "eligible": eligible.reindex(population, fill_value=False).astype(bool).rename("eligible"),
     }
 
 
@@ -557,6 +639,192 @@ def margin_rate_basis(metrics: Mapping[str, Any] | None) -> tuple[float | None, 
 
 def two_classes(series: Any) -> bool:
     return series is not None and series.dropna().nunique() >= 2
+
+
+# ── 실측 기여이익 — 분기별 교환 묶음 → 측정 계층 (#169 · DR-169) ─────────────────
+
+
+def branch_raw_root(out: Path, strategy: str) -> Path:
+    """전략 분기의 Sink 루트. 분기마다 **부모 폴더를 따로** 둔다.
+
+    ``sim.exchange_bundle`` 은 활성 세계 출력 루트의 형제 ``simulator_exchange/`` 에 묶음을 쓴다
+    (``docs/simulator_api.md``). 분기 루트가 한 부모 아래 있으면 마지막 분기가 앞 분기의 묶음을
+    덮어써 분기별 원가 근거를 디스크에서 대조할 수 없다(DR-169). 이렇게 두면 묶음 위치가 측정
+    계층 기본값(``exchange.default_roots`` — Sink 루트의 형제)과도 같다.
+    """
+    return out / "branches" / strategy / "raw"
+
+
+#: 측정 계층 경제 지표의 조립(``publish.assemble_orders`` · ``assemble_campaign``)이 읽는 이벤트 —
+#: 이 유형이거나 ``campaign_id`` 가 있는 이벤트. 나머지는 경제 지표에 영향이 없어 거른다(분기 창 이벤트가
+#: 20K 실행에서 1.4M 건이다 — 전량 dict 로 들지 않는다). 조립이 다른 이벤트를 읽기 시작하면
+#: ``tests/test_orchestration_sprint.py`` 의 전량 대조가 실패한다.
+ECONOMIC_EVENT_TYPES = frozenset({"purchase", "coupon_use", "push_sent"})
+#: ``build_kpi_report`` 에서 꺼내 남기는 경제 지표 — 기여이익과 그 구성요소.
+ECONOMIC_METRICS: tuple[str, ...] = (
+    "revenue", "cogs", "shipping_subsidy", "message_cost", "coupon_cost", "campaign_fixed_cost",
+    "marketing_cost", "contribution_profit",
+)
+#: ``roi.summarize_strategy`` 에 ``measured_<이름>`` 으로 넘기는 지표.
+MEASURED_KEYS: tuple[str, ...] = ("revenue", "marketing_cost", "contribution_profit")
+
+
+def economic_events(raw_root: Path) -> list[dict[str, object]]:
+    """``raw_root`` 의 이벤트 중 경제 지표 조립이 읽는 것만(``ECONOMIC_EVENT_TYPES`` 또는 ``campaign_id`` 보유)."""
+    from src.measurement import sink
+
+    return [
+        event for event in sink.read_events(raw_root)
+        if event.get("event_type") in ECONOMIC_EVENT_TYPES or isinstance(event.get("campaign_id"), str)
+    ]
+
+
+#: 분기 창 DQ-09 가 구조상 잡지 못하는 것 — 산출물에 그대로 싣는다(통과로 읽히지 않게).
+WINDOW_AMOUNT_CHECK_GAP = (
+    "묶음에만 있고 분기 창 purchase 이벤트가 빠진 주문 — 로더의 ExchangeOrder 가 주문 시각(계약의 "
+    "ordered_at)을 돌려주지 않아 그 주문이 창 안인지 알 수 없다. 이벤트에만 있고 묶음에 없는 주문은 "
+    "이 검사가 아니라 contribution_profit 의 NO_COST_BASIS 가 막는다. 같은 주문의 purchase 가 여럿이면 "
+    "마지막 금액만 대조한다 — 그 경우는 single_purchase_check(DQ-02b)가 막는다"
+)
+
+#: 분기 창 DQ-02b 가 구조상 잡지 못하는 것.
+WINDOW_SINGLE_PURCHASE_GAP = (
+    "분기 창 밖(분기 이전 계보)에 같은 주문 ID 의 purchase 가 있는 경우 — 분기 창 이벤트만 읽는다"
+)
+
+#: 분기 기록에서 하나라도 ``fail`` 이면 ``quality_failed`` 인 검사 — (기록 키, 사유에 쓰는 이름).
+BRANCH_QUALITY_CHECKS = (("amount_check", "금액 대조"), ("single_purchase_check", "주문당 purchase 1건"))
+
+
+def _check_record(result: Any) -> dict[str, Any]:
+    return {"check": result.id, "status": result.status, "examined_rows": result.examined_rows,
+            "violations": result.violations, "samples": list(result.samples),
+            "reason_detail": result.reason_detail}
+
+
+def window_amount_check(bundle: Any, simulator_events: Any) -> dict[str, Any]:
+    """분기 창의 ``DQ-09`` — 묶음을 **이 창의 시뮬레이터 purchase 주문 ID** 로 좁혀 측정 계층 검사에 넘긴다 (#237 R1).
+
+    묶음은 계보 전량, 이벤트는 분기 창뿐이라 그대로 넘기면 창 이전 주문이 전부 "purchase 없음"
+    거짓 위반이 된다. 창의 주문만 남긴 읽기 전용 뷰를 ``validate.check_amount_equation`` 에
+    그대로 넘긴다 — 대조 규칙(품목 등식 · 이벤트 금액)은 측정 계층 한 벌이다.
+    ``simulator_events`` 는 **시뮬레이터 출처만** 이어야 한다 — 같은 주문 ID 의 커머스 이벤트와
+    대조하면 다른 출처의 금액으로 거짓 위반이 난다(#116 · #117).
+    """
+    from src.measurement import validate
+
+    window_ids = {
+        event.get("order_id") for event in simulator_events
+        if event.get("event_type") == "purchase" and event.get("order_id") is not None
+    }
+    view = dataclasses.replace(
+        bundle, orders={order_id: order for order_id, order in bundle.orders.items() if order_id in window_ids},
+    )
+    counts = {
+        "n_window_purchase_orders": len(window_ids),
+        "n_bundle_orders": len(bundle.orders),
+        "n_bundle_orders_outside_window": len(bundle.orders) - len(view.orders),
+        "n_window_orders_missing_from_bundle": len(window_ids - set(bundle.orders)),
+        "not_detected": WINDOW_AMOUNT_CHECK_GAP,
+    }
+    if not view.orders:
+        # check_amount_equation 은 대조한 주문이 0건이면 "purchase 가 없다"는 사유를 낸다 — 이 경우와 다르다.
+        reason = ("분기 창에 시뮬레이터 purchase 가 없다" if not window_ids else
+                  f"분기 창 주문 {len(window_ids)}건이 묶음에 하나도 없다 — 대조할 상대가 없다(원가는 NO_COST_BASIS)")
+        return {"check": "DQ-09", "status": "not_run", "examined_rows": 0, "violations": None,
+                "samples": [], "reason_detail": reason, **counts}
+    result = validate.check_amount_equation([(view, simulator_events)])
+    return {**_check_record(result), **counts}
+
+
+def window_single_purchase_check(simulator_events: Any) -> dict[str, Any]:
+    """분기 창의 ``DQ-02b`` — 주문 ID 당 시뮬레이터 purchase 1건 (#237 R3).
+
+    ``DQ-09`` 는 같은 주문의 purchase 가 여럿이면 마지막 금액만 대조한다. 앞선 이벤트 금액이 틀려도
+    마지막이 묶음과 맞으면 통과하고, 순서를 뒤집으면 실패한다 — 측정 계층 ``validate.run_all`` 이 두
+    검사를 함께 돌리는 이유다. 같은 검사(``validate.check_order_id_single_purchase``)를 그대로 건다.
+    ``simulator_events`` 는 **시뮬레이터 출처만** 이어야 한다 — 같은 주문 ID 의 커머스 이벤트까지 세면
+    거짓 위반이다(#116 · #117).
+    """
+    from src.measurement import validate
+
+    result = validate.check_order_id_single_purchase(simulator_events)
+    return {**_check_record(result), "not_detected": WINDOW_SINGLE_PURCHASE_GAP}
+
+
+def measured_economics(raw_root: Path, bundle_root: Path, index_date: Any,
+                       events: list[dict[str, object]] | None = None) -> dict[str, Any]:
+    """분기 창의 경제 지표 — 측정 계층 ``publish.build_kpi_report`` 를 **그대로** 부르고 시뮬레이터 출처 값만 꺼낸다.
+
+    게시물 ``kpi_report`` 의 기여이익과 같은 함수·같은 조립이다(정의가 두 벌이 되지 않는다).
+    묶음이 없으면 측정 계층이 ``contribution_profit`` 을 ``NO_COST_BASIS`` 로 낸다 — 그대로 싣는다.
+    ``index_date`` 는 경제 지표에 쓰이지 않는다(``build_kpi_report`` 의 다른 지표용 인자).
+    금액 대조(``DQ-09``)는 ``amount_check`` 에, 주문당 purchase 1건(``DQ-02b``)은 ``single_purchase_check``
+    에 남긴다 — 어느 쪽이든 ``fail`` 이면 ``branch_economics`` 가 이 기록을 ``ok`` 로 두지 않는다(#237 R1 · R3).
+    """
+    from src.measurement import config_loader
+    from src.measurement import exchange as ex
+    from src.measurement import publish as mp
+    from src.measurement.sink import EventSource
+
+    config = config_loader.load_economic_config(ECONOMIC_CONFIG).cost_accounting
+    bundle = ex.read_exchange(bundle_root, EventSource.SIMULATOR)
+    events = economic_events(raw_root) if events is None else events
+    split = mp.partition_by_source(events)
+    source = EventSource.SIMULATOR.value
+    report = mp.build_kpi_report(events, split, index_date=index_date, config=config,
+                                 bundles={source: bundle} if bundle is not None else {})
+    by_name = {entry["name"]: entry for entry in report["metrics"]}
+    return {
+        "source": "src.measurement.publish.build_kpi_report — 게시물 kpi_report 와 같은 함수·조립, "
+                  "시뮬레이터 출처만(MEA-002)",
+        "raw_root": raw_root,
+        "bundle_root": bundle_root,
+        "bundle": ({"status": "ok", "orders": len(bundle.orders), "generated_at": bundle.generated_at}
+                   if bundle is not None else
+                   {"status": "not_run", "reason": "교환 묶음이 없다 — 기여이익은 NO_COST_BASIS"}),
+        "event_filter": f"event_type ∈ {sorted(ECONOMIC_EVENT_TYPES)} 또는 campaign_id 보유",
+        "n_events_read": len(events),
+        "n_simulator_events": len(split.simulator),
+        "n_commerce_events_excluded": len(split.commerce),
+        "amount_check": (window_amount_check(bundle, split.simulator) if bundle is not None else
+                         {"check": "DQ-09", "status": "not_run", "reason_detail": "교환 묶음이 없다"}),
+        "single_purchase_check": window_single_purchase_check(split.simulator),
+        "metrics": {name: by_name[name]["value"]["by_source"][source] for name in ECONOMIC_METRICS},
+    }
+
+
+def branch_economics(raw_root: Path, end: datetime) -> dict[str, Any]:
+    """활성 분기 세계의 묶음을 받고(``sim.exchange_bundle``) 측정 계층으로 경제 지표를 낸다.
+
+    실패해도 분기 단계를 멈추지 않는다 — ``status: failed`` 와 사유를 남기고, 그때 ``measured_*``
+    는 ``None`` 이라 증분이익은 계산 불가가 된다(0 으로 채우지 않는다).
+    분기 창 품질 검사(``BRANCH_QUALITY_CHECKS`` — ``DQ-09`` · ``DQ-02b``) 중 하나라도 ``fail`` 이면
+    ``status: quality_failed`` — 값과 근거는 그대로 남기되 ``measured_value`` 가 꺼내지 않아 이 분기의
+    정식 기여이익 · 증분이익 · ROI 가 계산 불가가 된다(#237 R1 · R3). 다른 분기는 각자 판정한다.
+    """
+    try:
+        bundle = sim.exchange_bundle(end)
+        if bundle.get("status") != "ok":
+            return {"status": "not_run", "reason": f"sim.exchange_bundle 상태 {bundle.get('status')!r}"}
+        last_day = (end - timedelta(days=1)).astimezone(KST).date()
+        economics = measured_economics(raw_root, Path(str(bundle["path"])), last_day)
+        failed = [f"{economics[key]['check']} {name} 실패 — {economics[key]['reason_detail']}"
+                  for key, name in BRANCH_QUALITY_CHECKS if economics[key]["status"] == "fail"]
+        if failed:
+            return {"status": "quality_failed", "reason": "분기 창 " + " · ".join(failed), **economics}
+        return {"status": "ok", "reason": None, **economics}
+    except Exception as error:  # noqa: BLE001 — 기여이익만 계산 불가로 두고 분기는 계속한다
+        traceback.print_exc(file=sys.stderr)
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
+
+
+def measured_value(record: Mapping[str, Any] | None, key: str) -> Any:
+    """``measured_economics`` 기록에서 ``ok`` 인 값만. 아니면 ``None``(0 이 아니다)."""
+    if not record or record.get("status") != "ok":
+        return None
+    metric = (record.get("metrics") or {}).get(key) or {}
+    return metric.get("value") if metric.get("status") == "ok" else None
 
 
 # ── JSON ────────────────────────────────────────────────────────────────────
@@ -694,11 +962,14 @@ class SprintConfig:
     results_root: Path = DEFAULT_RESULTS_ROOT
     warmup_days: int | None = None
     budget_krw: int | None = None
-    active_days: int = DEFAULT_ACTIVE_DAYS
     run_id: str | None = None
     realism_report: Path = REALISM_REPORT
-    cv_folds: int | None = None       # churn CV fold 수 덮어쓰기 — 없으면 의사결정 기본값(5)
+    cv_folds: int | None = None       # churn CV fold 수 덮어쓰기 — 없으면 model_config churn.cv_folds
     max_train_rows: int | None = None  # churn 학습·CV 표본 상한 — 없으면 전원
+    # src/main.py --mode (#206). 기본값이면 이전과 같다 — 전 구간을 돌고 아무것도 넘기지 않는다.
+    stages: frozenset[str] | None = None   # 실행할 단계 이름 — None 이면 전 구간
+    scope: str = ""                        # 범위 밖 단계의 not_run 사유에 쓰는 이름 (예: "--mode train")
+    capture: dict[str, Any] | None = None  # 실행 뒤 ctx(점수 · 예산)·비용·결과 폴더를 넘겨받을 곳
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -801,11 +1072,12 @@ def _segment_summary(segments: Any, scores: Mapping[str, Any]) -> dict[str, Any]
 
 
 def _outcome_metrics(outcomes: Any, population: Any) -> dict[str, Any]:
-    """이벤트 기반 결과 집계 — 모집단은 Feature(t2) 고객이다."""
+    """이벤트 기반 결과 집계 — 모집단은 Eligible(t2) 고객이다(DR-234)."""
     frame = outcomes.reindex(population)
     observed = frame.dropna(how="all")
     n = int(len(observed))
     result: dict[str, Any] = {
+        "population_definition": ELIGIBLE_DEFINITION + " — t2 기준",
         "n_population": int(len(population)),
         "n_with_outcome": n,
         "n_outcome_missing": int(len(population) - n),
@@ -827,7 +1099,7 @@ def run(config: SprintConfig) -> Path:
     """전 구간을 돌리고 결과 폴더 경로를 돌려준다. 단계 실패는 기록하고 다음으로 간다."""
     run_id = config.run_id or new_run_id()
     generated_at = mc.kst_now()
-    log = StageLog()
+    log = StageLog(config.stages, config.scope)
     out = Path(config.out)
     main_root = out / "raw" / "main"
     warmup = config.warmup_days if config.warmup_days is not None else PROFILE_WARMUP_DAYS.get(config.profile)
@@ -869,16 +1141,19 @@ def run(config: SprintConfig) -> Path:
         # 2. 탐색 RCT -------------------------------------------------------
         with log.stage("rct_assign", requires=("read_events_t1",)):
             skip_if_not_run(log, "rct_assign")
-            eligible = active_customers(ctx["events_t1"], ctx["t1"], config.active_days)
+            # 모집단 = t1 의 Eligible(#194 · DR-234). 가입일 명부는 본선 세계가 t1 에 있을 때 받는다.
+            observed = sorted(ctx["events_t1"]["customer_id"].dropna().unique().tolist())
+            judged = eligibility(ctx["events_t1"], ctx["t1"], observed, customer_signups(ctx["t1"]))
+            eligible = [cid for cid, flag in judged["flags"].items() if flag]
             if not eligible:
-                raise NotRun(f"t1 직전 {config.active_days}일 활동 고객이 0명이다")
+                raise NotRun(f"t1 의 Eligible 고객이 0명이다 — {judged['counts']}")
             assignment = rct_assign(eligible, config.seed)
             ctx["rct_assignment"] = assignment
             rct_meta.update(
                 {
                     "assigned_at": ctx["t1"],
-                    "population_definition": f"t1 직전 {config.active_days}일 안에 이벤트 1건 이상",
-                    "n_eligible": len(eligible),
+                    "population_definition": ELIGIBLE_DEFINITION + " — t1 기준, t1 미만 이벤트에 관측된 고객 중",
+                    **judged["counts"],
                     "arm_shares_design": {"T0": RCT_CONTROL_SHARE, **{t: (1 - RCT_CONTROL_SHARE) / 4 for t in RCT_ARMS[1:]}},
                     "arm_counts": dict(sorted(Counter(assignment.values()).items())),
                     "randomizer": f"random.Random({config.seed}) — 정렬한 고객 ID 를 섞는다",
@@ -1044,6 +1319,8 @@ def run(config: SprintConfig) -> Path:
             _log(f"  Feature(t2) {ctx['X2'].shape}")
 
         scores: dict[str, Any] = {}
+        ctx["scores"] = scores  # 같은 dict — main.py 가 고객별 점수 CSV 를 쓴다(#206)
+
         with log.stage("scores_t2", requires=("features_t2",)):
             skip_if_not_run(log, "scores_t2")
             X2 = ctx["X2"]
@@ -1060,22 +1337,31 @@ def run(config: SprintConfig) -> Path:
                 scores["clv"] = decision_fn("predict_clv")(ctx["clv_model"], X2)
             else:
                 reasons["clv"] = f"clv 단계 {log.status('clv')}"
-            # S1 입력 — 이벤트에서 계산한다. purchase 를 만들지 않는 판이면 계산하지 않는다(0 으로 채우지 않는다).
-            if ctx.get("purchase_generated"):
-                scores.update(s1_inputs(ctx["events_t2"], ctx["t2"], X2.index))
+            # S1 입력 · Eligible(t2) — 이벤트에서 계산한다. purchase 를 만들지 않는 판이면 계산하지 않는다
+            # (0 으로 채우지 않는다). 그러면 S1~S5 가 not_run 이다 — 모두 Eligible 안에서만 고른다(DR-234).
+            # 가입일 명부는 본선 세계가 t2 에 있는 지금(분기 restore 전) 받는다.
+            detail = None
+            if not ctx.get("purchase_generated"):
+                detail = ("이 시뮬레이터 판이 purchase 를 만들지 않는다 "
+                          f"({ctx.get('purchase_detail', 'purchase 생성 여부를 확인하지 못했다')})")
+            else:
+                try:
+                    judged = eligibility(ctx["events_t2"], ctx["t2"], X2.index, customer_signups(ctx["t2"]))
+                except NotRun as reason:
+                    detail = f"Eligible(t2) 를 판정하지 못했다 — {reason}"
+            if detail is None:
+                scores.update(s1_inputs(ctx["events_t2"], ctx["t2"], X2.index, judged["flags"]))
+                ctx["eligible_t2"] = [cid for cid, flag in judged["flags"].items() if flag]
                 comparison["s1_inputs"] = {
-                    "source": "이벤트(t2 미만 purchase) — 오케스트레이션 계산",
-                    "eligible_definition": (
-                        f"첫 관측 ≥ {ELIGIBLE_MIN_TENURE_DAYS}일(가입일 근사 — 이벤트 계약에 가입일 없음) · "
-                        f"주문 ≥ {ELIGIBLE_MIN_ORDERS} · 마지막 주문 ≥ {ELIGIBLE_MIN_DAYS_SINCE_PURCHASE}일 (data_spec §4.1)"
-                    ),
-                    "n_eligible": int(scores["eligible"].sum()),
+                    "source": "이벤트(t2 미만 purchase) · 교환 묶음 가입일 명부 — 오케스트레이션 계산",
+                    "index_time": ctx["t2"],
+                    "eligible_definition": ELIGIBLE_DEFINITION + " — t2 기준, Feature(t2) 고객 중",
+                    **judged["counts"],
                     "n_with_purchase_history": int(scores["days_since_last_purchase"].notna().sum()),
                 }
             else:
-                detail = ctx.get("purchase_detail", "purchase 생성 여부를 확인하지 못했다")
                 for key in ("days_since_last_purchase", "lifetime_order_count", "eligible"):
-                    reasons[key] = f"이 시뮬레이터 판이 purchase 를 만들지 않는다 ({detail})"
+                    reasons[key] = detail
             if ctx.get("margin_rate") is not None:
                 scores["margin_rate"] = ctx["margin_rate"]
             else:
@@ -1102,7 +1388,8 @@ def run(config: SprintConfig) -> Path:
             skip_if_not_run(log, "snapshot_t2")
             ctx["snapshot"] = sim.snapshot()
 
-        population = ctx["X2"].index if "X2" in ctx else None
+        # 분기 결과 집계의 모집단 = Eligible(t2) — 전략이 배정할 수 있는 고객과 같다(DR-234).
+        population = ctx.get("eligible_t2")
         strategy_results: dict[str, dict[str, Any]] = comparison["strategy_details"]
         for strategy in STRATEGIES:
             name = f"strategy_{strategy}"
@@ -1131,7 +1418,7 @@ def run(config: SprintConfig) -> Path:
                     budget = ctx["budget"]["planning_budget_krw"]
                     entry["budget_krw"] = budget
                     assignments = dict(call_plan(strategy, scores, budget, costs))
-                branch_root = out / "raw" / strategy
+                branch_root = branch_raw_root(out, strategy)
                 sim.restore(ctx["snapshot"], output_root=branch_root)
                 if assignments:
                     sim.apply_treatment(assignments)
@@ -1156,13 +1443,16 @@ def run(config: SprintConfig) -> Path:
                 entry["sim_metrics"] = {
                     k: mc.metric_to_json(v) for k, v in sim.metrics(ctx["t2"], summary.end).items()
                 }
+                # 실측 기여이익 — 이 분기 세계가 활성인 지금 묶음을 받는다(다음 restore 전에, DR-169).
+                entry["measured_economics"] = branch_economics(branch_root, summary.end)
 
                 def sim_value(key: str) -> Any:
                     metric = entry["sim_metrics"].get(key, {})
                     return metric.get("value") if metric.get("status") == "ok" else None
 
                 # summarize_strategy 가 읽는 키 — 값을 고르는 순서(roi.CANDIDATES)는 의사결정이 정한다.
-                # 측정 계층 값은 sim_*, 이벤트 결과는 revenue_krw·churn_rate, 계획 비용은 planned_treatment_cost_krw.
+                # sim.metrics 값은 sim_*, 측정 계층 호출 값은 measured_*(DR-169), 이벤트 결과는
+                # revenue_krw·churn_rate, 계획 비용은 planned_treatment_cost_krw.
                 metrics: dict[str, Any] = {
                     "id": strategy,
                     "name": _strategy_name(strategy),
@@ -1172,16 +1462,20 @@ def run(config: SprintConfig) -> Path:
                 }
                 for key in ("revenue", "marketing_cost", "contribution_profit", "churn_rate"):
                     metrics[f"sim_{key}"] = sim_value(key)
+                for key in MEASURED_KEYS:
+                    metrics[f"measured_{key}"] = measured_value(entry["measured_economics"], key)
                 try:
                     build_outcomes = decision_fn("build_outcomes")
-                    if population is None:
-                        raise NotRun("Feature(t2) 가 없어 모집단을 정할 수 없다")
                     events = reader.read(branch_root, summary.end, history=ctx["events_t2"])
                     outcomes = build_outcomes(events, ctx["t2"], window_days=LABEL_WINDOW_DAYS)
+                    if strategy == "S0":
+                        # temporal holdout 은 Feature(t2) 고객으로 평가한다 — 집계 모집단과 따로다(#179 범위)
+                        ctx["S0_outcomes"] = outcomes
+                    if population is None:
+                        raise NotRun("Eligible(t2) 가 없어 집계 모집단을 정할 수 없다 — "
+                                     + (ctx.get("score_missing") or {}).get("eligible", "scores_t2 단계 미실행"))
                     entry["event_outcomes"] = _outcome_metrics(outcomes, population)
                     metrics.update(entry["event_outcomes"])
-                    if strategy == "S0":
-                        ctx["S0_outcomes"] = outcomes
                 except NotRun as reason:
                     entry["event_outcomes"] = {"status": "not_run", "reason": str(reason)}
                 entry["metrics"] = metrics
@@ -1198,12 +1492,15 @@ def run(config: SprintConfig) -> Path:
         # What-if — 예산 50/100/200% (SRS OPT-005 · PRD §54) -------------------
         with log.stage("what_if", requires=("scores_t2",)):
             skip_if_not_run(log, "what_if")
-            missing = [k for k in ("cate", "clv") if k not in scores]
+            missing = [k for k in ("cate", "clv", "eligible") if k not in scores]
             if missing or costs is None:
-                raise NotRun(f"점수·비용이 없다: {missing or '비용'}")
+                raise NotRun(f"점수·비용이 없다: {missing or '비용'}"
+                             + (f" — {ctx['score_missing']['eligible']}" if "eligible" in ctx.get("score_missing", {}) else ""))
             budgets = decision_fn("what_if_budgets")(ctx["budget"]["planning_budget_krw"])
-            cate = scores["cate"][[t for t in RCT_ARMS[1:] if t in scores["cate"].columns]].astype(float)
-            value = scores["clv"].astype(float) * float(scores.get("margin_rate", 1.0))
+            # S5 와 같은 모집단 — Eligible(t2) 안에서만(DR-234). 거르기 규칙은 의사결정의 것을 그대로 쓴다.
+            pool = decision_fn("within_eligible")(scores)
+            cate = pool["cate"][[t for t in RCT_ARMS[1:] if t in pool["cate"].columns]].astype(float)
+            value = pool["clv"].astype(float) * float(pool.get("margin_rate", 1.0))
             # 기대 증분가치 = CATE × CLV × margin_rate (DR-145 S4·S5 와 같은 정의 — 의사결정의 공개 함수가 없어 여기서 만든다)
             gain = cate.mul(value.reindex(cate.index), axis=0)
             comparison["what_if"] = {
@@ -1295,7 +1592,7 @@ def run(config: SprintConfig) -> Path:
             "event_counts_by_type_until_t2": ctx.get("event_types_t2"),
             "event_source": reader.source,
             "event_source_fallback_reason": reader.fallback_reason,
-            "raw_roots": {"main": main_root, **{s: out / "raw" / s for s in STRATEGIES}},
+            "raw_roots": {"main": main_root, **{s: branch_raw_root(out, s) for s in STRATEGIES}},
             "budget": budget_record,
             "cost_basis": basis,
             "cost_basis_reason": basis_reason,
@@ -1310,7 +1607,8 @@ def run(config: SprintConfig) -> Path:
             "realism_report": realism,
             "assignment_files": assignment_files,
             "churn_options": {"cv_folds": config.cv_folds, "max_train_rows": config.max_train_rows,
-                              "note": "지정하지 않으면 의사결정 기본값(Stratified 5-Fold · 전원)"},
+                              "note": "지정하지 않으면 config/model_config.yaml churn.cv_folds "
+                                      f"(Stratified {load_model_config().churn.cv_folds}-Fold) · 전원"},
             "rct": rct_meta,
             "strategy_comparison_protocol": {
                 "snapshot_at": ctx["timeline"].get("t2"),
@@ -1318,6 +1616,11 @@ def run(config: SprintConfig) -> Path:
                 "strategies_restored_from_it": [s for s in STRATEGIES if log.ok(f"strategy_{s}")],
                 "same_random_numbers": "같은 토큰에서 restore — 같은 시점·같은 고객 상태·같은 난수 (docs/simulator_api.md restore)",
                 "rct_effect_overlap": "RCT 처치 효과 창 [t1, t1+42) 는 t2 에서 끝난다 — 전략 창 [t2, t2+42) 와 겹치지 않는다(정의상)",
+                "contribution_profit": "분기마다 sim.exchange_bundle → 측정 계층 publish.build_kpi_report 의 "
+                                       "contribution_profit(교환 묶음 COGS 차감, 시뮬레이터 출처만). 결손이면 증분이익 "
+                                       "계산 불가. 분기 창 DQ-09(창 주문으로 좁힌 묶음 ↔ 이벤트 금액) · DQ-02b(주문당 "
+                                       "시뮬레이터 purchase 1건) 중 하나라도 fail 이면 quality_failed 로 같은 차단 — "
+                                       "strategy_details.*.measured_economics (DR-169)",
             },
             "decision_modules": {k: decision_available(k) for k in DECISION_API},
             "provenance": provenance(),
@@ -1342,6 +1645,8 @@ def run(config: SprintConfig) -> Path:
         }
         run_dir = write_results(Path(config.results_root), run_id, payloads, extra_files)
         _log(f"결과: {run_dir}")
+        if config.capture is not None:  # src/main.py --mode 산출물용 (#206)
+            config.capture.update(ctx, costs=costs, run_dir=run_dir)
     return run_dir
 
 
@@ -1350,19 +1655,17 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m src.orchestration.run_sprint",
         description="스프린트 v0 — 탐색 RCT → Churn/Uplift/CLV → S0~S5 전략 비교를 한 번에 실행한다.",
     )
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--customers", type=int, default=20000)
-    parser.add_argument("--profile", default="reference")
+    parser.add_argument("--seed", type=int, default=EXPERIMENT.holdout.development_seed)
+    parser.add_argument("--customers", type=int, default=EXPERIMENT.run.num_customers)
+    parser.add_argument("--profile", default=EXPERIMENT.run.profile)
     parser.add_argument("--out", type=Path, required=True, help="시뮬레이터 출력 루트의 상위 폴더 (빈 폴더)")
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
     parser.add_argument("--warmup-days", type=int, default=None, help="기본: 프로파일 권장값(data_spec §2.2)")
     parser.add_argument("--budget-krw", type=int, default=None,
                         help="S2~S5 의 plan 예산(원). 기본: C_rule = S1(상한 없음) 배정의 계획 비용 합")
-    parser.add_argument("--active-days", type=int, default=DEFAULT_ACTIVE_DAYS,
-                        help="탐색 RCT 모집단 — t1 직전 이 일수 안에 이벤트가 있는 고객")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--cv-folds", type=int, default=None,
-                        help="churn 교차검증 fold 수 (기본: 의사결정 기본값 5)")
+                        help="churn 교차검증 fold 수 (기본: config/model_config.yaml churn.cv_folds)")
     parser.add_argument("--max-train-rows", type=int, default=None,
                         help="churn 학습·CV 표본 상한 — 클래스 비율 유지 추출 (기본: 전원)")
     parser.add_argument("--realism-report", type=Path, default=REALISM_REPORT,
@@ -1375,7 +1678,7 @@ def main(argv: list[str] | None = None) -> int:
     config = SprintConfig(
         seed=args.seed, num_customers=args.customers, profile=args.profile, out=args.out,
         results_root=args.results_root, warmup_days=args.warmup_days, budget_krw=args.budget_krw,
-        active_days=args.active_days, run_id=args.run_id, realism_report=args.realism_report,
+        run_id=args.run_id, realism_report=args.realism_report,
         cv_folds=args.cv_folds, max_train_rows=args.max_train_rows,
     )
     started = time.perf_counter()

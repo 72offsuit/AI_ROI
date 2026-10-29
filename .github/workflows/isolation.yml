@@ -25,6 +25,10 @@ jobs:
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
         with:
           submodules: false
+          # 팀 경계 검사(tests/test_team_boundaries.py)가 `origin/main...HEAD` 로 변경
+          # 파일을 구한다. 기본값 1 이면 PR 실행에 main 이 없어 그 검사가 한 번도
+          # 대조하지 못하고 BLOCKED 였다 (#241). 사용자 승인 2026-10-25.
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065  # v5

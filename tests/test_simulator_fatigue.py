@@ -184,7 +184,9 @@ class TestDecayCurve(unittest.TestCase):
     def test_population_positive_share_falls_and_negative_share_does_not(self) -> None:
         rule = self.p.repeat_exposure
         self.assertGreater(rule.positive_decay_pct, 0, "감쇠가 꺼진 config 로는 이 검사가 의미 없다")
-        self.assertGreater(rule.negative_max_pct, self.p.negative_scale_pct)
+        # #196: 배율이 상한(100)이면 반복 노출이 Negative 를 더 늘리지 않는다 — 늘지 않되 줄지도 않는다. 증가 모양은
+        # TestDecayShapeIsPinned 가 배율 40 · 상한 60 으로 따로 고정한다.
+        grows = rule.negative_max_pct > self.p.negative_scale_pct
         for tid in ARMS:
             curve = [treatment.response_mix(42, self.customers, tid, n) for n in self.N]
             positive = [mix[treatment.POSITIVE] for mix in curve]
@@ -193,7 +195,10 @@ class TestDecayCurve(unittest.TestCase):
                 self.assertEqual(positive, sorted(positive, reverse=True))
                 self.assertEqual(negative, sorted(negative))
                 self.assertLess(positive[1], positive[0])
-                self.assertLess(negative[0], negative[-1])
+                if grows:
+                    self.assertLess(negative[0], negative[-1])
+                else:
+                    self.assertEqual(negative[0], negative[-1])
                 for mix in curve:
                     self.assertEqual(len(self.customers), sum(mix.values()))
 
@@ -210,25 +215,25 @@ class TestDecayCurve(unittest.TestCase):
 
 
 # seed 42 · 5,000명 small(Day 0 Trait) 전원이 앞선 노출 n 번 뒤 그 처치를 받을 때의 (Positive, Neutral, Negative) 인원.
-# DR-183-repeat-exposure 의 반응 유형 표(n = 0..3, sim-0.6 계수)와 같은 표본이다 — #196 에서 Negative 배율 70 · 상한 90 으로
-# 다시 계산했다. n = 4 는 Negative 상한(90%), n = 7 은 Positive
+# DR-183-repeat-exposure 의 반응 유형 표(n = 0..3, sim-0.6 계수)와 같은 표본이다 — #196 에서 Negative 배율 · 상한 100 으로
+# 다시 계산했다(배율 · 상한 100 — Negative 는 노출 수와 무관하게 같다). n = 7 은 Positive
 # 바닥(첫 노출의 50%)에 처음 닿는 자리라 그 너머(n = 8)까지 고정해 감쇠의 모양 전체를 잡는다.
 RESPONSE_MIX_GOLDEN: dict[str, tuple[tuple[int, int, int], ...]] = {
     "T1": (
-        (2015, 2000, 985), (1766, 2186, 1048), (1547, 2336, 1117), (1382, 2445, 1173), (1221, 2542, 1237),
-        (1098, 2665, 1237), (982, 2781, 1237), (923, 2840, 1237), (923, 2840, 1237),
+        (1825, 1799, 1376), (1631, 1993, 1376), (1451, 2173, 1376), (1311, 2313, 1376), (1178, 2446, 1376),
+        (1060, 2564, 1376), (945, 2679, 1376), (887, 2737, 1376), (887, 2737, 1376),
     ),
     "T2": (
-        (2112, 1903, 985), (1856, 2096, 1048), (1621, 2262, 1117), (1440, 2387, 1173), (1280, 2483, 1237),
-        (1152, 2611, 1237), (1044, 2719, 1237), (978, 2785, 1237), (978, 2785, 1237),
+        (1917, 1707, 1376), (1711, 1913, 1376), (1519, 2105, 1376), (1368, 2256, 1376), (1239, 2385, 1376),
+        (1115, 2509, 1376), (1009, 2615, 1376), (944, 2680, 1376), (944, 2680, 1376),
     ),
     "T3": (
-        (2059, 1956, 985), (1837, 2115, 1048), (1622, 2261, 1117), (1442, 2385, 1173), (1255, 2508, 1237),
-        (1119, 2644, 1237), (1010, 2753, 1237), (942, 2821, 1237), (942, 2821, 1237),
+        (1879, 1745, 1376), (1700, 1924, 1376), (1528, 2096, 1376), (1374, 2250, 1376), (1216, 2408, 1376),
+        (1087, 2537, 1376), (982, 2642, 1376), (915, 2709, 1376), (915, 2709, 1376),
     ),
     "T4": (
-        (2288, 1727, 985), (2029, 1923, 1048), (1801, 2082, 1117), (1579, 2248, 1173), (1399, 2364, 1237),
-        (1250, 2513, 1237), (1135, 2628, 1237), (1064, 2699, 1237), (1064, 2699, 1237),
+        (2086, 1538, 1376), (1882, 1742, 1376), (1693, 1931, 1376), (1501, 2123, 1376), (1353, 2271, 1376),
+        (1212, 2412, 1376), (1102, 2522, 1376), (1034, 2590, 1376), (1034, 2590, 1376),
     ),
 }
 
@@ -243,19 +248,25 @@ class TestDecayShapeIsPinned(unittest.TestCase):
     def test_probabilities_match_hand_computed_integers(self) -> None:
         p = params.active()
         rule = p.repeat_exposure
-        self.assertEqual((10, 50, 5, 90), (
+        self.assertEqual((10, 50, 5, 100), (
             rule.positive_decay_pct, rule.positive_floor_pct, rule.negative_step_pct, rule.negative_max_pct
         ))
-        self.assertEqual((70, 100), (p.negative_scale_pct, p.positive_scale_pct))
+        self.assertEqual((100, 100), (p.negative_scale_pct, p.positive_scale_pct))
         # 800,000 × 0.9ⁿ (정수 내림) — 0.9⁷ = 0.478 < 0.5 이므로 n = 7 부터 바닥 400,000.
         self.assertEqual(
             [800_000, 720_000, 648_000, 583_200, 524_880, 472_392, 425_152, 400_000, 400_000],
             [treatment.positive_ppm(800_000, n, p) for n in range(9)],
         )
-        # 500,000 × min(70 + 5n, 90)% (#196: 배율 40 → 70, 상한 60 → 90).
+        # 500,000 × min(100 + 5n, 100)% — #196 에서 배율이 상한(100)이라 반복 노출이 Negative 를 더 늘리지 않는다.
+        self.assertEqual([500_000] * 7, [treatment.negative_ppm(500_000, n, p) for n in range(7)])
+        # 가산 step · 상한의 모양은 지금 config 에서 드러나지 않으므로 배율 40 · 상한 60 으로 따로 고정한다.
+        doc = config_document()
+        doc["behavior"]["treatment"]["negative_scale_pct"] = 40
+        repeat_block(doc)["negative_max_pct"] = 60
+        stepped = params.Params(genconfig.parse(json.dumps(doc, ensure_ascii=False)))
         self.assertEqual(
-            [350_000, 375_000, 400_000, 425_000, 450_000, 450_000, 450_000],
-            [treatment.negative_ppm(500_000, n, p) for n in range(7)],
+            [200_000, 225_000, 250_000, 275_000, 300_000, 300_000, 300_000],
+            [treatment.negative_ppm(500_000, n, stepped) for n in range(7)],
         )
 
     def test_population_mix_matches_the_golden_table(self) -> None:

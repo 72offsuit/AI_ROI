@@ -33,10 +33,16 @@ from src.simulator._internal.world import behavior_traits
 ARMS = treatment.ARMS
 
 
+def _round_div(numerator: int, denominator: int) -> int:
+    """정수 나눗셈 반올림(0.5 는 +∞ 쪽). `denominator > 0` 전제 — 분자의 부호와 무관하게 같은 규칙이라 음수 평균도
+    한쪽으로 치우치지 않는다(호출처의 분모는 모두 고객 수다)."""
+    return (2 * numerator + denominator) // (2 * denominator)
+
+
 def _bp(numerator: int, denominator: int) -> int | None:
     if denominator <= 0:
         return None
-    return (numerator * 10_000 + denominator // 2) // denominator
+    return _round_div(numerator * 10_000, denominator)
 
 
 def _count(values) -> int:
@@ -59,7 +65,7 @@ def _block(rows: list[dict[str, object]], p: params.Params) -> dict[str, object]
         "churn_rate_bp": _bp(_count(1 - r["outcomes"]["T0"]["purchased"] for r in rows), n),
         "ate_bp": {t: _bp(_count(r["tau_purchase"][t] for r in rows), n) for t in ARMS[1:]},
         "ate_net_profit_krw": {
-            t: (_count(r["tau_net_profit"][t] for r in rows) // n if n else None) for t in ARMS[1:]
+            t: (_round_div(_count(r["tau_net_profit"][t] for r in rows), n) if n else None) for t in ARMS[1:]
         },
         "coupon_use_definition": "쿠폰 처치군(T2·T3) 전체 중 유효기간 안 사용 — 분모 = 평가 고객 전원",
         "coupon_use_bp": {
@@ -114,18 +120,19 @@ def evaluate(
         "eligible_customers": len(eligible),
         # 판정값 — 이탈률은 ①, 처치 지표는 ②.
         "churn_rate_bp": churn_block["churn_rate_bp"],
-        **{key: treatment_block[key] for key in _TREATMENT_KEYS},
+        **{key: value for key, value in treatment_block.items() if key not in _CHURN_KEYS},
         "active42": {"customers": len(active), **churn_block},
         "eligible_spec41": {"customers": len(eligible), **treatment_block},
     }
     # 참고값: Trait 반응 성향 Negative 비율(전 고객). 4분면 Sleeping Dog 과 정의가 달라 판정하지 않는다.
+    # Negative 는 처치 종류와 무관한 고객 단위 성향이라(treatment.response_type) 어느 팔로 물어도 같다 — T1 로 묻는다.
     population = world["customers"]
     negative = _count(
         1 for c in population
         if treatment.response_type(world["seed"], c["customer_id"], behavior_traits(c), "T1", p)
         == treatment.NEGATIVE
     )
-    result["negative_response_trait_bp_reference"] = _bp(negative, len(population))
+    result["negative_response_customer_bp_reference"] = _bp(negative, len(population))
     judged_churn, active_treatment = _split(_checks(churn_block, p))
     spec_churn, judged_treatment = _split(_checks(treatment_block, p))
     reference = [{**c, "name": "active42_" + c["name"], "role": "참고"} for c in active_treatment] + [
@@ -135,11 +142,9 @@ def evaluate(
     return result, {"active42": rows, "eligible_spec41": spec_rows}
 
 
-# 처치 지표 — ② 모집단으로 판정한다(DR-194).
-_TREATMENT_KEYS = (
-    "ate_bp", "ate_net_profit_krw", "coupon_use_definition", "coupon_use_bp",
-    "coupon_use_among_buyers_bp_reference", "potential_outcome_quadrants", "response_mix_bp",
-)
+# `_block` 의 키 중 처치 지표가 아닌 것. 나머지는 모두 처치 지표라 ② 모집단 값이 최상위에 올라간다(DR-194) —
+# `_block` 에 처치 지표가 늘어도 손으로 목록을 고칠 필요가 없다(#245 리뷰).
+_CHURN_KEYS = frozenset({"evaluated_customers", "churn_rate_bp"})
 
 
 def _split(checks: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:

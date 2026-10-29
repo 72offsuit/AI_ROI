@@ -5,8 +5,10 @@
   proposed  `random_forest`        (class_weight=balanced_subsample)
             `hist_gb`              HistGradientBoosting (class_weight=balanced)
 
-평가: Stratified 5-Fold. fold 마다 ROC-AUC · PR-AUC · F1 · Lift@10% 를 구해 mean/std.
-  - **F1 임계는 학습 fold 에서만 정한다** — 학습 fold 내부 3-fold OOF 확률에서 F1 최대 임계.
+평가: Stratified K-Fold(``config/model_config.yaml`` churn.cv_folds, 기본 5). fold 마다 ROC-AUC · PR-AUC ·
+F1 · Lift@10% 를 구해 mean/std. 하이퍼파라미터 · fold 수도 그 파일에서 온다(#206).
+  - **F1 임계는 학습 fold 에서만 정한다** — 학습 fold 내부 OOF(churn.threshold_inner_folds, 기본 3) 확률에서
+    F1 최대 임계.
     (학습 fold 의 in-sample 확률로 정하면 숲 모형은 과신해 임계가 무의미해진다.)
   - 대치·이상치 절단(`make_preprocessor`)은 파이프라인 안에서 학습 fold 로만 fit 한다.
   - Lift@10% = 검증 fold 상위 10% 의 이탈률 / 검증 fold 이탈률.
@@ -24,14 +26,17 @@ from typing import Callable
 import numpy as np
 import pandas as pd
 
+from src.decision.config import load_model_config
 from src.decision.features.sprint_table import LABEL_DEF, make_preprocessor, model_columns
 
 BASELINES = ("rule_recency", "logistic_regression")
 PROPOSED = ("random_forest", "hist_gb")
 MODEL_NAMES = BASELINES + PROPOSED
-N_SPLITS = 5
-INNER_SPLITS = 3
-SHAP_SAMPLE = 500
+#: config/model_config.yaml `churn` (#206). 값은 그 파일 한 곳에만 있다 — 여기에 숫자를 다시 쓰지 않는다.
+CONFIG = load_model_config().churn
+N_SPLITS = CONFIG.cv_folds
+INNER_SPLITS = CONFIG.threshold_inner_folds
+SHAP_SAMPLE = CONFIG.shap_sample
 
 
 # ── 모델 ────────────────────────────────────────────────────────────────────
@@ -71,7 +76,10 @@ class RecencyRule:
 
 
 def make_model(name: str, seed: int):
-    """이름 → 미학습 추정기. 대치·절단은 파이프라인 안(학습 데이터로만 fit)."""
+    """이름 → 미학습 추정기. 대치·절단은 파이프라인 안(학습 데이터로만 fit).
+
+    하이퍼파라미터는 ``CONFIG.models[name]``(config/model_config.yaml), ``random_state`` 는 ``seed`` 다.
+    """
     from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
@@ -79,17 +87,16 @@ def make_model(name: str, seed: int):
 
     if name == "rule_recency":
         return RecencyRule()
+    params = CONFIG.models
     if name == "logistic_regression":
         return make_pipeline(make_preprocessor(), StandardScaler(),
-                             LogisticRegression(class_weight="balanced", max_iter=2000, C=0.5))
+                             LogisticRegression(**params["logistic_regression"]))
     if name == "random_forest":
         return make_pipeline(make_preprocessor(), RandomForestClassifier(
-            n_estimators=300, min_samples_leaf=3, class_weight="balanced_subsample",
-            n_jobs=-1, random_state=seed))
+            **params["random_forest"], random_state=seed))
     if name == "hist_gb":
         return make_pipeline(make_preprocessor(), HistGradientBoostingClassifier(
-            learning_rate=0.05, max_iter=300, max_leaf_nodes=15, l2_regularization=1.0,
-            class_weight="balanced", early_stopping=False, random_state=seed))
+            **params["hist_gb"], random_state=seed))
     raise ValueError(f"알 수 없는 모델: {name!r} (허용: {MODEL_NAMES})")
 
 
@@ -194,7 +201,7 @@ def fold_indices(y: np.ndarray, seed: int) -> list[tuple[np.ndarray, np.ndarray]
 # ── 평가 ────────────────────────────────────────────────────────────────────
 
 def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
-    """Baseline 2 + 제안 2 를 같은 Stratified 5-Fold 로 평가한다. 형식은 모듈 설명 참조."""
+    """Baseline 2 + 제안 2 를 같은 Stratified K-Fold(``N_SPLITS``)로 평가한다. 형식은 모듈 설명 참조."""
     X, yv = _prepare(X, y)
     folds = fold_indices(yv, seed)
     models = []
@@ -223,7 +230,7 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
         entry = {"name": name, "kind": _kind(name),
                  "cv": {key: _summary(values) for key, values in per_fold.items()},
                  "threshold": {"rule": ("학습 fold F1 최대 경과일(days)" if name == "rule_recency"
-                                        else "학습 fold 내부 3-fold OOF F1 최대 확률"),
+                                        else f"학습 fold 내부 {INNER_SPLITS}-fold OOF F1 최대 확률"),
                                "per_fold": [float(t) for t in thresholds]}}
         models.append(entry)
 
@@ -303,7 +310,7 @@ def fit_best_churn(X: pd.DataFrame, y, seed: int, *, eval_result: dict | None = 
     factory = lambda: make_model(name, seed)  # noqa: E731
     threshold = _threshold_from_train(factory, X, yv, seed)
     return ChurnModel(name=name, estimator=factory().fit(X, yv), threshold=threshold,
-                      features=list(X.columns), threshold_rule="학습 데이터 내부 3-fold OOF F1 최대")
+                      features=list(X.columns), threshold_rule=f"학습 데이터 내부 {INNER_SPLITS}-fold OOF F1 최대")
 
 
 def predict_churn_proba(model: ChurnModel, X: pd.DataFrame) -> pd.Series:

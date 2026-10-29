@@ -56,7 +56,10 @@
     "sys": [
       "src/decision/**",
       "src/orchestration/**",
+      "src/main.py",
       "config/decision*.yaml",
+      "config/model_config.yaml",
+      "config/experiment_config.yaml",
       "config/strategy*.yaml",
       "config/budget*.yaml",
       "tests/test_decision*.py",
