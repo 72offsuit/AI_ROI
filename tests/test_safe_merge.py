@@ -11,6 +11,7 @@
     체크를 대신하지 못한다 · 필수 목록이 비거나 못 읽으면 막는다 (PR #238 리뷰 R1~R3)
   - 트리거 · 잡 자리의 표기를 하나라도 못 읽으면 막는다 — 목록이 **일부만** 줄어도 같다.
     기대값은 파서와 따로 정한다(직접 적은 목록 · PyYAML 독립 읽기) (PR #238 리뷰 R4)
+  - 따옴표 · 흐름 표기의 연속 줄이 0열이어도 같다 — 블록의 끝으로 오인하지 않는다 (N1)
   - 우회 옵션이 생기지 않는다
 
 `gh` 는 부르지 않는다 — `subprocess.run` 을 바꿔 끼워 PR JSON 을 주입한다.
@@ -77,6 +78,32 @@ JOB_KEY_NOTATIONS = {
 EXTRA = ("대시보드 검증", "extra")
 
 
+def _with_extra_job(notation: str):
+    key = JOB_KEY_NOTATIONS[notation]
+    return lambda text: text.rstrip("\n") + f"\n\n  {key}\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
+
+
+def _replaced(old: str, new: str, then=lambda text: text):
+    return lambda text: then(text.replace(old, new, 1))
+
+
+#: N1 — 흐름 컬렉션 · 따옴표 스칼라의 연속 줄을 **0열**에 둔 `dashboard.yml` 사본(PR #238 리뷰의 반례 3건).
+#:   PyYAML 은 받아들이고 체크를 전부 읽는다. 예전 파서는 0열 줄을 블록의 끝으로 읽어 뒤의 트리거 · 잡을
+#:   오류 없이 빠뜨렸다. 값: (사본 변형, 필요한 체크, 미보고로 둘 체크).
+N1_CONTINUATIONS = {
+    "on 블록의 flow 목록": (
+        _replaced("    branches: [main]\n  pull_request:\n", "    branches: [main,\ndevelop]\n  pull_request:\n"),
+        REQUIRED_TODAY, DASHBOARD),
+    "잡의 flow 매핑": (
+        _replaced("    runs-on: ubuntu-latest\n", '    runs-on: ubuntu-latest\n    env: {A: "1",\nB: "2"}\n',
+                  _with_extra_job("평범한 키")),
+        [*REQUIRED_TODAY, EXTRA], EXTRA),
+    "step 이름의 따옴표 스칼라": (
+        _replaced("      - name: 경로 격리\n", '      - name: "경로\n격리"\n', _with_extra_job("평범한 키")),
+        [*REQUIRED_TODAY, EXTRA], EXTRA),
+}
+
+
 def _workflow_copy(directory: Path, mutate) -> None:
     """실제 워크플로우를 `directory` 에 베끼고 `dashboard.yml` 만 `mutate` 로 바꾼다."""
     for path in WORKFLOWS.glob("*.yml"):
@@ -92,11 +119,6 @@ def _workflow_copy(directory: Path, mutate) -> None:
 def _with_trigger(notation: str):
     old, new = TRIGGER_NOTATIONS[notation]
     return lambda text: text.replace(old, new, 1)
-
-
-def _with_extra_job(notation: str):
-    key = JOB_KEY_NOTATIONS[notation]
-    return lambda text: text.rstrip("\n") + f"\n\n  {key}\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
 
 
 def _yaml_reading(directory: Path) -> tuple[list[tuple[str, str]], list[str]]:
@@ -286,6 +308,43 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                     continue
                 self.assertEqual(sorted([*REQUIRED_TODAY, EXTRA]), required)
 
+    def test_a_continuation_at_column_zero_keeps_every_check_or_blocks(self) -> None:
+        """N1 — 연속 줄이 0열이어도 필수 체크가 하나도 빠지지 않거나, `WorkflowError` 로 막는다."""
+        for label, (mutate, needed, _) in N1_CONTINUATIONS.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, mutate)
+                if yaml is not None:  # PyYAML 이 받아들이고 전부 읽는 사본이어야 반례다
+                    self.assertEqual(sorted(needed), _yaml_reading(d)[0])
+                try:
+                    required = sorted(safe_merge.required_checks(d))
+                except safe_merge.WorkflowError:
+                    continue
+                self.assertEqual(sorted(needed), required)
+
+    def test_plain_and_block_scalars_are_not_mistaken_for_open_nodes(self) -> None:
+        """N1 대조군 — 여러 줄 표기를 막는 검사가 평범한 스칼라 속 따옴표 · 괄호와 블록 스칼라(`run: |`)
+        내용을 열린 표기로 오인하면 정상 PR 이 병합되지 못한다."""
+        text = (
+            "name: P\non:\n  pull_request:\njobs:\n"
+            "  p:\n    name: \"P: 잡\"  # 따옴표 이름\n"
+            "    if: ${{ github.event_name == 'pull_request' }}\n"
+            "    runs-on: ubuntu-latest  # it's\n"
+            "    env: &shared {A: \"1\", B: '2'}\n"
+            "    steps:\n"
+            "      - name: don't [panic\n"
+            "        run: |\n          {\n            echo \"it's [ {\n          } > out.txt\n          'x\n"
+            "      - name: 'it''s'\n        run: >-\n          echo '\n"
+            "      - name: \"a\\\"b\"\n"
+            "      - |\n        literal \"\n"
+            "  second:\n    name: 둘째\n")
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "p.yml").write_text(text, encoding="utf-8")
+            if yaml is not None:  # 대조군이 실제로 올바른 YAML 이어야 한다
+                self.assertEqual([("P", "P: 잡"), ("P", "둘째")], _yaml_reading(d)[0])
+            self.assertEqual([("P", "P: 잡"), ("P", "둘째")], safe_merge.required_checks(d))
+
     def test_quoted_keys_items_and_trailing_comments_are_read(self) -> None:
         """R4 — 막는 것만으로는 부족하다. 읽기로 한 표기는 실제로 읽혀야 정상 PR 이 병합된다."""
         with tempfile.TemporaryDirectory() as tmp:
@@ -374,7 +433,23 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                     ("event-value.yml", "name: J\non:\n  pull_request: [opened]\njobs:\n  j:\n    name: x\n"),
                     ("merge-key-job.yml", "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n  <<: *shared\n"),
                     ("inline-job.yml", "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n  k: {runs-on: x}\n"),
-                    ("odd-job-indent.yml", "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n   k:\n    name: y\n")):
+                    ("odd-job-indent.yml", "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n   k:\n    name: y\n"),
+                    # N1 — 0열 줄이 최상위 키가 아니면 블록의 끝으로 읽지 않는다
+                    ("column-zero-in-on.yml",
+                     "name: J\non:\n  push:\n    branches: main\ndevelop\n  pull_request:\njobs:\n  j:\n    name: x\n"),
+                    ("column-zero-in-jobs.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    steps:\n      - name: a\nb\n  k:\n    name: y\n"),
+                    # N1 — 여러 줄 따옴표 스칼라 · 흐름 컬렉션은 들여쓰기와 무관하게 여는 줄에서 막는다
+                    ("indented-multiline-flow.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: {A: 1,\n      B: 2}\n  k:\n    name: y\n"),
+                    ("anchored-multiline-flow.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: &e {A: 1,\nB: 2}\n  k:\n    name: y\n"),
+                    ("escaped-single-quote.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    steps:\n      - name: 'it''s\n"
+                     "        x'\n  k:\n    name: y\n"),
+                    ("escaped-double-quote.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    steps:\n      - name: \"a\\\"\n"
+                     "        b\"\n  k:\n    name: y\n")):
                 with self.subTest(name=name):
                     for old in d.glob("*.yml"):
                         old.unlink()
@@ -463,6 +538,7 @@ class TestMainWiring(unittest.TestCase):
         """R4 — 배선까지: 표기만 바꾼 정의에서 그 체크가 미보고이면 종료 0 이 아니고 병합 호출 0회."""
         cases = [(f"트리거 {n}", _with_trigger(n), REQUIRED_TODAY, DASHBOARD) for n in TRIGGER_NOTATIONS]
         cases += [(f"잡 키 {n}", _with_extra_job(n), [*REQUIRED_TODAY, EXTRA], EXTRA) for n in JOB_KEY_NOTATIONS]
+        cases += [(f"N1 {n}", *case) for n, case in N1_CONTINUATIONS.items()]
         for label, mutate, needed, missing in cases:
             with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
                 d = Path(tmp)

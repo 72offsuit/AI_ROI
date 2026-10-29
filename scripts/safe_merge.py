@@ -19,7 +19,8 @@ GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 *
      체크로 보고됐다. 아직 뜨지 않은 체크는 실패도 성공도 아니어서, 보고된 것만 보면
      통과로 보인다 — 푸시 직후가 그 상태다. 필수 잡은 정확한 (워크플로우, 잡) 쌍으로만
      찾는다. 필수 목록이 비었거나 읽지 못하면 막는다 — 워크플로우 하나 · 잡 하나만 읽지
-     못해도 막는다(목록이 조용히 줄면 그 체크는 안 떠도 병합된다).
+     못해도 막는다(목록이 조용히 줄면 그 체크는 안 떠도 병합된다). 여러 줄에 걸친 따옴표 ·
+     흐름 표기는 어디에 있든 막는다 — 연속 줄이 0열이면 블록이 끝난 것처럼 보인다(N1).
      필수 목록은 **이 스크립트가 놓인 체크아웃**(작업 폴더가 아니다)의 워크플로우에서 읽는다 —
      최신 `main` 체크아웃에서 실행한다. 이름 변경 처리는 docs/GIT_WORKFLOW.md §5.1.
   ③ 보고된 체크가 **전부** `SUCCESS` 다. `SKIPPED` · `NEUTRAL` · 진행 중은 통과가 아니다.
@@ -111,6 +112,107 @@ def _event(text: str, where: str) -> str:
     return name
 
 
+def _quote_end(line: str, start: int) -> int:
+    """`line[start]` 에서 연 따옴표가 닫히는 위치. 줄 안에서 안 닫히면 -1.
+
+    작은따옴표 안의 `''` 와 큰따옴표 안의 `\\` 이스케이프는 닫는 따옴표가 아니다."""
+    quote, i = line[start], start + 1
+    while i < len(line):
+        if quote == '"' and line[i] == "\\":
+            i += 2
+            continue
+        if line[i] == quote:
+            if quote == "'" and line[i + 1:i + 2] == "'":
+                i += 2
+                continue
+            return i
+        i += 1
+    return -1
+
+
+def _check_one_line_nodes(line: str, where: str) -> None:
+    """한 줄 안에서 따옴표 스칼라와 흐름 컬렉션(`[…]` · `{…}`)이 전부 닫히는지 본다.
+
+    ★ 여러 줄에 걸친 것은 읽지 않고 `WorkflowError` 다(PR #238 리뷰 N1). 이어지는 줄이 0열이면
+      블록이 거기서 끝난 것처럼 보여, 뒤의 트리거 · 잡이 오류 없이 필수에서 빠진다.
+    스칼라가 시작되는 자리(줄 처음 · `- ` · `? ` · `: ` 뒤, 흐름 안의 `[` · `{` · `,` 뒤,
+    앵커 · 태그 뒤)의 따옴표 · 괄호만 표시로 본다. `${{ … }}` · `don't` 처럼 평범한 스칼라
+    속의 문자는 글자다.
+    """
+    depth, start, i = 0, True, _indent(line)
+    while i < len(line):
+        c = line[i]
+        if c in " \t":
+            i += 1
+            continue
+        if c == "#" and line[i - 1:i] in ("", " ", "\t"):
+            break  # 끝 주석
+        if start and c in "'\"":
+            end = _quote_end(line, i)
+            if end < 0:
+                raise WorkflowError(f"{where}: 따옴표 스칼라가 줄 안에서 닫히지 않는다 — "
+                                    f"여러 줄 따옴표 스칼라는 읽지 않는다: {line.strip()!r}")
+            i, start = end + 1, False
+            continue
+        if c in "[{" and (start or depth):
+            depth, start = depth + 1, True
+        elif c in "]}" and depth:
+            depth, start = depth - 1, False
+        elif c == "," and depth:
+            start = True
+        elif c == ":" and (line[i + 1:i + 2] in ("", " ", "\t") or (depth and line[i + 1] in ",]}")):
+            start = True
+        elif start and not depth and c in "-?" and line[i + 1:i + 2] in ("", " ", "\t"):
+            pass  # 블록 목록 항목 · 복합 키 표시 — 다음 자리도 스칼라 시작이다
+        elif start and c in "&!":
+            while i < len(line) and line[i] not in " \t":
+                i += 1  # 앵커 · 태그 — 그 뒤가 값이다
+            continue
+        else:
+            start = False
+        i += 1
+    if depth:
+        raise WorkflowError(f"{where}: 흐름 컬렉션이 줄 안에서 닫히지 않는다 — "
+                            f"여러 줄 `[…]` · `{{…}}` 는 읽지 않는다: {line.strip()!r}")
+
+
+#: 블록 스칼라 표시 — `|` · `>` 와 들여쓰기 · chomping 표시.
+_BLOCK_SCALAR = re.compile(r"[|>](?:[1-9][+-]?|[+-][1-9]?)?")
+
+
+def _block_scalar_parent(line: str) -> int | None:
+    """`키: |` · `- |` 처럼 블록 스칼라를 여는 줄이면, 내용이 그보다 깊어야 하는 기준 열. 아니면 None."""
+    column, rest, dash = _indent(line), line.lstrip(" "), None
+    while (item := re.match(r"-(?:\s+|$)", rest)):
+        dash, column, rest = column, column + item.end(), rest[item.end():]
+    pair = _mapping_key(rest)
+    value = pair[1] if pair else rest
+    if not _BLOCK_SCALAR.fullmatch(_strip_comment(value)):
+        return None
+    return column if pair or dash is None else dash
+
+
+def _check_no_multiline_nodes(lines: list[str], where: str) -> None:
+    """파일 전체에서 여러 줄 따옴표 스칼라 · 흐름 컬렉션을 막는다. 블록 스칼라(`run: |`)의 내용은 글자라 보지 않는다."""
+    content_deeper_than: int | None = None
+    for number, line in enumerate(lines, 1):
+        if content_deeper_than is not None:
+            if not line.strip() or _indent(line) > content_deeper_than:
+                continue
+            content_deeper_than = None
+        if not line.strip() or line.lstrip().startswith("#"):
+            continue
+        _check_one_line_nodes(line, f"{where} {number}행")
+        content_deeper_than = _block_scalar_parent(line)
+
+
+def _top_level_boundary(line: str, where: str) -> None:
+    """블록을 끝내는 0열 줄은 최상위 키여야 한다. 아니면 블록의 끝을 확인하지 못한 것이다(PR #238 리뷰 N1)."""
+    if _mapping_key(line) is None:
+        raise WorkflowError(f"{where} 뒤의 0열 줄이 최상위 키가 아니다 — 블록이 어디서 끝나는지 "
+                            f"확인하지 못했다: {line.strip()!r}")
+
+
 def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
     """(`pull_request` 로 도는가, **그 이벤트에** 붙은 경로 필터).
 
@@ -121,6 +223,8 @@ def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
       읽는 것: `on:` 한 줄 값(이벤트 하나 · 한 줄 `[…]` 목록) · 블록 목록(`- 이벤트`) ·
       블록 매핑(`이벤트:`) — 키와 항목의 따옴표, 끝 주석 포함. 인라인 매핑 `{…}` · 여러 줄
       `[…]` · `jobs:` 뒤의 `on:` 은 읽지 않고 실패한다.
+    ★ 블록은 다음 0열 줄에서 끝나는데, 그 줄이 최상위 키가 아니면 끝을 확인하지 못한 것이라
+      실패한다(PR #238 리뷰 N1). 여러 줄 따옴표 · 흐름 표기는 `_scan` 이 먼저 막는다.
     """
     start = next((i for i, line in enumerate(head) if _ON_KEY.match(line)), None)
     if start is None:
@@ -137,7 +241,10 @@ def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
             events = [_event(inline, "`on:` 의 값")]
         return "pull_request" in events, []
     block = [line for line in head[start + 1:] if line.strip()]
-    block = block[:next((k for k, line in enumerate(block) if _indent(line) == 0), len(block))]
+    end = next((k for k, line in enumerate(block) if _indent(line) == 0), len(block))
+    if end < len(block):
+        _top_level_boundary(block[end], "`on:` 블록")
+    block = block[:end]
     if not block:
         raise WorkflowError("`on:` 아래에 이벤트가 없다")
     child = _indent(block[0])
@@ -186,6 +293,7 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
     excluded: list[tuple[str, str]] = []
     for path in files:
         text = path.read_text(encoding="utf-8")
+        _check_no_multiline_nodes(text.splitlines(), path.name)
         head_text, sep, body = text.partition("\njobs:")
         # 주석 줄은 트리거 판정에서 뺀다 — 설명문 속 "pull_request" 에 속지 않게.
         head = [line for line in head_text.splitlines() if not line.lstrip().startswith("#")]
@@ -205,6 +313,7 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             if _indent(line) == 0:
+                _top_level_boundary(line, f"{path.name}: `jobs:` 블록")
                 break  # 다음 최상위 키
             if _indent(line) < 4:
                 # ★ 잡 자리(2칸)의 줄은 전부 잡 ID 로 읽혀야 한다(PR #238 리뷰 R4). 못 읽은 줄을
@@ -238,6 +347,9 @@ def required_checks(workflow_dir: Path = WORKFLOWS) -> list[tuple[str, str]]:
     `push.paths` 처럼 다른 이벤트의 필터는 필수 목록을 줄이지 않는다.
     읽을 파일이 없거나, 트리거 · 잡 자리의 줄을 **하나라도** 읽지 못하면 `WorkflowError` 다 —
     일부만 읽고 나머지를 버리면 버린 만큼 필수 목록이 조용히 준다(PR #238 리뷰 R4).
+    파일 어디에든 여러 줄에 걸친 따옴표 스칼라 · 흐름 컬렉션(`[…]` · `{…}`)이 있거나, 블록을
+    끝내는 0열 줄이 최상위 키가 아니어도 `WorkflowError` 다(N1). 블록 스칼라(`run: |`)의 내용은
+    글자라 보지 않는다.
     """
     return _scan(workflow_dir)[0]
 
