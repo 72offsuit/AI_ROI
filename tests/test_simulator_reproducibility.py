@@ -48,11 +48,13 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "d0cbfc345a5efa2707e1de03593e1c4359336da752ded1c46ebb91e38bcfe255",
         1160,
     ),
-    # #183(sim-gen-v4): 구매 의향·이탈 onset·쿠폰 받기 보정으로 14일 창의 이벤트가 바뀐다. 반복 노출 감쇠·게이트 탈락
-    # 회복 분리는 이 창에서 발화하지 않는다(각각 tests/test_simulator_fatigue.py · test_simulator_gate_recovery.py).
+    # #183(sim-gen-v4): 구매 의향 보정으로 이 14일 창의 이벤트가 sim-0.5 와 달라진다. 이탈 onset·쿠폰 받기는 이 창의 이벤트를
+    # 바꾸지 않고 상태에 든 config 다이제스트(상태 sha)로만 드러난다 — onset 은 GATE_GOLDEN(test_simulator_behavior.py)이,
+    # 쿠폰 받기는 CONFIG_PINS 가 고정한다. 반복 노출 감쇠·게이트 탈락 회복 분리는 이 창에서 발화하지 않는다(각각
+    # tests/test_simulator_fatigue.py · test_simulator_gate_recovery.py).
     "sim-0.6": (
         "6d96c7def2a4818963165c1f20d3e8ebbc44b7e0003d1316f69871d93d24f6ed",
-        "e77089a96146e1f5b13674ee1a31b1aaccba229327c52372a1ea36ee6fde513b",
+        "65e275c9ae40f5bbe23a3149e04ea74a41e89876bb09193d7aab07136149ce3f",
         1213,
     ),
 }
