@@ -13,11 +13,13 @@
 
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
 from src.measurement import config_loader as cl
+from src.measurement import kpi
 from src.measurement.errors import ConfigError
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -228,6 +230,56 @@ class TestConfigErrors(unittest.TestCase):
         )
         with self.assertRaises(ConfigError):
             investment.monthly_amortized_krw()
+
+
+class TestChurnDefinitionLoader(unittest.TestCase):
+    """CFG-001 `churn` 블록 — 측정 계층은 이 블록만 읽고 같은 파일의 다른 블록은 버린다."""
+
+    _CHURN = {"at_risk_days": 21, "no_purchase_days": 35, "no_login_days": 50, "rule_operator": "AND"}
+
+    def _write(self, document: object) -> Path:
+        tmp = tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False, encoding="utf-8")
+        tmp.write(json.dumps(document))
+        tmp.close()
+        self.addCleanup(lambda: Path(tmp.name).unlink(missing_ok=True))
+        return Path(tmp.name)
+
+    def test_reads_only_the_churn_block(self) -> None:
+        path = self._write({"hidden_traits": [{"name": "secret_trait"}], "churn": self._CHURN})
+        definition = cl.load_churn_definition(path)
+        self.assertEqual(kpi.ChurnDefinition(**self._CHURN), definition)
+
+    def test_repository_churn_block_is_pinned_to_the_code_default(self) -> None:
+        # 정본 config 와 kpi 기본값이 같아야 definition 을 넘기지 않는 호출자와 게시가 같은 정의를 쓴다.
+        # 값을 바꾸려면 config·kpi 기본값·DR-183-churn-config 를 함께 고치고 GATE 1 에서 잠근다.
+        definition = cl.load_churn_definition(REPO_ROOT / cl.DEFAULT_CHURN_CONFIG)
+        self.assertEqual(kpi.DEFAULT_CHURN_DEFINITION, definition)
+        self.assertEqual(
+            {"at_risk_days": 28, "no_purchase_days": 42, "no_login_days": 60, "rule_operator": "OR"},
+            dict(definition.params_used()),
+        )
+
+    def test_errors_are_config_errors_that_never_echo_other_blocks(self) -> None:
+        cases = {
+            "블록 없음": {"hidden_traits": [{"name": "secret_trait"}]},
+            "키 남음": {"hidden_traits": [], "churn": {**self._CHURN, "extra": 1}},
+            "키 빠짐": {"hidden_traits": [], "churn": {k: v for k, v in self._CHURN.items() if k != "rule_operator"}},
+            "값 위반": {"hidden_traits": [], "churn": {**self._CHURN, "rule_operator": "XOR"}},
+            "객체 아님": {"hidden_traits": [], "churn": [1, 2]},
+        }
+        for name, document in cases.items():
+            with self.subTest(name), self.assertRaises(ConfigError) as caught:
+                cl.load_churn_definition(self._write(document))
+            message = str(caught.exception)
+            self.assertNotIn("hidden_traits", message)
+            self.assertNotIn("secret_trait", message)
+
+    def test_unparsable_or_missing_file_is_a_config_error(self) -> None:
+        broken = self._write("x")
+        broken.write_text("{not json", encoding="utf-8")
+        for path in (broken, REPO_ROOT / "config" / "does_not_exist.yaml"):
+            with self.subTest(path=path.name), self.assertRaises(ConfigError):
+                cl.load_churn_definition(path)
 
 
 if __name__ == "__main__":

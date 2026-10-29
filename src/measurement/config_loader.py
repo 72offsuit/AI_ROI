@@ -35,14 +35,17 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from src.measurement import kpi
 from src.measurement import schema as sc
 from src.measurement.errors import ConfigError
 
 DEFAULT_ECONOMIC_CONFIG = Path("config/economic_config.yaml")
+DEFAULT_CHURN_CONFIG = Path("config/simulator_config.yaml")
 
 
 def yaml_available() -> bool:
@@ -190,6 +193,51 @@ def load_economic_config(path: Path | str = DEFAULT_ECONOMIC_CONFIG) -> Economic
         cost_accounting=_build_cost_accounting(raw, path),
         product_generation=_build_product_generation(raw, path),
     )
+
+
+_CHURN_KEYS = frozenset({"at_risk_days", "no_purchase_days", "no_login_days", "rule_operator"})
+
+
+def load_churn_definition(path: Path | str = DEFAULT_CHURN_CONFIG) -> kpi.ChurnDefinition:
+    """CFG-001 `churn` 블록을 읽어 운영 이탈 정의로 돌려준다 (FR-10 · SIM-009).
+
+    ★ 이 파일에는 측정 계층이 알면 안 되는 생성 모수가 함께 있다. `churn` 블록만
+    꺼내고 나머지는 읽은 즉시 버린다 — 반환값·오류 메시지에 다른 블록의 이름이나 값을
+    싣지 않는다. 파일 내용이 JSON 문법이라 PyYAML 없이 읽는다.
+
+    폴백이 없다. 파일·블록이 없거나, 키가 남거나 빠지거나, 값이 규칙에 어긋나면
+    `ConfigError` 다 — 기본 정의로 조용히 계산하면 어떤 이탈 정의를 썼는지 아무도
+    모르는 이탈률이 나온다.
+    """
+    path = Path(path)
+    if not path.exists():
+        raise ConfigError(
+            f"이탈 정의 config 를 찾을 수 없다: {path} — 저장소 루트에서 실행하고 있는지 "
+            f"확인하거나 경로를 지정한다(기본 {DEFAULT_CHURN_CONFIG})."
+        )
+    try:
+        document = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise ConfigError(
+            f"{path} 를 읽거나 JSON 으로 해석할 수 없다 ({type(error).__name__}) — "
+            "이탈 정의를 부분적으로 읽어 계속 진행하지 않는다."
+        ) from None
+    block = document.get("churn") if isinstance(document, Mapping) else None
+    del document
+    if not isinstance(block, Mapping):
+        raise ConfigError(
+            f"{path} 에 `churn` 블록(객체)이 없다 — CFG-001 이 요구하는 이탈 정의다. "
+            f"{sorted(_CHURN_KEYS)} 를 가진 `churn` 객체를 추가한다."
+        )
+    if set(block) != _CHURN_KEYS:
+        raise ConfigError(
+            f"{path} 의 `churn` 블록 키가 다르다 — 빠짐 {sorted(_CHURN_KEYS - set(block))}, "
+            f"남음 {sorted(set(block) - _CHURN_KEYS)}. 정확히 {sorted(_CHURN_KEYS)} 여야 한다."
+        )
+    try:
+        return kpi.ChurnDefinition(**block)
+    except ValueError as error:
+        raise ConfigError(f"{path} 의 `churn` 블록 값이 규칙에 어긋난다 — {error}") from None
 
 
 

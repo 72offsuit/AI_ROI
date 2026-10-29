@@ -9,6 +9,13 @@ EVENT_ID_SCHEME = "sim-event-id-v1"
 
 _TWO_64 = 1 << 64
 
+# 날짜와 무관한 고객 고정 스트림의 day 열쇠. 행동 스트림은 관측 일수(day ≥ 0)를 쓰므로 음수를 용도마다 하나씩
+# 나눠 서로·행동과 겹치지 않게 한다. 열쇠 형식은 그대로라 RNG_SCHEME 은 올리지 않는다.
+# 값을 바꾸면 그 스트림의 추첨이 전부 바뀐다 — simulator_version 과 골든을 함께 올린다.
+GENERATION_DAY = -1  # 페르소나·Trait·가입일 생성(persona)
+RESPONSE_DAY = -2  # 처치 반응 유형(treatment)
+REPURCHASE_DAY = -3  # 생애 첫 구매 뒤 재구매 게이트(engine)
+
 
 def canonical_json(value: object) -> bytes:
     return json.dumps(

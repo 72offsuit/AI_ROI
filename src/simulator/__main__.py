@@ -6,12 +6,14 @@ from pathlib import Path
 
 from src.measurement import sink as sk
 from src.simulator import api
-from src.simulator._internal import guardrails, runtime, storage
+from src.simulator._internal import guardrails, profiles, runtime, storage
 from src.simulator._internal import world as wd
 
 EXIT_OK = 0
 EXIT_SIMULATOR_ERROR = 1
 EXIT_BAD_ARGUMENT = 2
+
+_CUSTOMERS_HELP = "생략하면 프로파일 기본 고객 수(기본값이 없는 프로파일은 생략할 수 없다)"
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -23,7 +25,7 @@ def _parser() -> argparse.ArgumentParser:
 
     init = commands.add_parser("init", help="새 세계를 만들고(선택적으로 N 일 진행) 상태를 저장한다")
     init.add_argument("--seed", type=int, required=True)
-    init.add_argument("--customers", type=int, required=True)
+    init.add_argument("--customers", type=int, default=None, help=_CUSTOMERS_HELP)
     init.add_argument("--profile", required=True)
     init.add_argument("--output-root", required=True)
     init.add_argument("--days", type=int, default=0)
@@ -42,24 +44,43 @@ def _parser() -> argparse.ArgumentParser:
         help="새 세계를 워밍업한 시점에서 이탈률·ATE·쿠폰 사용률·Sleeping Dog 을 검사해 숨김 영역에 쓰고 표로 낸다",
     )
     checks.add_argument("--seed", type=int, required=True)
-    checks.add_argument("--customers", type=int, required=True)
+    checks.add_argument("--customers", type=int, default=None, help=_CUSTOMERS_HELP)
     checks.add_argument("--profile", default="small")
     checks.add_argument("--warmup-days", type=int, required=True)
     checks.add_argument("--sample", type=int, default=None)
     checks.add_argument("--output-root", required=True)
 
     for command in (init, advance, resume, checks):
+        command.add_argument(
+            "--config", default=None,
+            help="실험용 생성 설정 파일. 생략하면 기본 설정. 이어가는 명령은 그 상태를 만든 파일을 다시 준다",
+        )
         command.add_argument("--hidden-root", default=None, help="테스트·도구 전용")
     return parser
 
 
+def _customers(args: argparse.Namespace) -> int:
+    """`--customers` 를 생략했으면 프로파일 기본 고객 수를 쓴다. 기본값이 없는(모르는 것 포함) profile 이면
+    `ValueError`(종료 코드 2)다. API 는 기본값을 쓰지 않는다(DR-S3-p6-signup U11)."""
+    if args.customers is not None:
+        return args.customers
+    found = profiles.default_customers(args.profile)
+    if found is None:
+        raise ValueError(f"프로파일 {args.profile!r} 은 기본 고객 수가 없다 — --customers 를 준다")
+    return found
+
+
 def _guardrails(args: argparse.Namespace) -> int:
-    api.init(args.seed, args.customers, args.profile, args.output_root, hidden_root=args.hidden_root)
+    customers = _customers(args)
+    api.init(
+        args.seed, customers, args.profile, args.output_root,
+        hidden_root=args.hidden_root, config_path=args.config,
+    )
     summary = api.advance(args.warmup_days)
     session = runtime.active
     orders = storage.read_orders(session.hidden_root, str(summary.run_id)) or []
     result, rows = guardrails.evaluate(session.world, orders, args.sample)
-    result.update(seed=args.seed, customers=args.customers, profile=args.profile,
+    result.update(seed=args.seed, customers=customers, profile=args.profile,
                   warmup_days=args.warmup_days, simulator_version=session.world["simulator_version"])
     root = storage.ground_truth_root(session.hidden_root).joinpath("guardrails")
     name = f"guardrails-{session.world['world_id']}-d{args.warmup_days}"
@@ -97,15 +118,17 @@ def main(argv: list[str] | None = None) -> int:
             return _guardrails(args)
         if args.command == "init":
             api.init(
-                args.seed, args.customers, args.profile, args.output_root,
-                hidden_root=args.hidden_root,
+                args.seed, _customers(args), args.profile, args.output_root,
+                hidden_root=args.hidden_root, config_path=args.config,
             )
         else:
             state_id = (
                 args.state_id if args.command == "resume"
                 else _head_state_id(args.output_root, args.hidden_root)
             )
-            api.load_state(state_id, args.output_root, hidden_root=args.hidden_root)
+            api.load_state(
+                state_id, args.output_root, hidden_root=args.hidden_root, config_path=args.config
+            )
         api.advance(args.days)
         print(api.save_state())
     except api.SimulatorError as error:
