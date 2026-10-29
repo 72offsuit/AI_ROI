@@ -660,8 +660,6 @@ class TestOutcomeObservationContract(unittest.TestCase):
             "load_events": lambda root: frames[root].copy(),
             "build_feature_table": table.build_feature_table, "build_outcomes": table.build_outcomes,
             "summarize_outcomes": table.summarize_outcomes,
-            "outcome_observation_status": table.outcome_observation_status,
-            "verify_event_run": verify,
             "evaluate_churn_models": lambda X, y, seed: {"models": [], "best_proposed": None},
             "fit_best_churn": lambda X, y, seed: SimpleNamespace(name="fixture"),
             "evaluate_temporal_holdout": temporal, "plan": lambda *args: {},
@@ -704,6 +702,7 @@ class TestOutcomeObservationContract(unittest.TestCase):
             selected = selected | {"uplift"}
         with tempfile.TemporaryDirectory() as temp, contextlib.ExitStack() as stack:
             patches = {"sim": api, "decision_fn": decision, "decision_available": lambda name: name in fns,
+                                "verify_event_run": verify,
                                 "branch_economics": economics, "provenance": lambda: {"fixture": True},
                                 "write_results": write}
             if not real_margin:

@@ -60,6 +60,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from src.decision.config import load_experiment_config, load_model_config
+from src.decision.observation_contract import outcome_observation_status, verify_event_run
 from src.measurement import contracts as mc
 from src.simulator import api as sim
 
@@ -119,11 +120,9 @@ RESULT_FILES: tuple[str, ...] = (
 # 지연 로딩 대상 — (모듈, 함수). 시그니처는 이슈 #146 의 합의다.
 DECISION_API: dict[str, tuple[str, str]] = {
     "load_events": ("src.decision.data", "load_events"),
-    "verify_event_run": ("src.decision.data", "verify_event_run"),
     "build_feature_table": ("src.decision.features.sprint_table", "build_feature_table"),
     "build_outcomes": ("src.decision.features.sprint_table", "build_outcomes"),
     "summarize_outcomes": ("src.decision.features.sprint_table", "summarize_outcomes"),
-    "outcome_observation_status": ("src.decision.features.sprint_table", "outcome_observation_status"),
     "evaluate_churn_models": ("src.decision.churn", "evaluate_churn_models"),
     "fit_best_churn": ("src.decision.churn", "fit_best_churn"),
     "predict_churn_proba": ("src.decision.churn", "predict_churn_proba"),
@@ -489,7 +488,7 @@ class EventReader:
                                     or history_proof.get("status") != "ok"):
             raise NotRun("분기 실행 ID와 검증된 history 머리 근거가 필요하다")
         if run_id is not None:
-            proof = decision_fn("verify_event_run")(root, run_id, history_evidence=history_proof)
+            proof = verify_event_run(root, run_id, history_evidence=history_proof)
             if proof.get("status") != "ok":
                 raise NotRun(f"이벤트 원시 읽기 근거 미충족: {proof.get('reason')}")
         try:
@@ -649,7 +648,7 @@ def outcome_observation(summary: Any, raw_root: Path, metrics: Mapping[str, Any]
         detail = f"측정 실행 기록 읽기 실패: {type(error).__name__}: {error}"
     generated, purchase_detail = purchase_generated(metrics)
     if read_evidence is None:
-        read_evidence = decision_fn("verify_event_run")(raw_root, run_id)
+        read_evidence = verify_event_run(raw_root, run_id)
     return {"start": getattr(summary, "start", None), "end": getattr(summary, "end", None),
             "run_id": run_id, "rejected": rejected, "write_detail": detail,
             "read_complete": (read_evidence.get("status") == "ok" and read_evidence.get("run_id") == run_id
@@ -1525,7 +1524,7 @@ def run(config: SprintConfig) -> Path:
                     read_evidence = {"status": "not_run", "run_id": summary.run_id, "reason": str(reason)}
                 observation = outcome_observation(summary, branch_root, raw_metrics, read_evidence)
                 entry["event_read_evidence"] = read_evidence
-                observation_status = decision_fn("outcome_observation_status")(
+                observation_status = outcome_observation_status(
                     ctx["t2"], LABEL_WINDOW_DAYS, observation)
                 # 측정 계산은 그대로 보존하되 같은 저장 자료를 쓰는 정식 입력은 창·쓰기 성공이 필요하다.
                 economics_observed = (observation_status["label_window_complete"]

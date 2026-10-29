@@ -30,6 +30,11 @@ _SKIP_REASON = "BLOCKED: numpy/pandas/scikit-learn 미설치"
 if _DEPS:
     import pandas as pd
 
+    if importlib.util.find_spec("pyarrow") is not None:
+        # sys.modules 가짜 주입 전에 지연 Parquet 등록을 끝낸다. patch.dict가 새 모듈만
+        # 제거하고 Arrow의 전역 등록은 남기면 다음 시험에서 pandas.period가 중복된다.
+        pd.DataFrame({"fixture": [0]}).to_parquet(io.BytesIO(), index=False)
+
     from src.measurement import sink
     from src.decision.features.sprint_table import outcome_observation_status, summarize_outcomes
     from src.decision.data import verify_event_run

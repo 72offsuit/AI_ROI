@@ -37,6 +37,7 @@ import numpy as np
 import pandas as pd
 
 from src.measurement.schema import TIMEZONE, EventType
+from src.decision.observation_contract import normalize_index_time, outcome_observation_status
 
 EVENT_TYPES = frozenset(item.value for item in EventType)
 VISITS = frozenset({"session_start", "return_visit"})
@@ -138,11 +139,8 @@ def model_columns(X: pd.DataFrame) -> list[str]:
 
 
 def to_index_time(index_time) -> pd.Timestamp:
-    """T0. tz 가 없으면 스키마 단일 타임존(KST)으로 해석한다 — 이벤트가 아니라 설정값이다."""
-    stamp = pd.Timestamp(index_time)
-    if stamp.tzinfo is None:
-        stamp = stamp.tz_localize(TIMEZONE)
-    return stamp.tz_convert(TIMEZONE)
+    """T0의 기존 공개 진입점. 정규화는 필수 관측 계약 구현에 위임한다."""
+    return normalize_index_time(index_time)
 
 
 def _clean(events: pd.DataFrame) -> pd.DataFrame:
@@ -432,54 +430,6 @@ def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
         label_def=LABEL_DEF,
     )
     return table
-
-
-def outcome_observation_status(index_time, window_days: int, observation: Mapping | None) -> dict:
-    """공개 관측·쓰기 근거의 판정. 이벤트 최댓값으로 근거를 만들지 않는다 (#179)."""
-    t0 = to_index_time(index_time)
-    if type(window_days) is not int or window_days <= 0:
-        raise ValueError("라벨 창 일수는 양의 정수여야 한다")
-    end = t0 + pd.Timedelta(days=window_days)
-    evidence = observation if isinstance(observation, Mapping) else {}
-    reasons = []
-    bounds = {}
-    for key in ("start", "end"):
-        try:
-            stamp = pd.Timestamp(evidence.get(key))
-            bounds[key] = stamp.tz_convert(TIMEZONE) if not pd.isna(stamp) and stamp.tzinfo else None
-        except (TypeError, ValueError, OverflowError):
-            bounds[key] = None
-    start, observed_end = bounds["start"], bounds["end"]
-    complete = start is not None and observed_end is not None and start <= t0 and observed_end >= end
-    if not complete:
-        reasons.append("LABEL_WINDOW_INCOMPLETE_OR_UNKNOWN")
-    run_id = evidence.get("run_id")
-    if not isinstance(run_id, str) or not run_id.strip():
-        reasons.append("RUN_ID_MISSING")
-    rejected = evidence.get("rejected")
-    writing_complete = type(rejected) is int and rejected == 0 and "RUN_ID_MISSING" not in reasons
-    if type(rejected) is not int or rejected < 0:
-        reasons.append("WRITE_EVIDENCE_UNKNOWN")
-    elif rejected > 0:
-        reasons.append("WRITE_REJECTED")
-    generated = evidence.get("purchase_generated")
-    read_complete = evidence.get("read_complete") is True
-    if not read_complete:
-        reasons.append("EVENT_READ_INCOMPLETE_OR_UNKNOWN")
-    if generated is not True:
-        reasons.append("PURCHASE_NOT_OBSERVABLE" if generated is False else "PURCHASE_OBSERVATION_UNKNOWN")
-    return {
-        "status": "not_run" if reasons else "ok", "reasons": reasons,
-        "run_id": run_id if isinstance(run_id, str) else None,
-        "rejected": rejected if type(rejected) is int and rejected >= 0 else None,
-        "label_window_complete": bool(complete), "writing_complete": writing_complete,
-        "read_complete": read_complete, "read_detail": evidence.get("read_detail"), "root": evidence.get("root"),
-        "purchase_generated": generated if type(generated) is bool else None,
-        "window_start": t0.isoformat(), "window_end": end.isoformat(),
-        "observation_start": None if start is None else start.isoformat(),
-        "observation_end": None if observed_end is None else observed_end.isoformat(),
-        "write_detail": evidence.get("write_detail"), "purchase_detail": evidence.get("purchase_detail"),
-    }
 
 
 def build_outcomes(events: pd.DataFrame, index_time, window_days: int = 42, *,
