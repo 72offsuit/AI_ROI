@@ -13,6 +13,8 @@
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 import tempfile
 import unittest
@@ -784,6 +786,70 @@ class TestRepresentativeScene(unittest.TestCase):
         for gate_id, met in unmet.items():
             with self.subTest(gate=gate_id):
                 self.assertIn(met, (False, None))
+
+
+@unittest.skipUnless(yaml_available(), NEEDS_YAML)
+class TestChurnDefinitionReachesThePublication(unittest.TestCase):
+    """#183 ① — `churn_config_path`·`--churn-config` 의 정의가 지표·알림까지 전달된다.
+
+    기본 정의(OR·42/60)와 다른 결과가 나오는 장면이어야 전달 누락이 잡힌다: 45일 전에
+    사고 21일 전에 접속한 고객은 OR 에서 이탈, AND 에서 이탈 아님이다.
+    """
+
+    INDEX = date(2025, 11, 15)
+    AND_RULE = {"at_risk_days": 28, "no_purchase_days": 42, "no_login_days": 60, "rule_operator": "AND"}
+
+    def setUp(self) -> None:
+        self._tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self._tmp.name)
+        with EventSink(self.root / "raw") as sink:
+            sink.write_events([
+                simulator_event(sc.EventType.PURCHASE, day=1, order_id="O20251001-000001"),
+                simulator_event(sc.EventType.SESSION_START, day=25),
+            ])
+        self.and_config = self.root / "churn_and.yaml"
+        self.and_config.write_text(json.dumps({"churn": self.AND_RULE}), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self._tmp.cleanup()
+
+    def _kpi_report(self, out: Path) -> dict:
+        return json.loads(next(out.rglob("kpi_report.json")).read_text(encoding="utf-8"))
+
+    def _simulator(self, report: dict, name: str) -> dict:
+        metric = next(m for m in report["metrics"] if m["name"] == name)
+        return metric["value"]["by_source"]["simulator"]
+
+    def _assert_and_rule(self, report: dict) -> None:
+        churn = self._simulator(report, "churn_rate")
+        self.assertEqual(0.0, churn["value"])
+        self.assertEqual("AND", churn["params_used"]["rule_operator"])
+        self.assertEqual(1.0, self._simulator(report, "retention_rate")["value"])
+        derived = self._simulator(report, "derived_state_count[churn]")
+        self.assertEqual((0, "AND"), (derived["value"], derived["params_used"]["rule_operator"]))
+        notice = next(n for n in report["notices"] if n["code"] == "CHURN_THRESHOLDS_UNCONFIRMED")
+        self.assertIn(" AND ", notice["message"])
+
+    def test_default_definition_counts_the_lapsed_buyer_as_churned(self) -> None:
+        pub.publish(source_root=self.root / "raw", output_root=self.root / "default",
+                    config_path=REPO_ROOT / "config/economic_config.yaml", index_date=self.INDEX)
+        self.assertEqual(1.0, self._simulator(self._kpi_report(self.root / "default"), "churn_rate")["value"])
+
+    def test_churn_config_path_reaches_every_dependent_metric_and_notice(self) -> None:
+        pub.publish(source_root=self.root / "raw", output_root=self.root / "and",
+                    config_path=REPO_ROOT / "config/economic_config.yaml",
+                    churn_config_path=self.and_config, index_date=self.INDEX)
+        self._assert_and_rule(self._kpi_report(self.root / "and"))
+
+    def test_cli_flag_reaches_the_publication(self) -> None:
+        with contextlib.redirect_stdout(io.StringIO()):
+            code = pub.main([
+                "--source", str(self.root / "raw"), "--out", str(self.root / "cli"),
+                "--config", str(REPO_ROOT / "config/economic_config.yaml"),
+                "--churn-config", str(self.and_config), "--index-date", self.INDEX.isoformat(),
+            ])
+        self.assertEqual(0, code)
+        self._assert_and_rule(self._kpi_report(self.root / "cli"))
 
 
 @unittest.skipUnless(yaml_available(), NEEDS_YAML)

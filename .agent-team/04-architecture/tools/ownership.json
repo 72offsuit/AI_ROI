@@ -397,6 +397,26 @@
       "why": "도입 결정 D-20 시에만. Andrew 는 리뷰만 하고 쓰지 않는다"
     },
     {
+      "pattern": "Dockerfile",
+      "owner": "phillip",
+      "why": "이미지 초안 (#207) — Python 3.12 런타임 + 대시보드 Node 빌드 단계. compose 와 같은 패키징 소유"
+    },
+    {
+      "pattern": ".dockerignore",
+      "owner": "phillip",
+      "why": "빌드 컨텍스트 제외 (#207). ★ Plan/ 을 빼 private 기획 문서를 이미지에 굽지 않는다 · 감사 로그 서명 키를 이미지에 굽지 않는다(PR #240 R1)"
+    },
+    {
+      "pattern": "tests/test_docker_context.py",
+      "owner": "phillip",
+      "why": ".gitignore 의 _state 비밀값 줄 ↔ .dockerignore 대조 (PR #240 리뷰 R1). .dockerignore 와 같은 소유"
+    },
+    {
+      "pattern": "tests/test_runtime_declaration.py",
+      "owner": "phillip",
+      "why": "Python 지원 판 선언(requirements.txt 머리) ↔ Dockerfile · CI · 설치된 Requires-Python 대조 (#207). 의존성 소유와 같은 자리"
+    },
+    {
       "pattern": "e2e/**",
       "owner": "matthias",
       "why": "W6 QA 독립 E2E 하네스. dashboard/e2e/(Andrew 소유, 스크린샷 증거용)와 별개 — 실행 중인 앱을 밖에서 재검증한다. 재생성물은 e2e/.gitignore 가 제외"
@@ -445,6 +465,16 @@
       "pattern": "tests/test_orchestration*.py",
       "owner": "team",
       "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
+    },
+    {
+      "pattern": "tests/test_decision_config.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). #206 model/experiment config 로더. 패턴(test_decision*)으로 두면 리드 소유 test_decision_records.py 와 겹친다"
+    },
+    {
+      "pattern": "src/main.py",
+      "owner": "team",
+      "why": "main CLI 디스패처 (#206 · SRS SYS-004). 시스템 팀 소유(docs/team_boundaries.json owned.sys) — run_sprint 와 의사결정 모듈만 부른다"
     },
     {
       "pattern": "docs/feature_dictionary.md",

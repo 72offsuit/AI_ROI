@@ -37,8 +37,10 @@ docs/data_spec.pdf
 # (dependency-plan.md §5).
 dashboard/node_modules/
 dashboard/.next/
-# Plan/DESIGN.md 에서 tokens:generate 로 재생성한다. 생성물은 커밋하지 않는다.
-dashboard/src/styles/tokens.generated.css
+# ★ dashboard/src/styles/tokens.generated.css 는 **커밋한다** (#207 — "생성물을 커밋하지 않는다"의
+#   문서화된 예외). 정본 Plan/DESIGN.md 는 private 서브모듈이라 Plan 없는 클론·CI·컨테이너에서
+#   빌드가 ENOENT 로 죽었다. Plan 이 있으면 predev·prebuild 가 tokens:check 로 정본과 대조한다.
+#   근거: docs/decisions/DR-207-plan-free-tokens.md
 
 # ── 게시물 (results/) — 결정 D-17 ⑶ 승인 (사용자, 2026-09-11)
 #

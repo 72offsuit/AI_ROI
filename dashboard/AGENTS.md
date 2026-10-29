@@ -108,7 +108,7 @@ M-06 §4.16 이 추가한다. **그 전까지 `ok`·`unconfirmed` 셀은 `계약
 
 **검사:**
 ```bash
-grep -rn '#[0-9A-Fa-f]\{3,6\}' src                      # 0건 (DG-17)
+grep -rn '#[0-9A-Fa-f]\{3,6\}' src --exclude=tokens.generated.css   # 0건 (DG-17) — 생성물은 정본 값의 사본이라 제외 (#207)
 grep -rn 'node:fs\|from "fs"' src | grep -v lib/artifacts # 0건 (DG-6)
 ```
 
@@ -180,10 +180,14 @@ grep -rn 'node:fs\|from "fs"' src | grep -v lib/artifacts # 0건 (DG-6)
 **토큰 값의 정본은 `Plan/DESIGN.md` 하나다.** 생성기 코드가 두 벌인 것은 **코드 중복이지 값 중복이 아니다**(PRD §69 가 금지한 것은 값 중복).
 
 ```bash
-npm run tokens:generate   # Plan/DESIGN.md → src/styles/tokens.generated.css
-npm run tokens:check      # 정본과 다르면 실패 (predev·prebuild 가 강제)
+npm run tokens:generate   # Plan/DESIGN.md → src/styles/tokens.generated.css (생성 후 커밋한다)
+npm run tokens:check      # 정본과 다르면 실패
+npm run tokens:prebuild   # predev·prebuild 가 부른다 — Plan 이 있으면 tokens:check, 없으면 "미실행" 알림 후 커밋본 사용
 npm run tokens:test       # 생성기 자체 검증 — 15 scenarios
 ```
+
+- ★ **`src/styles/tokens.generated.css` 는 커밋한다** (#207). 정본 `Plan/DESIGN.md` 가 private 서브모듈이라, gitignore 였을 때 Plan 없는 클론·CI·컨테이너에서 `npm run build` 가 `ENOENT` 로 죽었다(재현). 생성기가 결정론적이라 diff 는 DESIGN.md 가 바뀔 때만 생긴다. Plan 포인터를 올리면 `tokens:generate` 를 돌려 생성물을 **같은 커밋에** 넣는다. 근거: `docs/decisions/DR-207-plan-free-tokens.md`
+- ★ **커밋본 ↔ 정본 대조는 CI 에 없다** — `tokens:test` 와 같은 이유(Plan 미체크아웃). Plan 이 있는 체크아웃의 `npm run dev`·`build` 가 그 대조다. `tokens:prebuild` 가 `미실행` 을 출력했다면 **대조하지 않은 것**이다
 
 - `scripts/` 4개 파일은 `Ecommerce_Service` 에서 **이식**했다. 각 파일 머리에 **출처 커밋 SHA + sha256** 이 있다
 - ★ **`scripts/tokens/verify.mjs` 는 원본과 한 줄이 다르다** (`Plan/DESIGN.md` → `../Plan/DESIGN.md`). 경로 깊이가 달라 그대로 두면 `ENOENT` 로 죽는다. 이유는 파일 머리 주석에 있다
@@ -226,8 +230,9 @@ npm run tokens:test       # 생성기 자체 검증 — 15 scenarios
 ## 9. 명령
 
 ```bash
-npm run dev            # :3001 (predev 가 토큰을 생성한다)
-npm run build          # prebuild 가 토큰을 생성한다
+npm run dev            # 127.0.0.1:3001 (predev 가 토큰을 대조한다 — Plan 이 없으면 커밋본)
+npm run build          # prebuild 가 토큰을 대조한다
+npm start              # 127.0.0.1:3001 (build 산출물)
 npm run tokens:check   # 토큰 드리프트 = 실패
 npm run tokens:test    # 15 scenarios
 npm run check:state-map # 상태 파생 + 0 채우기 불변식 25건
@@ -242,6 +247,7 @@ AIROI_RESULTS_DIR=$PWD/.fixtures/empty-sink/results AIROI_FIXTURE_MODE=1 npm run
 |---|---|
 | `AIROI_RESULTS_DIR` | 계약의 `results/` 가 가리킬 디렉터리. 기본값은 `dashboard/` 기준 `../results` |
 | `AIROI_FIXTURE_MODE` | 비어 있지 않고 `0` 이 아니면 **`표본 데이터 — 실측이 아닙니다` 배지**를 띄운다. ★ **표본을 실측처럼 보이게 하지 않는다** |
+| `AIROI_DASHBOARD_HOST` | `dev`·`start` 의 바인딩 주소(`scripts/serve.mjs`). 비어 있으면 **`127.0.0.1`** — 로컬에서는 밖으로 열지 않는다. 컨테이너는 `0.0.0.0`(Dockerfile 이 설정). 포트는 3001 고정 (#207) |
 
 ---
 

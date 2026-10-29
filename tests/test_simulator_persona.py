@@ -2,7 +2,8 @@
 
 - 로더: 정수만, 중복 키·미지 키 거부, 구성비 합 10000, 6종 이상, 수치 엔진이 검증한 모수 범위.
 - 생성 성질: 같은 seed → 같은 정체, 고객을 추가해도 기존 고객 불변, profile 무관, Trait 사이 독립.
-- 결속: config 가 바뀌면 옛 상태·계보·실행 중 세계가 명시 오류로 멈춘다. 판 관리는 CONFIG_PINS.
+- 결속: config 가 바뀌면 옛 상태·계보·실행 중 세계가 명시 오류로 멈춘다. 판 관리는 CONFIG_PINS(기본 경로 파일만).
+- 선택: 실험용 파일은 `genconfig.switch` 로 고르고, 동작이 실패하면 이전 선택으로 돌아간다(#183 ②).
 - 대조: Trait 이름이 측정 계약 이름과 겹치지 않고, `docs/persona_spec.md` 의 모수 표가 config 와 같다.
 
 분포 자체의 정합성은 `tests/test_simulator_trait_distribution.py` 가 본다.
@@ -13,6 +14,7 @@ from __future__ import annotations
 import copy
 import json
 import unittest
+from pathlib import Path
 from unittest import mock
 
 from src.measurement import kpi
@@ -37,6 +39,7 @@ CONFIG_PINS: dict[str, str] = {
     "sim-gen-v1": "e150e434d1abef461b9491f1e70f0902f83c4ef999d108a04e0e85bd79c19ccc",
     "sim-gen-v2": "49bfe06b2edaa9d45ca653d98175d7458b90e7707dca1d00f57a28f9e4d4006d",
     "sim-gen-v3": "66588097846aa9914aa57f62034a4d2d05bbe8cc66b2a01e3a89040b55df1157",
+    "sim-gen-v4": "ed02312576af07f0de6b9831216716a672ee2fdcad267604b2661e169d15f0ed",  # 미머지 판 덮어쓰기 예외 — DR-183-purchase-calibration
 }
 
 
@@ -74,7 +77,8 @@ class TestCurrentConfig(unittest.TestCase):
         self.assertEqual((800, 2700, 2200, 1800, 1500, 1000), config.ratios)
 
     def test_config_version_is_pinned_to_its_content(self) -> None:
-        config = genconfig.active()
+        # 판 고정은 기본 경로 파일에만 건다 — 실험용 파일(TestExperimentConfigSelection)은 대상이 아니다.
+        config = genconfig.load()
         self.assertIn(
             config.version, CONFIG_PINS,
             "생성 부분을 바꿨다면 config_version 을 올리고 CONFIG_PINS 에 새 다이제스트를 추가한다",
@@ -92,6 +96,27 @@ class TestCurrentConfig(unittest.TestCase):
         self.assertEqual(base, variant(lambda d: d.pop("notes")).digest)
         changed = variant(lambda d: trait_entry(d, "coupon_sensitivity")["mu_ppm"].__setitem__("loyal", 410000))
         self.assertNotEqual(base, changed.digest)
+
+    def test_digest_names_all_five_generation_keys(self) -> None:
+        self.assertEqual(
+            ("config_version", "personas", "hidden_traits", "behavior", "catalog"), genconfig.GENERATION_KEYS
+        )
+        for key in ("behavior", "catalog"):
+            with self.subTest(key=key):
+                # 블록에 키를 하나 더하면 Params 가 거부하므로, 다이제스트 함수에 직접 넣어 범위를 본다.
+                doc = document()
+                doc[key] = {**doc[key], "_probe": 1}
+                self.assertNotEqual(genconfig.digest(document()), genconfig.digest(doc))
+
+    def test_churn_block_is_accepted_and_left_out_of_the_digest(self) -> None:
+        # 측정 계층이 읽는 이탈 운영 정의다. 생성에 쓰지 않으므로 있어도 없어도 같은 세계다.
+        churn = {"at_risk_days": 30, "no_purchase_days": 60, "no_login_days": 30, "rule_operator": "and"}
+        with_churn = variant(lambda d: d.__setitem__("churn", churn))
+        without_churn = variant(lambda d: d.pop("churn", None))
+        self.assertEqual(without_churn.digest, with_churn.digest)
+        self.assertEqual(
+            with_churn.digest, variant(lambda d: d.__setitem__("churn", {**churn, "at_risk_days": 45})).digest
+        )
 
 
 class TestLoaderRejects(unittest.TestCase):
@@ -154,6 +179,11 @@ class TestLoaderRejects(unittest.TestCase):
         self.assert_edit_rejected(
             lambda d: trait_entry(d, "base_visit_frequency").__setitem__("shape_milli", 500), "범위"
         )
+
+    def test_churn_block_must_be_an_object(self) -> None:
+        for value in ([], "30", 30, None):
+            with self.subTest(value=value):
+                self.assert_edit_rejected(lambda d, v=value: d.__setitem__("churn", v), "churn")
 
     def test_not_json(self) -> None:
         self.assert_rejected("config_version: sim-gen-v1\n", "JSON")
@@ -483,6 +513,86 @@ class TestConfigBinding(SimulatorCase):
         with mock.patch.object(genconfig, "_ACTIVE", None), mock.patch.object(genconfig, "CONFIG_PATH", broken):
             with self.assertRaisesRegex(api.StateFormatError, "생성 설정"):
                 api.load_state(state_id, self.fresh_root("load"), hidden_root=self.hidden)
+
+
+class TestExperimentConfigSelection(SimulatorCase):
+    """`genconfig.switch` — 기본 경로가 아닌 파일을 고르는 길(#183 ②). 판 고정(CONFIG_PINS)은 받지 않는다."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        # 고른 파일이 다음 테스트의 활성 config 로 새지 않게 한다.
+        keep = mock.patch.multiple(genconfig, _ACTIVE=genconfig._ACTIVE, _ACTIVE_PATH=genconfig._ACTIVE_PATH)
+        keep.start()
+        self.addCleanup(keep.stop)
+
+    def write(self, edit, name: str = "experiment.yaml") -> Path:
+        doc = document()
+        edit(doc)
+        path = self.tmp / name
+        path.write_text(text_of(doc), encoding="utf-8")
+        return path
+
+    def test_experiment_file_with_the_same_version_name_is_not_pinned(self) -> None:
+        default = genconfig.load()
+        path = self.write(lambda d: d["behavior"]["visit"].__setitem__("scale_pct", d["behavior"]["visit"]["scale_pct"] + 1))
+        config = genconfig.switch(path, genconfig.active)
+        self.assertEqual(default.version, config.version)
+        self.assertNotEqual(default.digest, config.digest)
+
+    def test_successful_switch_keeps_the_new_selection(self) -> None:
+        path = self.write(lambda d: d.__setitem__("config_version", "sim-gen-experiment"))
+        self.assertEqual("done", genconfig.switch(path, lambda: "done"))
+        self.assertEqual("sim-gen-experiment", genconfig.active().version)
+        genconfig.switch(None, lambda: None)
+        self.assertEqual(genconfig.load().digest, genconfig.active().digest)
+
+    def test_none_and_the_default_path_both_mean_the_default(self) -> None:
+        by_none = genconfig.switch(None, genconfig.active)
+        by_path = genconfig.switch(str(genconfig.CONFIG_PATH), genconfig.active)
+        self.assertIs(by_none, by_path)
+        self.assertEqual(genconfig.CONFIG_NAME, genconfig.public_label(genconfig.CONFIG_PATH))
+        self.assertEqual(genconfig.EXPERIMENT_LABEL, genconfig.public_label(self.tmp / "x.yaml"))
+
+    def test_failing_action_restores_the_previous_selection(self) -> None:
+        before = genconfig.active()
+        path = self.write(lambda d: d.__setitem__("config_version", "sim-gen-experiment"))
+
+        def fail() -> None:
+            self.assertEqual("sim-gen-experiment", genconfig.active().version)
+            raise RuntimeError("동작 실패")
+
+        with self.assertRaises(RuntimeError):
+            genconfig.switch(path, fail)
+        self.assertIs(before, genconfig.active())
+
+    def test_unreadable_or_broken_file_leaves_the_selection_and_skips_the_action(self) -> None:
+        before = genconfig.active()
+        broken = self.write(lambda d: trait_entry(d, "marketing_fatigue")["mu_ppm"].__setitem__("loyal", 0), "broken.yaml")
+        for path in (broken, self.tmp / "nowhere.yaml"):
+            with self.subTest(path=path.name):
+                with self.assertRaises(genconfig.ConfigError) as caught:
+                    genconfig.switch(path, lambda: self.fail("동작을 부르면 안 된다"))
+                # 내부 예외(공개 경계에서는 __cause__)에는 준 경로가 실린다.
+                self.assertIn(str(path), str(caught.exception))
+                self.assertIs(before, genconfig.active())
+
+    def test_experiment_file_is_reread_each_time_it_is_selected(self) -> None:
+        # 같은 파일을 덮어쓰며 값을 바꿔 가는 실험이 한 프로세스 안에서 옛 값으로 돌면 안 된다.
+        path = self.write(lambda d: d.__setitem__("config_version", "sim-gen-experiment"))
+        first = genconfig.switch(path, genconfig.active)
+        self.write(lambda d: (d.__setitem__("config_version", "sim-gen-experiment"),
+                              d["behavior"]["visit"].__setitem__("scale_pct", d["behavior"]["visit"]["scale_pct"] + 2)))
+        second = genconfig.switch(path, genconfig.active)
+        self.assertNotEqual(first.digest, second.digest)
+        path.write_text("{not json", encoding="utf-8")
+        with self.assertRaises(genconfig.ConfigError):
+            genconfig.switch(path, genconfig.active)
+        self.assertIs(second, genconfig.active())
+
+    def test_default_file_is_read_once(self) -> None:
+        default = genconfig.switch(None, genconfig.active)
+        with mock.patch.object(genconfig, "load", side_effect=AssertionError("기본 파일을 다시 읽었다")):
+            self.assertIs(default, genconfig.switch(None, genconfig.active))
 
 
 class TestStateCarriesTheIdentity(SimulatorCase):

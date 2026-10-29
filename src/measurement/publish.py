@@ -56,8 +56,10 @@ from src.measurement import kpi
 from src.measurement import schema as sc
 from src.measurement import validate as dq
 from src.measurement.config_loader import (
+    DEFAULT_CHURN_CONFIG,
     DEFAULT_ECONOMIC_CONFIG,
     CostAccountingConfig,
+    load_churn_definition,
     load_economic_config,
 )
 from src.measurement.errors import (
@@ -726,9 +728,10 @@ _KPI_META: Mapping[str, dict[str, object]] = {
         "layer": "customer_kpi", "population": "P_buyer",
         "window": {"direction": "point_in_time", "label": "index_date 시점 상태"},
         "denominator_definition": "구매 이력 보유 고객 수",
-        "formula": "|{c : days_since_last_purchase(c,D) ≥ no_purchase_days}| / |P_buyer(D)|",
+        "formula": "|{c : (days_since_last_purchase(c,D) ≥ no_purchase_days) "
+                   "rule_operator (days_since_last_access(c,D) ≥ no_login_days)}| / |P_buyer(D)|",
         "definition_ref": "kpi-definition-v1.md §4",
-        "source_events": ["purchase"],
+        "source_events": ["purchase", "session_start"],
     },
     "retention_rate": {
         "layer": "customer_kpi", "population": "P_buyer",
@@ -736,7 +739,7 @@ _KPI_META: Mapping[str, dict[str, object]] = {
         "denominator_definition": "구매 이력 보유 고객 수 (churn_rate 와 동일 모집단)",
         "formula": "1 − churn_rate",
         "definition_ref": "kpi-definition-v1.md §4",
-        "source_events": ["purchase"],
+        "source_events": ["purchase", "session_start"],
     },
     "cohort_retention_rate": {
         "layer": "customer_kpi", "population": "cohort",
@@ -761,7 +764,7 @@ _KPI_META: Mapping[str, dict[str, object]] = {
         "denominator_definition": "D−L 시점 이탈 고객 수",
         "formula": "|{c : state(c,D−L)=churn ∧ purchase ∈ (D−L,D]}| / |{c : state(c,D−L)=churn}|",
         "definition_ref": "kpi-definition-v1.md §4",
-        "source_events": ["purchase"],
+        "source_events": ["purchase", "session_start"],
     },
     "purchase_frequency": {
         "layer": "customer_kpi", "population": "P_buyer",
@@ -907,7 +910,7 @@ _DERIVED_META: dict[str, object] = {
     "window": {"direction": "point_in_time", "label": "index_date 시점 상태"},
     "denominator_definition": "분모 없음 (합계)",
     "definition_ref": "kpi-definition-v1.md §6.1 · 리드 판정 G-8",
-    "source_events": ["purchase"],
+    "source_events": ["purchase", "session_start"],
 }
 
 
@@ -999,6 +1002,7 @@ def build_kpi_report(
     index_date: date,
     config: CostAccountingConfig,
     bundles: Mapping[str, ex.ExchangeBundle] | None = None,
+    churn: kpi.ChurnDefinition = kpi.DEFAULT_CHURN_DEFINITION,
 ) -> dict[str, object]:
     """V4 — 지표 가용성.
 
@@ -1009,12 +1013,14 @@ def build_kpi_report(
     def computations(exchange: ex.ExchangeBundle | None) -> dict[str, object]:
         """지표 계산표. 출처마다 **그 출처의 묶음**으로 만든다 (#117)."""
         return {
-            "churn_rate": lambda e: kpi.churn_rate(e, index_date=index_date),
-            "retention_rate": lambda e: kpi.retention_rate(e, index_date=index_date),
+            "churn_rate": lambda e: kpi.churn_rate(e, index_date=index_date, definition=churn),
+            "retention_rate": lambda e: kpi.retention_rate(
+                e, index_date=index_date, definition=churn
+            ),
             "cohort_retention_rate": lambda e: kpi.cohort_retention_rate(
                 e, index_date=index_date, month=1),
             "repurchase_rate": lambda e: kpi.repurchase_rate(e, index_date=index_date),
-            "winback_rate": lambda e: kpi.winback_rate(e, index_date=index_date),
+            "winback_rate": lambda e: kpi.winback_rate(e, index_date=index_date, definition=churn),
             "purchase_frequency": lambda e: kpi.purchase_frequency(
                 e, index_date=index_date),
             "purchase_interval": lambda e: kpi.purchase_interval(
@@ -1084,7 +1090,9 @@ def build_kpi_report(
             "value": {
                 "by_source": {
                     name: _metric(
-                        kpi.derived_state_count(list(e), index_date=index_date)[state]
+                        kpi.derived_state_count(
+                            list(e), index_date=index_date, definition=churn
+                        )[state]
                     )
                     for name, e in split.items()
                 }
@@ -1357,6 +1365,7 @@ def publish(
     source_root: Path = DEFAULT_SOURCE_ROOT,
     output_root: Path = DEFAULT_OUTPUT_ROOT,
     config_path: Path = DEFAULT_ECONOMIC_CONFIG,
+    churn_config_path: Path = DEFAULT_CHURN_CONFIG,
     exchange_roots: Mapping[EventSource, Path] | None = None,
     index_date: date | None = None,
     now: datetime | None = None,
@@ -1376,6 +1385,7 @@ def publish(
     #   넘기지 않는다 — 그것이 EC-9 의 타입 봉쇄이고, 여기서 전체 객체를 넘기면
     #   봉쇄가 무의미해진다.
     config = load_economic_config(config_path).cost_accounting
+    churn = load_churn_definition(churn_config_path)
 
     manifest = _read_manifest(source_root)
     events = list(read_events(source_root)) if (source_root / "events").exists() else []
@@ -1410,7 +1420,7 @@ def publish(
         "runs": lineage.runs,
         "head_run_id": latest_run_id(source_root),
     }
-    notices = _notices(config)
+    notices = _notices(config, churn)
     # ★ 계보를 게시물에 싣는다 (이슈 #99 ③). `runs/` 를 만들어 두고 산출물이
     #   말하지 않으면 아무도 보지 않고, 그러면 계보는 대조되지 않는 선언이 된다.
     if lineage.verification == "broken":
@@ -1438,7 +1448,7 @@ def publish(
         "field_coverage_report": build_field_coverage_report(events, split),
         "kpi_report": build_kpi_report(
             events, split, index_date=effective_index_date, config=config,
-            bundles=bundles,
+            bundles=bundles, churn=churn,
         ),
         "data_quality_report": quality,
         "freeze_status": build_freeze_status(),
@@ -1680,7 +1690,7 @@ def _latest_date(partition_dates: Sequence[date], *, now: datetime | None) -> da
     return (now or datetime.now(ct.KST)).astimezone(ct.KST).date()
 
 
-def _notices(config: CostAccountingConfig) -> list[ct.Notice]:
+def _notices(config: CostAccountingConfig, churn: kpi.ChurnDefinition) -> list[ct.Notice]:
     """가정을 산출물에 붙여 나른다 (P-12). **문서는 아무도 다시 열지 않는다.**"""
     notices = [
         ct.Notice(
@@ -1697,8 +1707,9 @@ def _notices(config: CostAccountingConfig) -> list[ct.Notice]:
         ),
         ct.Notice(
             "CHURN_THRESHOLDS_UNCONFIRMED", "assumption",
-            "이탈 임계값 28/42/60 은 가설값이다 — data_spec §5.1 확정 절차가 "
-            "시뮬레이터를 요구하고 C1 에 없다. 해당 지표는 unconfirmed 로 나간다",
+            f"이탈 정의(at_risk_days={churn.at_risk_days} · {churn.describe()})는 "
+            "가설값이다 — data_spec §5.1 확정 절차가 시뮬레이터를 요구하고 C1 에 없다. "
+            "해당 지표는 unconfirmed 로 나간다",
             reference="kpi-definition-v1.md §1.1 D-5",
         ),
     ]
@@ -1740,6 +1751,8 @@ def main(argv: Sequence[str] | None = None) -> int:
                         help="게시 대상 (기본 results)")
     parser.add_argument("--config", type=Path, default=DEFAULT_ECONOMIC_CONFIG,
                         help="경제 규칙 config (기본 config/economic_config.yaml)")
+    parser.add_argument("--churn-config", type=Path, default=DEFAULT_CHURN_CONFIG,
+                        help="이탈 정의 churn 블록이 있는 config (기본 config/simulator_config.yaml)")
     parser.add_argument("--exchange", type=Path, default=None,
                         help="커머스 교환 묶음 루트 (기본: --source 의 형제 commerce/)")
     parser.add_argument("--simulator-exchange", type=Path, default=None,
@@ -1753,7 +1766,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         outcome = publish(
             source_root=args.source, output_root=args.out,
-            config_path=args.config,
+            config_path=args.config, churn_config_path=args.churn_config,
             exchange_roots={
                 source: root for source, root in (
                     (EventSource.COMMERCE, args.exchange),

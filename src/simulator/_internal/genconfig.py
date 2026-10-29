@@ -4,20 +4,25 @@
 3.10 에서도 표준 `json` 으로 읽는다. 값은 정수만 받는다 — 소수·NaN·중복 키는 로드 단계에서 거부해
 "조용히 다른 세계"가 생기지 않게 한다(`DR-S2-trait-sampling` 3절).
 
-다이제스트는 생성에 쓰는 부분(`config_version`·`personas`·`hidden_traits`)의 정준 JSON sha256 이다.
-`notes` 같은 설명은 결과를 바꾸지 않으므로 넣지 않는다. 이 값이 상태의 `generation` 과 `world_id`
-에 결속돼, config 가 바뀌면 옛 상태·계보가 명시 오류로 거부된다.
+다이제스트는 생성에 쓰는 부분(`GENERATION_KEYS` — `config_version`·`personas`·`hidden_traits`·`behavior`·
+`catalog`)의 정준 JSON sha256 이다. 결과를 바꾸지 않는 블록(`notes`·`guardrails`·`churn`)은 넣지 않는다.
+이 값이 상태의 `generation` 과 `world_id` 에 결속돼, config 가 바뀌면 옛 상태·계보가 명시 오류로 거부된다.
+
+활성 config 는 프로세스에 하나다(`active`). 기본 경로(`CONFIG_PATH`) 대신 실험용 파일을 쓰려면 `switch` 로
+고른다. 판 고정(`tests/test_simulator_persona.py` `CONFIG_PINS`)은 기본 경로 파일에만 걸린다 — 실험 파일은
+판 이름이 같아도 내용이 달라도 되며, 그 구분은 다이제스트 결속이 맡는다.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Mapping
+from typing import Callable, Mapping, TypeVar
 
 from src.simulator._internal.rng import canonical_json
 
@@ -28,8 +33,9 @@ CONFIG_NAME = "config/simulator_config.yaml"
 # S4~S6(#143): behavior(행동·이탈·처치 반응 모수)와 catalog(상품 풀)도 생성 부분이다 — 다이제스트에 든다.
 GENERATION_KEYS = ("config_version", "personas", "hidden_traits", "behavior", "catalog")
 _REQUIRED_TOP = frozenset(GENERATION_KEYS)
-# guardrails 는 검사 범위라 생성 결과를 바꾸지 않는다 — 다이제스트에 넣지 않는다.
-_OPTIONAL_TOP = frozenset({"notes", "guardrails"})
+# guardrails 는 검사 범위, churn 은 측정 계층이 읽는 이탈 운영 정의라 생성 결과를 바꾸지 않는다 — 다이제스트에
+# 넣지 않는다. churn 의 의미 검증은 측정 계층이 하고 여기서는 객체인지만 본다.
+_OPTIONAL_TOP = frozenset({"notes", "guardrails", "churn"})
 _PERSONA_KEYS = frozenset({"id", "alias", "ratio_bp"})
 # 선택 키. 없으면 Day 0 가입이다(DR-S3-p6-signup).
 _PERSONA_OPTIONAL_KEYS = frozenset({"signup_day_range"})
@@ -197,7 +203,7 @@ def parse(text: str) -> GenerationConfig:
     personas = _personas(document["personas"])
     ids = tuple(p.id for p in personas)
     traits = _traits(document["hidden_traits"], ids)
-    for block in ("behavior", "catalog", "guardrails"):
+    for block in ("behavior", "catalog", "guardrails", "churn"):
         if not isinstance(document.get(block, {}), dict):
             raise ConfigError(f"{block} 는 객체여야 한다")
     config = GenerationConfig(
@@ -339,27 +345,75 @@ def _check_beta_shape(name: str, kappa_milli: int, by_persona: Mapping[str, int]
                 )
 
 
-def load(path: Path | None = None) -> GenerationConfig:
-    path = CONFIG_PATH if path is None else path
+# 공개 메시지에 싣는 실험 파일 표기. 호출자가 준 경로는 싣지 않는다 — 파일 이름에 숨은 이름이 들어갈 수 있다.
+EXPERIMENT_LABEL = "지정한 실험 설정 파일"
+
+
+def public_label(path: str | os.PathLike[str] | None) -> str:
+    """공개 오류 메시지에 싣는 config 이름. 기본 경로는 저장소 상대 이름, 실험 파일은 `EXPERIMENT_LABEL` 이다."""
+    return CONFIG_NAME if path is None or _is_default(path) else EXPERIMENT_LABEL
+
+
+def _is_default(path: str | os.PathLike[str]) -> bool:
+    return Path(os.fspath(path)).resolve() == CONFIG_PATH.resolve()
+
+
+def load(path: str | os.PathLike[str] | None = None) -> GenerationConfig:
+    """config 를 읽는다. 오류 메시지에는 준 경로를 그대로 싣는다 — 공개 경계는 이 예외를 `__cause__` 로만 둔다."""
+    name = CONFIG_NAME if path is None or _is_default(path) else os.fspath(path)
+    path = CONFIG_PATH if path is None else Path(os.fspath(path))
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as error:
-        raise ConfigError(f"{CONFIG_NAME} 를 읽지 못했다: {error.strerror or type(error).__name__}") from error
+        raise ConfigError(f"{name} 를 읽지 못했다: {error.strerror or type(error).__name__}") from error
     try:
         return parse(text)
     except ConfigError as error:
-        raise ConfigError(f"{CONFIG_NAME}: {error}") from error
+        raise ConfigError(f"{name}: {error}") from error
 
 
 _ACTIVE: GenerationConfig | None = None
+# _ACTIVE 를 읽은 실험 파일의 절대 경로. None 이면 기본 경로(CONFIG_PATH)에서 읽었다.
+_ACTIVE_PATH: Path | None = None
+
+_T = TypeVar("_T")
 
 
 def active() -> GenerationConfig:
-    """이 프로세스의 생성 config. 처음 부를 때 한 번 읽고 캐시한다.
+    """이 프로세스에서 지금 고른 생성 config. 아무것도 고른 적이 없으면 기본 경로를 한 번 읽어 캐시한다.
 
-    계약: config 는 프로세스 수명 동안 바뀌지 않는다. 파일을 고쳐도 새 프로세스에서만 반영된다.
+    계약: 활성 세계가 있는 동안 config 는 바뀌지 않는다. 바꾸는 길은 `switch` 하나이고, 그것을 부르는
+    `api.init`·`api.load_state` 는 성공하면 활성 세계도 함께 바꾼다.
     """
-    global _ACTIVE
+    global _ACTIVE, _ACTIVE_PATH
     if _ACTIVE is None:
-        _ACTIVE = load()
+        _ACTIVE, _ACTIVE_PATH = load(), None
     return _ACTIVE
+
+
+def switch(path: str | os.PathLike[str] | None, action: Callable[[], _T]) -> _T:
+    """`path`(None 이면 기본 경로)의 config 로 바꾸고 `action` 을 부른다. 성공하면 그 선택을 유지하고,
+    `action` 이 예외를 내면 이전 선택으로 되돌린 뒤 그 예외를 다시 낸다.
+
+    `action` 은 새 config 아래에서 활성 세계를 바꾸는 일(`api.init`·`api.load_state`)이다. config 와 세계가
+    함께 바뀌거나 함께 그대로 남게 하려고 선택과 확정을 한 호출에 묶었다.
+
+    읽기 규칙: 기본 경로는 프로세스에서 한 번 읽고 캐시한다(파일을 고쳐도 새 프로세스에서만 반영). 실험 파일은
+    고를 때마다 다시 읽는다 — 같은 파일을 덮어쓰며 값을 바꿔 가는 실험이 옛 값으로 돌지 않게 한다.
+
+    Raises:
+        ConfigError: 파일을 읽을 수 없거나 계약을 어겼다. 이때 선택은 바뀌지 않고 `action` 도 부르지 않는다.
+    """
+    global _ACTIVE, _ACTIVE_PATH
+    previous = (_ACTIVE, _ACTIVE_PATH)
+    if path is None or _is_default(path):
+        if _ACTIVE is None or _ACTIVE_PATH is not None:
+            _ACTIVE, _ACTIVE_PATH = load(), None
+    else:
+        wanted = Path(os.fspath(path)).resolve()
+        _ACTIVE, _ACTIVE_PATH = load(path), wanted
+    try:
+        return action()
+    except BaseException:
+        _ACTIVE, _ACTIVE_PATH = previous
+        raise
