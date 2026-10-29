@@ -40,6 +40,19 @@ verdict          attention · SINK_EMPTY
 
 **이 한 줄이 이 저장소의 성격을 그대로 보여 준다.** 데이터가 없을 때 0% 나 빈 화면을 내지 않는다. *"0건이다"* 와 *"0건인지 아닌지 모른다"* 를 구분해서 말한다.
 
+### 의사결정 파이프라인 — `src/main.py`
+
+```bash
+pip install -r requirements.txt
+python src/main.py --mode train --customers 2000 --profile small     # 스모크 (약 1분)
+python src/main.py --help                                            # 모드별 입력 · 출력 · 종료 코드
+```
+
+모드는 `train` · `uplift` · `optimize --budget <KRW>` · `evaluate` · `full`(SRS SYS-004 · PRD §73). 실행 루프
+(`src/orchestration/run_sprint.py`)의 단계 중 무엇을 돌릴지만 고르는 디스패처이고, 모델 하이퍼파라미터 · 세그먼트 경계 ·
+실험 값은 `config/model_config.yaml` · `config/experiment_config.yaml` 에서 읽는다. **모델을 저장하지 않으므로 모드
+사이에 넘기는 것이 없다** — 모든 모드가 같은 seed 로 다시 시뮬레이션 · 학습한다. 근거와 한계: `docs/decisions/DR-206-main-cli-config.md`.
+
 ### 대시보드까지
 
 ```bash

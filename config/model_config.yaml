@@ -1,0 +1,61 @@
+# 의사결정 모델 설정 — SRS CFG-002 · CQ-003 · PRD NFR-06 "하드코딩하지 않는다" (이슈 #206).
+#
+# 로더: src/decision/config.py — 스키마와 **정확히** 맞춰 읽는다. 모르는 키 · 빠진 키 · 타입 · 범위가
+#       어긋나면 DecisionConfigError 로 멈춘다(조용히 기본값으로 떨어지지 않는다).
+# 값은 이 파일 한 곳에만 있다. 코드(churn.py · clv.py · segments.py)는 이 값을 읽어 이름만 붙인다.
+#
+# ★ 아래 값은 #206 이전 코드 상수와 **같다** — 동작이 바뀌지 않게 옮기기만 했다.
+#   tests/test_decision_config.py 가 그 동일성을 고정한다. 값을 바꾸면 그 테스트가 실패한다:
+#   바꾸는 것은 결정이므로 DR(docs/decisions/)을 쓰고 테스트의 기준값을 함께 고친다.
+# ★ Test · Final Holdout 을 보며 이 값을 고치지 않는다 (src/decision/AGENTS.md). 튜닝은 Validation 에서.
+#
+# 아직 옮기지 않은 것과 그 이유는 docs/decisions/DR-206-main-cli-config.md "남은 불확실성".
+
+schema_version: 1
+
+churn:
+  # Stratified K-Fold — 4 모델(baseline 2 · 제안 2)을 같은 fold 로 평가한다 (SRS ML-003).
+  # 소수 클래스가 이보다 적으면 그 수로 줄인다(churn.fold_indices).
+  cv_folds: 5
+  # F1 임계를 정하는 학습 fold 내부 OOF fold 수 — 검증 fold 를 보지 않고 임계를 정한다.
+  threshold_inner_folds: 3
+  # SHAP(TreeExplainer) 계산 표본 상한.
+  shap_sample: 500
+  # 추정기 하이퍼파라미터. random_state 는 실행 seed 에서 온다(여기 두지 않는다).
+  # rule_recency 는 학습 데이터에서 임계를 정하는 규칙이라 하이퍼파라미터가 없다.
+  models:
+    logistic_regression:
+      C: 0.5
+      max_iter: 2000
+      class_weight: balanced
+    random_forest:
+      n_estimators: 300
+      min_samples_leaf: 3
+      class_weight: balanced_subsample
+      n_jobs: -1
+    hist_gb:
+      learning_rate: 0.05
+      max_iter: 300
+      max_leaf_nodes: 15
+      l2_regularization: 1.0
+      class_weight: balanced
+      early_stopping: false
+
+clv:
+  # evaluate_clv 의 KFold OOF fold 수.
+  cv_folds: 5
+  # fit_clv 의 HistGradientBoostingRegressor. poisson 손실 — 0 이 많고 꼬리가 긴 비음수 매출(clv.py 독스트링).
+  hist_gb:
+    loss: poisson
+    learning_rate: 0.05
+    max_iter: 200
+    max_leaf_nodes: 15
+    l2_regularization: 1.0
+    min_samples_leaf: 20
+    early_stopping: false
+
+# 세그먼트 · 4분면 경계 — 분위수(데이터 단위에 무관). segments.assign_segments · assign_quadrants.
+segmentation:
+  clv_high_q: 0.8      # CLV 상위 20% = 고가치 (SRS AT-CLV-01 Top20% 와 같은 경계)
+  churn_high_q: 0.5    # 이탈 확률 중앙값 이상 = 고위험
+  uplift_band_q: 0.6   # |uplift| 분포의 60% 분위수 = '≈0' 띠의 반폭. 그보다 크면 양/음
