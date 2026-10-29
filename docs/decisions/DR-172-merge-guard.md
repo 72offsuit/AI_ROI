@@ -56,6 +56,8 @@
 | 재현 — 스크래치 클론 + worktree 4가지 (git 2.43, 2026-10-23) | ① 그냥 만든 worktree: `Plan/` 빈 디렉터리, `git status` rc=0, 경계 검사 OK ② 본 체크아웃 `Plan/` 을 `cp -R`: `Plan/.git` = `gitdir: ../.git/modules/Plan` → `fatal: … Plan/../.git/modules/Plan` rc=128, 경계 검사 `skipped=1` ③ worktree 안에서 `git submodule update --init`: gitdir 이 `.git/worktrees/wt-init/modules/Plan` 로 따로 생기고 rc=0 ④ 심볼릭 링크: 동작은 하나 `T Plan`(typechange)이 변경으로 잡힌다 | 원인은 **복사된 상대 경로 gitfile** 이다. worktree 자체나 git 버그가 아니다 |
 | 같은 재현에서 `--ignore-submodules` 단계별 | `none`·`untracked` rc=128, `dirty`·`all` rc=0 | `dirty` 가 깨진 gitdir 을 견디는 가장 좁은 단계다. `all` 은 포인터 이동까지 숨긴다 |
 | 수정 후 같은 깨진 worktree | 경계 검사 skip 0, 양 팀 경로에 파일을 두면 **FAIL** 로 잡는다 / 수정을 되돌리면 새 회귀 테스트가 FAIL | 고친 것이 실제로 대조를 되살렸고, 회귀 테스트가 그 수정에 묶여 있다 |
+| PR #238 리뷰(2026-10-28 `kwung0206`) 반례 → 수정 후 재현 (2026-10-29) | R1: `push:` 에만 `paths` 가 있어도 `jobs:` 앞 전체에서 필터를 찾아 필수 4→3 이 됐다. 그 PR 은 미보고 체크가 있어도 종료 0 · 병합 호출 1회였다. R2: 필수 잡이 미보고여도 다른 워크플로우의 동명 체크(또는 같은 이름의 StatusContext) SUCCESS 로 충족됐다. R3: `required=[]` 이면 필수 대조 없이 종료 0 이었다. 수정 후에는 실제 워크플로우 사본의 `push:` 에 필터를 넣어도 필수 목록이 그대로다. 셋 다 막히고, 수정을 하나씩 되돌리면 새 테스트가 실패한다(변이 4종) | 셋 다 기본 설정에서 난 사고가 아니라 조건부 결함(P3)이다. 다만 이 스크립트가 유일한 병합 강제라, 막는 쪽으로 틀리게 고쳤다 |
+| `safe_merge.py 242 · 238 · 141 --dry-run` (수정 후, 2026-10-29, 읽기만) | 242: 필수 4종 정확 쌍 대조 통과, 승인 1 → 조건 충족 / 238: 변경 요청 미해소로 막힘 / 141: MERGED · FAILURE · 승인 0 으로 막힘 | 실 PR 의 `statusCheckRollup` 에 `workflowName` 이 실려 있어 정확 쌍 대조가 실제 데이터에서 동작한다 |
 | `gh api repos/72offsuit/AI_ROI/branches/main/protection` · `…/rulesets` (2026-10-23, 읽기만) | 둘 다 HTTP 403 `Upgrade to GitHub Pro or make this repository public to enable this feature.` | #172 의 전제(private + Free 라 보호 불가)를 API 응답으로 확인. public 전환은 하지 않기로 했고(2026-09-05) 플랜 변경은 이 결정의 범위가 아니다 |
 
 ## 결정
@@ -69,6 +71,13 @@
 - `CONFLICTING` 이 아니다
 
 우회 옵션은 두지 않는다(`test_options_are_exactly_repo_and_dry_run`). 승인 커밋 ≠ head 는 막지 않고 `[주의]` 로 알린다.
+
+리뷰 R1~R3(PR #238) 반영:
+
+- **필수 목록에서 빼는 사유는 `pull_request` 이벤트 자신의 `paths` · `paths-ignore` 필터뿐이다.** `push.paths` 같은 다른 이벤트의 필터는 보지 않는다. 기존 제외 정책(PR 경로 필터가 있으면 PR 마다 돈다는 보장이 없으니 필수에서 뺀다)은 유지한다. 뺀 워크플로우는 `excluded_workflows()` 가 사유와 함께 내고 `[주의]` 로 출력한다. `tests/test_safe_merge.py` 는 지금 저장소의 제외 목록이 비어 있음을 고정한다. 그래서 제외가 생기면 테스트가 실패하고, 사람이 이 DR 과 함께 본다. 개수 검사도 같은 정책을 따른다(필수 ∪ 제외 = PR 워크플로우 전부).
+- **필수 Actions 잡은 정확한 `(workflow, job)` 쌍으로만 충족된다.** 잡 이름만 같은 다른 워크플로우의 체크나 StatusContext 는 대신하지 못한다. 외부 상태는 ③(보고된 것 전부 `SUCCESS`)으로 따로 본다.
+- **필수 목록이 비었거나 만들지 못하면 막는다.** 워크플로우 파일 없음 · PR 워크플로우에서 잡을 못 읽음 · 인라인 매핑 `on: {…}` 같이 읽지 않는 형태는 `WorkflowError` 로 종료 2, 빈 목록은 판정에서 막힘(종료 1)이다. 둘 다 `gh pr merge` 를 부르지 않는다.
+- 필수 목록은 **스크립트가 놓인 체크아웃**의 정의에서 읽는다. 최신 `main` 에서 실행해 PR 이 자기 필수 목록을 줄이지 못하게 한다. 워크플로우 · 잡 이름을 바꾸는 PR 은 막히며, 그 처리(리뷰 승인 뒤 PR head 체크아웃에서 판정)는 `docs/GIT_WORKFLOW.md` §5.1 에 적는다.
 
 **worktree — W1 + W3.** 경계 검사는 `git status --porcelain --ignore-submodules=dirty` 로 변경 목록을 얻고, `docs/GIT_WORKFLOW.md` §11 에 "복사하지 않는다 · 필요하면 worktree 안에서 `git submodule update --init`" 절차를 적는다.
 
@@ -101,5 +110,7 @@
 ## 남은 불확실성
 
 - 웹 UI 의 병합 버튼은 여전히 열려 있다. 사람의 규율(§5.1 "스크립트로만")에 맡긴다.
+- worktree 쪽 검증은 범위가 셋으로 나뉜다. 실제 linked worktree 생성 · 복사 · 서브모듈 초기화는 작성자 로컬 재현(git 2.43) 1회다. CI 회귀 테스트 2건은 일반 임시 저장소에 끊긴 gitfile 을 둔 **등가 상태**다(리뷰 기록상 CI git 2.55.0). `--ignore-submodules=dirty` 는 검사 옵션이지 복구 명령이 아니다. CI 가 worktree 절차(W3)까지 검증한 것은 아니다 — `docs/GIT_WORKFLOW.md` §11 에 같은 구분을 적었다.
+- `pull_request` 에 `branches` · `types` 필터가 있어 PR 에서 돌지 않는 워크플로우는 필수로 남아 **영원히 막힌다**. 막는 쪽으로 틀리지만, 그런 필터가 생기면 판정 규칙을 다시 본다.
 - `required_checks()` 는 YAML 파서 없이 이 저장소 워크플로우의 들여쓰기 모양만 읽는다. 행렬(matrix) 잡이나 재사용 워크플로우가 들어오면 체크 이름이 달라져 "보고되지 않았다" 로 막힌다 — 막는 쪽으로 틀리므로 위험하지는 않지만, 그때 파서를 고친다.
 - 지금까지 60건 중 승인 0건이었다는 사실은 이 스크립트를 쓰기 시작하는 순간 **리뷰 대기**가 병합 일정의 병목이 된다는 뜻이다. Sprint 2 일정에서 그 비용이 얼마인지는 아직 모른다.

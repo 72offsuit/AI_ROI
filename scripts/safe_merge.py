@@ -17,7 +17,10 @@ GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 *
   ① PR 이 열려 있고 초안이 아니다
   ② `.github/workflows/*.yml` 중 `pull_request` 로 도는 워크플로우의 잡이 **전부**
      체크로 보고됐다. 아직 뜨지 않은 체크는 실패도 성공도 아니어서, 보고된 것만 보면
-     통과로 보인다 — 푸시 직후가 그 상태다.
+     통과로 보인다 — 푸시 직후가 그 상태다. 필수 잡은 정확한 (워크플로우, 잡) 쌍으로만
+     찾는다. 필수 목록이 비었거나 읽지 못하면 막는다.
+     필수 목록은 **이 스크립트가 놓인 체크아웃**(작업 폴더가 아니다)의 워크플로우에서 읽는다 —
+     최신 `main` 체크아웃에서 실행한다. 이름 변경 처리는 docs/GIT_WORKFLOW.md §5.1.
   ③ 보고된 체크가 **전부** `SUCCESS` 다. `SKIPPED` · `NEUTRAL` · 진행 중은 통과가 아니다.
   ④ 작성자가 아닌 리뷰어의 승인(`APPROVED`)이 1건 이상이고, 마지막 판정이
      변경 요청(`CHANGES_REQUESTED`)인 리뷰어가 없다.
@@ -62,44 +65,128 @@ def _unquote(value: str) -> str:
     return value
 
 
-def required_checks(workflow_dir: Path = WORKFLOWS) -> list[tuple[str, str]]:
-    """PR 에서 반드시 보고돼야 하는 (워크플로우 이름, 잡 이름) 목록.
+class WorkflowError(ValueError):
+    """필수 체크 목록을 만들지 못했다 — 판정 기준이 없으니 병합하지 않는다."""
 
-    YAML 파서 없이 이 저장소 워크플로우의 모양(최상위 `name:` · `jobs:` 아래 2칸 들여쓴
-    잡 ID · 4칸 들여쓴 잡 `name:`)만 읽는다. 잡 `name:` 이 없으면 GitHub 처럼 잡 ID 를
-    체크 이름으로 쓴다. `pull_request` 트리거가 없거나 `paths` 필터가 있는 워크플로우는
-    PR 마다 돈다는 보장이 없으므로 **필수에서 뺀다** — 보고되면 ③이 여전히 SUCCESS 를
-    요구한다.
+
+#: `on:` 키. YAML 1.1 은 따옴표 없는 `on` 을 참(true)으로 읽으므로 그 표기도 받는다.
+_ON_KEY = re.compile(r"""^(?:on|"on"|'on'|true):(.*)$""")
+#: `pull_request` 이벤트에 이 필터가 있으면 PR 마다 돈다는 보장이 없다.
+_PATH_FILTERS = ("paths", "paths-ignore")
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip(" "))
+
+
+def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
+    """(`pull_request` 로 도는가, **그 이벤트에** 붙은 경로 필터).
+
+    `push.paths` 같은 다른 이벤트의 필터는 보지 않는다 — PR 필수 목록을 줄이지 못한다.
+    인라인 매핑(`on: {…}` · `pull_request: {…}`)은 읽지 않고 실패한다.
     """
+    for i, line in enumerate(head):
+        match = _ON_KEY.match(line)
+        if not match:
+            continue
+        inline = match.group(1).split("#", 1)[0].strip()
+        if inline:  # `on: pull_request` · `on: [push, pull_request]` — 필터가 들어갈 자리가 없다
+            if inline.startswith("{"):
+                raise WorkflowError(f"인라인 매핑 `on: {inline}` 은 읽지 않는다")
+            return "pull_request" in re.findall(r"[A-Za-z_]+", inline), []
+        block: list[str] = []
+        for line in head[i + 1:]:
+            if line.strip() and _indent(line) == 0:
+                break
+            if line.strip():
+                block.append(line)
+        if not block:
+            return False, []
+        child = _indent(block[0])
+        for j, line in enumerate(block):
+            if _indent(line) != child:
+                continue
+            item = line.strip()
+            if re.fullmatch(r"-\s*pull_request", item):  # 목록 형태 `- pull_request`
+                return True, []
+            event = re.match(r"^pull_request:(.*)$", item)
+            if not event:
+                continue
+            value = event.group(1).split("#", 1)[0].strip()
+            if value.startswith("{"):
+                raise WorkflowError(f"인라인 매핑 `pull_request: {value}` 은 읽지 않는다")
+            sub = []
+            for line in block[j + 1:]:
+                if _indent(line) <= child:
+                    break
+                sub.append(line)
+            keys = [m.group(1) for line in sub if _indent(line) == _indent(sub[0])
+                    for m in [re.match(r"^\s+([A-Za-z_-]+):", line)] if m]
+            return True, [k for k in keys if k in _PATH_FILTERS]
+        return False, []
+    return False, []
+
+
+def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
+    """(필수 체크, 필수에서 뺀 워크플로우와 사유). 읽지 못하면 `WorkflowError`."""
+    files = sorted([*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")]) if workflow_dir.is_dir() else []
+    if not files:
+        raise WorkflowError(f"워크플로우 파일이 없다: {workflow_dir}")
     required: list[tuple[str, str]] = []
-    for path in sorted([*workflow_dir.glob("*.yml"), *workflow_dir.glob("*.yaml")]):
+    excluded: list[tuple[str, str]] = []
+    for path in files:
         text = path.read_text(encoding="utf-8")
-        head, sep, body = text.partition("\njobs:")
-        if not sep:
-            continue
+        head_text, sep, body = text.partition("\njobs:")
         # 주석 줄은 트리거 판정에서 뺀다 — 설명문 속 "pull_request" 에 속지 않게.
-        head = "\n".join(line for line in head.splitlines() if not line.lstrip().startswith("#"))
-        if not re.search(r"\bpull_request\b", head) or re.search(r"^\s+paths(-ignore)?:", head, re.M):
+        head = [line for line in head_text.splitlines() if not line.lstrip().startswith("#")]
+        runs_on_pr, filters = _pull_request_trigger(head)
+        if not runs_on_pr:
             continue
-        name_match = re.search(r"^name:\s*(.+?)\s*$", head, re.M)
-        workflow = _unquote(name_match.group(1)) if name_match else str(path.relative_to(REPO_ROOT))
+        name_match = next((m for line in head for m in [re.match(r"^name:\s*(.+?)\s*$", line)] if m), None)
+        workflow = _unquote(name_match.group(1)) if name_match else path.name
+        if filters:
+            excluded.append((workflow, f"{path.name}: pull_request.{' · '.join(filters)} 필터"))
+            continue
+        jobs: list[tuple[str, str]] = []
         job_id: str | None = None
         job_name: str | None = None
-        for line in body.splitlines()[1:]:
+        for line in body.splitlines()[1:] if sep else []:
             if line and not line.startswith(" ") and not line.startswith("#"):
                 break  # 다음 최상위 키
             job = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
             if job:
                 if job_id is not None:
-                    required.append((workflow, job_name or job_id))
+                    jobs.append((workflow, job_name or job_id))
                 job_id, job_name = job.group(1), None
                 continue
             name = re.match(r"^    name:\s*(.+?)\s*$", line)
             if name and job_id is not None and job_name is None:
                 job_name = _unquote(name.group(1))
         if job_id is not None:
-            required.append((workflow, job_name or job_id))
-    return required
+            jobs.append((workflow, job_name or job_id))
+        if not jobs:
+            raise WorkflowError(f"{path.name}: pull_request 워크플로우인데 잡을 하나도 읽지 못했다")
+        required.extend(jobs)
+    return required, excluded
+
+
+def required_checks(workflow_dir: Path = WORKFLOWS) -> list[tuple[str, str]]:
+    """PR 에서 반드시 보고돼야 하는 (워크플로우 이름, 잡 이름) 목록.
+
+    YAML 파서 없이 이 저장소 워크플로우의 모양(최상위 `name:` · `on:` · `jobs:` 아래 2칸 들여쓴
+    잡 ID · 4칸 들여쓴 잡 `name:`)만 읽는다. 잡 `name:` 이 없으면 GitHub 처럼 잡 ID 를
+    체크 이름으로 쓴다. `pull_request` 트리거가 없는 워크플로우, 그리고 **`pull_request` 이벤트에**
+    `paths` · `paths-ignore` 필터가 있는 워크플로우는 PR 마다 돈다는 보장이 없으므로 필수에서
+    뺀다(`excluded_workflows()` 가 사유를 낸다) — 보고되면 ③이 여전히 SUCCESS 를 요구한다.
+    `push.paths` 처럼 다른 이벤트의 필터는 필수 목록을 줄이지 않는다.
+    읽을 파일이 없거나 PR 워크플로우에서 잡을 못 읽으면 `WorkflowError` 다.
+    """
+    return _scan(workflow_dir)[0]
+
+
+def excluded_workflows(workflow_dir: Path = WORKFLOWS) -> list[tuple[str, str]]:
+    """`pull_request` 로 돌지만 경로 필터 때문에 필수에서 뺀 (워크플로우, 사유)."""
+    return _scan(workflow_dir)[1]
 
 
 def _check_label(check: dict) -> tuple[str, str]:
@@ -132,12 +219,14 @@ def evaluate(pr: dict, required: list[tuple[str, str]]) -> tuple[list[str], list
     else:
         ok.append("PR 이 열려 있고 초안이 아니다")
 
-    # ②③ 체크
+    # ②③ 체크 — 필수 Actions 잡은 정확한 (워크플로우, 잡) 쌍으로만 찾는다. 다른 워크플로우의
+    # 동명 잡이나 같은 이름의 외부 상태(StatusContext)는 그 자리를 대신하지 못한다.
     checks = pr.get("statusCheckRollup") or []
     reported = {_check_label(c) for c in checks}
-    reported_names = {name for _, name in reported}
+    if not required:
+        problems.append("필수 체크 목록이 비어 있다 — 무엇이 보고돼야 하는지 모르면 판정하지 않는다")
     for workflow, job in required:
-        if (workflow, job) not in reported and job not in reported_names:
+        if (workflow, job) not in reported:
             problems.append(f"필수 체크가 보고되지 않았다: {workflow} / {job} — 아직 안 떴거나 돌지 않았다")
     if not checks:
         problems.append("보고된 체크가 0건이다 — 통과한 체크가 없다")
@@ -212,12 +301,18 @@ def main(argv: list[str] | None = None) -> int:
               file=sys.stderr)
         return 2
     pr = json.loads(viewed.stdout)
-    required = required_checks()
+    try:
+        required = required_checks()
+        excluded = excluded_workflows()
+    except (WorkflowError, OSError) as error:
+        print(f"BLOCKED: 필수 체크 목록을 만들지 못했다 — {error}. 병합하지 않았다.", file=sys.stderr)
+        return 2
     ok, problems, notes = evaluate(pr, required)
+    notes.extend(f"필수에서 뺀 워크플로우: {workflow} — {reason}" for workflow, reason in excluded)
 
     print(f"PR #{pr.get('number')} {pr.get('title', '')}")
     print(f"head {(pr.get('headRefOid') or '')[:12]} · 필수 체크 {len(required)}종 "
-          f"(.github/workflows/ 에서 읽음)")
+          f"({WORKFLOWS} 에서 읽음 — 이 스크립트가 놓인 체크아웃의 정의)")
     for line in ok:
         print(f"  [통과] {line}")
     for line in problems:
