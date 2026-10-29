@@ -15,6 +15,7 @@ import os as _os
 import pathlib as _pathlib
 import platform as _platform
 import re as _re
+import subprocess as _subprocess
 import typing as _typing
 
 from src.measurement import schema as _sc
@@ -24,6 +25,7 @@ from src.simulator._internal import clock as _clock
 from src.simulator._internal import engine as _engine
 from src.simulator._internal import genconfig as _genconfig
 from src.simulator._internal import lineage as _lineage
+from src.simulator._internal import params as _params
 from src.simulator._internal import profiles as _profiles
 from src.simulator._internal import runtime as _runtime
 from src.simulator._internal import storage as _storage
@@ -319,6 +321,8 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
     의미(S6 #143): 배정 시각(지금의 세계 시각)에 노출 이벤트가 다음 `advance` 의 첫 순간에 기록되고,
     효과는 그 시각부터 42일 지속한다. 다음 `apply_treatment` 가 덮어쓴다(`T0` 은 효과를 끝낸다).
     배정된 고객마다 처치별 참 효과를 시뮬레이터 숨김 영역에 기록한다 — 호출자에게 돌려주지 않는다.
+    앞선 처치의 효과 창 안에서 다시 배정하면 그 앞선 참 효과는 "더 배정하지 않았을 때"의 값이라 관측과
+    어긋난다. 새 참 효과 행의 `supersedes` 에 끊긴 앞선 배정(시각·처치·끊기기 전 일수)을 적어 둔다(#167).
 
     Raises:
         TypeError: `assignments` 가 `Mapping` 이 아니다.
@@ -351,6 +355,7 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
     now = world["now_ms"]
     customers = world["customers"]
     ordered = {cid: assignments[cid] for cid in sorted(assignments)}
+    cut = _superseded(session, {cid: customers[_wd.customer_index(cid)] for cid in ordered}, now)
     try:
         # 같은 시작 상태(스냅샷에서 갈라진 전략 분기)의 반사실은 배정과 무관하게 같다 — 고객별로 재사용한다.
         if _PO_CACHE.get("before") != before:
@@ -360,7 +365,10 @@ def apply_treatment(assignments: Mapping[str, str]) -> None:
         missing = [cid for cid in ordered if cid not in cache]
         for row in _treatment.potential_outcomes(world, missing):
             cache[str(row["customer_id"])] = row
-        rows = [{**cache[cid], "assigned": tid} for cid, tid in ordered.items()]
+        rows = [
+            {**cache[cid], "assigned": tid, "supersedes": cut.get(cid)}
+            for cid, tid in ordered.items()
+        ]
         assignment_digest = _wd.digest(_rng_json(ordered))
         _storage.write_ground_truth(
             _storage.ground_truth_root(session.hidden_root),
@@ -622,14 +630,20 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
     try:
         for name, rows in files.items():
             _storage.write_jsonl(target.joinpath(name), rows)
-        _storage.write_json(target.joinpath("manifest.json"), {
+        commit = _source_commit()
+        manifest: dict[str, object] = {
             "contract": "commerce-exchange/v1",
             "source": "simulator",
-            "source_commit": world["simulator_version"],
+            # 계약 §2: 생산 코드의 커밋. 판 이름은 따로 싣는다. 커밋을 모르면 빈 값 대신 null + 사유(#167).
+            "source_commit": commit,
+            "simulator_version": world["simulator_version"],
             "generated_at": stamp,
             "mode": "full",
             "files": {name: len(rows) for name, rows in files.items()},
-        })
+        }
+        if commit is None:
+            manifest["null_reason"] = {"source_commit": _sc.ReasonCode.PRECONDITION_MISSING.value}
+        _storage.write_json(target.joinpath("manifest.json"), manifest)
     except OSError as error:
         raise SimulatorError(f"교환 묶음을 쓰지 못했다: {_reason(error)}") from error
     return {
@@ -640,6 +654,84 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
         "customers": len(customers),
         "generated_at": stamp,
     }
+
+
+def _superseded(
+    session: _runtime.Session, customers: dict[str, dict[str, object]], now: int
+) -> dict[str, dict[str, object]]:
+    """`now` 의 배정이 끊는 앞선 처치 — 효과 창 안의 비-T0 배정이 있는 고객만 `{customer_id: 표시}`.
+
+    표시는 `{file, at, treatment_id, observed_days}` 다. `file` 은 끊긴 배정의 참 효과 파일 이름(확장자 없이)이라
+    world · 스냅샷 분기가 달라도 그 파일의 그 고객 행 하나를 가리킨다(#167 리뷰). 그 행은 `observed_days` 일까지만
+    관측과 맞는다. 파일 이름은 계보에 남은 배정 기록(배정 전 상태 다이제스트 · 배정 내용)으로 다시 만든다.
+    """
+    params = _params.active()
+    found: dict[str, dict[str, object]] = {}
+    for cid, customer in customers.items():
+        prior = _treatment.active_assignment(customer, now, params)
+        if prior is not None:
+            at_ms, tid = prior
+            found[cid] = {
+                "file": None, "at": _clock.timestamp(at_ms), "treatment_id": tid,
+                "observed_days": (now - at_ms) // _clock.DAY_MS, "_at_ms": at_ms,
+            }
+    if found:
+        _attach_assignment_files(session, found)
+    for mark in found.values():
+        del mark["_at_ms"]
+    return found
+
+
+def _attach_assignment_files(session: _runtime.Session, found: dict[str, dict[str, object]]) -> None:
+    """계보를 거꾸로 따라가며(진행 중 기록 → 실행 사이드카) 각 고객의 끊긴 배정이 쓴 참 효과 파일 이름을 채운다."""
+    world_id = session.world["world_id"]
+    missing = set(found)
+
+    def scan(mutations: list[dict[str, object]]) -> None:
+        for mutation in reversed(mutations):
+            if mutation.get("kind") != "apply_treatment":
+                continue
+            assignments = mutation["assignments"]
+            hits = [cid for cid in missing if cid in assignments and found[cid]["_at_ms"] == mutation["at_ms"]]
+            if not hits:
+                continue
+            stem = (
+                f"po-{world_id}-{mutation['at_ms']}-{str(mutation['before_digest'])[:16]}-"
+                f"{_wd.digest(_rng_json(assignments))[:16]}"
+            )
+            for cid in hits:
+                found[cid]["file"] = stem
+                missing.discard(cid)
+
+    scan(session.pending)
+    run_id = session.lineage_head
+    while missing and run_id is not None:
+        record = _storage.read_sidecar(session.hidden_root, str(run_id))
+        if record is None:
+            break
+        scan(list(record.get("mutations") or []))
+        run_id = record.get("parent_run_id")
+
+
+_REPO_ROOT = _pathlib.Path(__file__).resolve().parents[2]
+
+
+def _source_commit() -> str | None:
+    """`src/simulator` 를 마지막으로 바꾼 커밋 — 계약(commerce-exchange/v1 README §2)이 정한 `simulator_commit` 과
+    같은 규칙(`src/orchestration/run_sprint.py` `provenance()`). git 이 없거나 저장소가 아니면 `None` 이다.
+
+    저장소 HEAD 가 아니다 — 문서만 바꾼 커밋이 들어와도 값이 그대로여야 FREEZE-003 대조가 거짓 불일치를 내지 않는다.
+    작업 트리의 미커밋 변경은 드러내지 않는다 — 봉인 대조는 깨끗한 체크아웃을 전제한다.
+    """
+    try:
+        result = _subprocess.run(
+            ["git", "log", "-1", "--format=%H", "--", "src/simulator"], cwd=_REPO_ROOT,
+            capture_output=True, text=True, timeout=5, check=False,
+        )
+    except (OSError, _subprocess.SubprocessError):
+        return None
+    commit = result.stdout.strip()
+    return commit if result.returncode == 0 and _re.fullmatch(r"[0-9a-f]{40}", commit) else None
 
 
 # 반사실 결과 캐시 — {"before": 배정 전 상태 다이제스트, "rows": {customer_id: 행}}. 시작 상태가 바뀌면 비운다.

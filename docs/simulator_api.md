@@ -101,7 +101,14 @@ class SinkFormatError(SimulatorError)
 - **덮어쓰기**: 같은 고객에게 다시 `apply_treatment` 하면 새 배정이 앞 배정을 덮어쓴다. `T0` 배정은 앞선 처치의 효과를 끝낸다.
 - **처치 종류**: `T1` 무료배송(할인 전 상품 합계 40,000원 미만 주문의 배송비 면제) · `T2` 정액 쿠폰(30,000원 이상 3,000원) · `T3` 강한 윈백 쿠폰(50,000원 이상 7,000원) · `T4` 재구매 리마인더(푸시). 쿠폰은 고객이 받아 둔 경우(`coupon_clicked`)에만, 배정 시각부터 **14일** 안에, 배정 1회에 한 번 결제에 쓰인다(`coupon_use`). 처치 효과는 쿠폰 사용 밖(방문·구매 의향)에서도 생긴다.
 - **참 효과**: 배정된 고객마다 처치별 참 효과를 시뮬레이터 숨김 영역(`data/ground_truth/simulator/`, 시험·도구가 `hidden_root` 를 주면 그 아래 `ground_truth/`)에 기록한다. **의사결정 측(`src/decision/`)은 읽지 않는다** — 사후 채점(`src/diagnostics/`)만 읽는다. 공개 API 는 이 값을 돌려주지 않는다.
-- **오케스트레이션 통합**: 분기마다 `restore → apply_treatment → advance(42)` 순서로 부른다. 창 안에서 같은 고객을 다시 배정하면 기록된 참 효과는 첫 배정의 42일 창 기준이므로 맞지 않게 된다. 참 효과 파일은 분기(배정 내용)마다 따로 남는다.
+- **참 효과 기록 형식(#167)**: 배정 호출마다 JSON Lines 파일 하나 `po-<world_id>-<배정 시각 ms>-<배정 전 상태 다이제스트 16자>-<배정 다이제스트 16자>.jsonl`, 고객 한 명이 한 줄이다. 시뮬레이터는 표준 라이브러리만으로 돌아야 해서(Python 3.10 · 의존성 없음) Parquet 이 아니라 JSONL 이다.
+  - `customer_id` · `at`(배정 시각, KST RFC 3339) · `window_days` · `assigned`(실제 배정 팔)
+  - `outcomes[T0~T4]` — 그 팔을 지금 배정했을 때 창 안 결과: `purchased`(0/1) · `orders` · `revenue` · `cogs` · `shipping_subsidy` · `discount` · `coupon_used` · `contribution_profit` · `marketing_cost` · `net_profit`(원, 정수)
+  - `tau_purchase[T1~T4]` · `tau_net_profit[T1~T4]` — `outcomes[팔] − outcomes[T0]`
+  - `response_type[T1~T4]` — 숨은 반응 유형(`positive`·`neutral`·`negative`)
+  - `supersedes` — 이 배정이 앞선 비-`T0` 처치의 효과 창 안에서 이뤄졌으면 `{file, at, treatment_id, observed_days}`, 아니면 `null`. `file` 은 끊긴 배정이 쓴 참 효과 파일 이름(확장자 없이)이다
+- **오케스트레이션 통합**: 분기마다 `restore → apply_treatment → advance(42)` 순서로 부른다. 참 효과 파일은 분기(배정 내용)마다 따로 남는다.
+- **창 안 재배정**: 효과 창 안에서 같은 고객을 다시 배정하면 앞 배정의 참 효과 행은 "더 배정하지 않았을 때"의 값이라 `observed_days` 일 뒤로는 관측과 어긋난다. 새 행의 `supersedes` 가 그 앞 행(`file` 의 같은 고객 행)을 가리킨다 — 고객 ID · 시각은 world · 분기 사이에서 겹치므로 파일 이름으로 가린다. 사후 채점(`src/diagnostics/report.py`)은 파일마다 그런 행 수를 `superseded_rows` 로 싣는다 — 채점에서 뺄지는 DR-S8 이 정한다. `advance(42)` 뒤에 다시 배정하는 지금의 오케스트레이션은 해당하지 않는다(창은 배정 시각부터 42일, 끝 배타).
 - **비용**: 참 효과 계산 때문에 한 시작 상태에서 처음 부르는 `apply_treatment` 는 배정 고객 수에 비례해 걸린다(실측 5,000명 15.3초 — 고객당 약 3ms). 같은 스냅샷에서 갈라진 다음 분기는 같은 고객의 결과를 재사용해 빠르다(같은 5,000명 0.3초).
 
 출력 루트는 시뮬레이터 전용이다. 커머스 이벤트와 같은 루트를 쓰지 않는다. 세계 상태 파일의 위치는 시뮬레이터가 정하며 호출자는 `state_id` 만 다룬다. 새 루트의 저장 형식은 그 런타임의 기본값(`pyarrow` 가 있으면 parquet, 없으면 jsonl.gz)이다.
