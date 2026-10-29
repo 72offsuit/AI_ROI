@@ -114,7 +114,7 @@ def evaluate(
         "eligible_customers": len(eligible),
         # 판정값 — 이탈률은 ①, 처치 지표는 ②.
         "churn_rate_bp": churn_block["churn_rate_bp"],
-        **{key: treatment_block[key] for key in _TREATMENT_KEYS},
+        **{key: value for key, value in treatment_block.items() if key not in _CHURN_KEYS},
         "active42": {"customers": len(active), **churn_block},
         "eligible_spec41": {"customers": len(eligible), **treatment_block},
     }
@@ -135,11 +135,9 @@ def evaluate(
     return result, {"active42": rows, "eligible_spec41": spec_rows}
 
 
-# 처치 지표 — ② 모집단으로 판정한다(DR-194).
-_TREATMENT_KEYS = (
-    "ate_bp", "ate_net_profit_krw", "coupon_use_definition", "coupon_use_bp",
-    "coupon_use_among_buyers_bp_reference", "potential_outcome_quadrants", "response_mix_bp",
-)
+# `_block` 의 키 중 처치 지표가 아닌 것. 나머지는 모두 처치 지표라 ② 모집단 값이 최상위에 올라간다(DR-194) —
+# `_block` 에 처치 지표가 늘어도 손으로 목록을 고칠 필요가 없다(#245 리뷰).
+_CHURN_KEYS = frozenset({"evaluated_customers", "churn_rate_bp"})
 
 
 def _split(checks: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
