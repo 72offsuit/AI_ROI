@@ -104,7 +104,7 @@ A 안 안의 세부 선택:
 
 - **분기 창 DQ-09 는 묶음에만 있고 창 purchase 이벤트가 빠진 주문을 못 잡는다.** 교환 계약(`orders.schema.json`)은 `ordered_at` 을 필수로 두고 로더도 형식을 검사하지만, 로더가 돌려주는 `ExchangeOrder` 에는 그 필드가 없어 묶음 주문이 창 안인지 알 수 없다 — 그래서 뷰를 이벤트 쪽 주문 ID 로 좁혔다. 이 공백은 `amount_check.not_detected` 에 그대로 싣는다. 로더(`src/measurement/exchange.py`)가 `ordered_at` 을 돌려주거나 측정 계층에 창 단위 대조가 생기면 해소된다.
 - **분기 창 DQ-02b 는 분기 창 이벤트만 센다.** 창 밖(분기 이전 계보)에 같은 주문 ID 의 purchase 가 있으면 잡지 못한다 — `single_purchase_check.not_detected` 에 싣는다.
-- 측정 기여이익은 분기 창의 **전 고객** 주문이다. `revenue_krw` · `churn_rate`(이벤트 결과)는 Feature(t2) 모집단이다. 전략 비교표의 `revenue` 열이 이제 `measured_revenue` 를 먼저 쓰므로 표의 매출 · 마케팅비 · 기여이익은 같은 모집단이고 이탈률만 다르다. 같은 스냅샷 · 같은 난수라 비처치 고객의 차이는 전략 효과에 포함된다고 본다 — 확인한 사실이 아니라 `docs/simulator_api.md` restore 계약에 기댄 가정이다.
+- 측정 기여이익은 분기 창의 **전 고객** 주문이다. `revenue_krw` · `churn_rate`(이벤트 결과)는 Feature(t2) 모집단이다 — **DR-234 이후 Eligible(t2) 다.** 전략 비교표의 `revenue` 열이 이제 `measured_revenue` 를 먼저 쓰므로 표의 매출 · 마케팅비 · 기여이익은 같은 모집단이고 이탈률만 다르다. 같은 스냅샷 · 같은 난수라 비처치 고객의 차이는 전략 효과에 포함된다고 본다 — 확인한 사실이 아니라 `docs/simulator_api.md` restore 계약에 기댄 가정이다.
 - 시뮬레이터 묶음의 `discount` 는 쿠폰 처치 단가 그대로다(교환 계약 §11, 가정 A-DISCOUNT). 실제 커머스 할인과 다를 수 있다. 환불은 차감하지 않는다(A-REFUND).
 - S4 · S5 의 가치(CLV × `margin_rate`)는 여전히 `economic_config` 가중 마진을 계획 가정으로 쓴다 — #171 범위.
 - 대시보드 전략 화면의 가드레일 `not_run` 표시, 측정 실패 분기 행의 매출 · 마케팅비 기준(basis) 표시(리뷰 N1)는 후속이다.

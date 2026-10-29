@@ -32,6 +32,8 @@ def scores(n=300, seed=0):
         "cate": cate,
         "clv": pd.Series(rng.lognormal(12, 0.5, n), index=idx),
         "days_since_last_purchase": pd.Series(rng.integers(0, 120, n).astype(float), index=idx),
+        # 전원 Eligible — 아래 기존 검사는 거르기 전 동작을 본다. 거르기는 TestEligibleIsTheCommonPool.
+        "eligible": pd.Series(True, index=idx),
     }
 
 
@@ -90,6 +92,40 @@ class TestPlans(unittest.TestCase):
         self.assertEqual(set(d.index[(d >= 28) & (d <= 90)]), set(a))
 
 
+@unittest.skipUnless(DEPS, REASON)
+class TestEligibleIsTheCommonPool(unittest.TestCase):
+    """S1~S5 는 Eligible 안에서만 고른다 — data_spec §4.1 · #194 · DR-234 (PR #154 리뷰 "eligible 범위가 다름")."""
+
+    def setUp(self) -> None:
+        self.s = scores()
+        idx = self.s["churn_p"].index
+        # 짝수 번째만 Eligible. 결손 플래그 하나는 Eligible 이 아니다(판정할 수 없다).
+        flags = pd.Series([i % 2 == 0 for i in range(len(idx))], index=idx, dtype=object)
+        flags.iloc[2] = None
+        self.s["eligible"] = flags
+        self.keep = {cid for i, cid in enumerate(idx) if i % 2 == 0 and i != 2}
+
+    def test_no_strategy_assigns_an_ineligible_customer(self) -> None:
+        for sid in ("S1", "S2", "S3", "S4", "S5"):
+            with self.subTest(strategy=sid):
+                a = plan(sid, self.s, None if sid == "S1" else 40 * 7030, COSTS)
+                self.assertTrue(a, "배정이 비면 이 검사는 공허하다")
+                self.assertEqual(set(), set(a) - self.keep)
+
+    def test_budget_is_spent_inside_the_pool_not_left_over(self) -> None:
+        """고른 뒤에 빼면 부적격 고객 몫의 예산이 남는다. 먼저 거르면 같은 예산으로 Eligible 만 40명이다."""
+        a = plan("S2", self.s, 40 * 7030, COSTS)
+        self.assertEqual(40, len(a))
+        p = self.s["churn_p"]
+        top = p[p.index.isin(self.keep)].sort_values(ascending=False).index[:40]
+        self.assertEqual(set(top), set(a))
+
+    def test_dict_scores_are_filtered_too(self) -> None:
+        a = plan("S1", {"days_since_last_purchase": {"C1": 40, "C2": 50},
+                        "eligible": {"C1": False, "C2": True}}, None, COSTS)
+        self.assertEqual({"C2": "T3"}, a)
+
+
 class TestMissingScores(unittest.TestCase):
     """필요한 점수가 없으면 판별 가능한 예외 — 빈 배정으로 대신하지 않는다 (표준 라이브러리)."""
 
@@ -99,6 +135,17 @@ class TestMissingScores(unittest.TestCase):
             with self.subTest(strategy=sid), self.assertRaises(NotComputable):
                 plan(sid, {}, 100_000, unit)
         self.assertEqual({}, plan("S0", {}, 100_000, unit))
+
+    def test_without_eligible_s1_to_s5_are_not_computable(self) -> None:
+        """purchase 를 만들지 않는 판처럼 Eligible 을 판정할 수 없으면, 다른 점수가 다 있어도 전략은 돌지 않는다.
+        거르지 않은 채 S2~S5 만 돌면 S1 과 다른 모집단에서 고른 결과가 비교표에 오른다(DR-234)."""
+        unit = {"T0": 0, "T1": 3000, "T2": 3000, "T3": 7000, "T4": 30}
+        full = {"days_since_last_purchase": {"C1": 40}, "churn_p": {"C1": 0.9},
+                "cate": {"C1": 0.1}, "clv": {"C1": 1.0}}
+        for sid in ("S1", "S2", "S3", "S4", "S5"):
+            with self.subTest(strategy=sid), self.assertRaises(NotComputable) as caught:
+                plan(sid, full, None if sid == "S1" else 100_000, unit)
+            self.assertIn("eligible", str(caught.exception))
 
 
 class TestPlanSummary(unittest.TestCase):

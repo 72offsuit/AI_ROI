@@ -49,10 +49,12 @@ DECISION_MODULES = (
 KST = timezone(timedelta(hours=9))
 
 # 소규모 세계 — smoke 프로파일, warmup 을 줄여 테스트 시간을 수 초로 둔다.
-# smoke 의 달력 시작 2025-01-01 → t1 = 2025-02-15, t2 = 2025-03-29.
-SMALL = {"seed": 7, "num_customers": 240, "profile": "smoke", "warmup_days": 45, "active_days": 30}
+# smoke 의 달력 시작 2025-01-01 → t1 = 2025-03-02, t2 = 2025-04-13.
+# warmup 은 60일 이상이어야 한다 — RCT 모집단이 Eligible(가입 ≥ 60일)이고 이 세계의 고객 대부분이
+# 달력 시작에 가입해 있어, 45일이면 Eligible 이 0명이다(seed 7 · 240명 · 60일 → 60명, 2026-10-29 실측 · DR-234).
+SMALL = {"seed": 7, "num_customers": 240, "profile": "smoke", "warmup_days": 60}
 # sim-0.3 은 purchase 를 만들지 않는다. 가짜 로더가 이 시각 이전 add_to_cart 를 주문으로 바꿔
-# S1 경로(마지막 구매 28~90일 · 주문 2회 이상)를 탈 고객을 만든다 — t2 보다 32일 앞이다.
+# S1 경로(마지막 구매 28~90일 · 주문 2회 이상)를 탈 고객을 만든다 — t2 보다 47일 앞이다.
 FAKE_PURCHASE_BEFORE = datetime(2025, 2, 25, tzinfo=timezone(timedelta(hours=9)))
 
 
@@ -97,7 +99,7 @@ class FakeDecision:
                                             what_if_budgets=self.what_if_budgets),
             "src.decision.strategies": module(
                 "src.decision.strategies", plan=self.plan, planning_costs=self.planning_costs,
-                s1_eligibility=self.s1_eligibility,
+                s1_eligibility=self.s1_eligibility, within_eligible=self.within_eligible,
             ),
             "src.decision.roi": module("src.decision.roi", summarize_strategy=self.summarize_strategy),
             "src.decision.ab_test": module("src.decision.ab_test", analyze_ab=self.analyze_ab),
@@ -207,9 +209,15 @@ class FakeDecision:
         return {"conditions": {k: "applied" if k in scores else "not_run"
                                for k in ("lifetime_order_count", "eligible")}}
 
+    def within_eligible(self, scores):
+        keep = scores["eligible"][scores["eligible"].astype(bool)].index
+        return {k: v.loc[v.index.isin(keep)] if hasattr(v, "loc") else v for k, v in scores.items()}
+
     def plan(self, strategy_id, scores, budget_krw, costs):
         self.calls.append(("plan", {"strategy": strategy_id, "budget": budget_krw, "costs": dict(costs or {}),
                                     "keys": sorted(scores)}))
+        if strategy_id != "S0":  # 합의된 계약 — S1~S5 는 Eligible 안에서만 고른다(DR-234)
+            scores = self.within_eligible(scores)
         if strategy_id == "S0":
             result: dict[str, str] = {}
         elif strategy_id == "S1":
@@ -311,6 +319,34 @@ class TestSprintWithFakeDecision(unittest.TestCase):
             self.assertLessEqual(abs(counts[arm] - total / 8), 1)
         arms = [c[1]["arms"] for c in self.fake.calls if c[0] == "evaluate_uplift_models"]
         self.assertEqual([["T0", "T1", "T2", "T3", "T4"]], arms)
+
+    def test_rct_population_is_eligible_at_t1(self) -> None:
+        """#234 — RCT 는 활동 고객이 아니라 t1 의 Eligible 이다. 가입일은 명부에서 읽었다(결손 0)."""
+        rct = _read(self.run_dir, "run_meta")["rct"]
+        self.assertIn("§4.1", rct["population_definition"])
+        self.assertNotIn("활동", rct["population_definition"])
+        self.assertGreater(rct["n_eligible"], 0)
+        self.assertLess(rct["n_eligible"], rct["n_population"])  # 걸러진 고객이 있어야 거르기를 본 것이다
+        self.assertEqual(0, rct["n_signup_missing"])
+        # 빠진 고객은 조건을 하나 이상 어겼다 — 조건별 수의 합 이상 · 가장 큰 수 이하가 아니면 집계가 틀렸다
+        excluded = [rct[k] for k in ("n_excluded_tenure", "n_excluded_no_purchase", "n_excluded_recent_purchase")]
+        self.assertLessEqual(max(excluded), rct["n_population"] - rct["n_eligible"])
+        self.assertLessEqual(rct["n_population"] - rct["n_eligible"], sum(excluded))
+
+    def test_strategies_get_eligible_and_outcomes_are_aggregated_on_it(self) -> None:
+        """S1~S5 의 plan 은 Eligible(t2) 를 받고, 분기 이벤트 결과의 모집단은 그 Eligible 이다(DR-234)."""
+        comparison = _read(self.run_dir, "strategy_comparison")
+        inputs = comparison["s1_inputs"]
+        self.assertIn("§4.1", inputs["eligible_definition"])
+        self.assertGreater(inputs["n_eligible"], 0)
+        self.assertEqual(0, inputs["n_signup_missing"])
+        for call in (c[1] for c in self.fake.calls if c[0] == "plan" and c[1]["strategy"] != "S0"):
+            self.assertIn("eligible", call["keys"], call["strategy"])
+        for strategy, entry in comparison["strategy_details"].items():
+            with self.subTest(strategy=strategy):
+                outcomes = entry["event_outcomes"]
+                self.assertEqual(inputs["n_eligible"], outcomes["n_population"])
+                self.assertIn("§4.1", outcomes["population_definition"])
 
     def test_churn_trains_on_control_only(self) -> None:
         churn = _read(self.run_dir, "churn_eval")
@@ -695,8 +731,8 @@ class TestSprintWithoutDecision(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             base = Path(tmp)
             blocked = {name: None for name in DECISION_MODULES}
-            argv = ["--seed", "3", "--customers", "120", "--profile", "smoke", "--warmup-days", "30",
-                    "--active-days", "20", "--out", str(base / "out"), "--results-root", str(base / "res"),
+            argv = ["--seed", "3", "--customers", "120", "--profile", "smoke", "--warmup-days", "60",
+                    "--out", str(base / "out"), "--results-root", str(base / "res"),
                     "--run-id", "SP-test-none"]
             argv += ["--realism-report", str(base / "없는-realism.json")]
             with mock.patch.dict(sys.modules, blocked), _quiet():
@@ -919,12 +955,55 @@ class TestHelpers(unittest.TestCase):
             ev("C3", 5, "page_view"), ev("C3", -1, "purchase", "O4"),  # index 이후 — 세지 않는다
         ])
         population = pd.Index(["C1", "C2", "C3"], name="customer_id")
-        out = rs.s1_inputs(events, t2, population)
+        flags = pd.Series({"C1": True, "C3": True})  # C2 없음 — Eligible 이 아니다(판정 못 함)
+        out = rs.s1_inputs(events, t2, population, flags)
         self.assertEqual([2.0, 1.0, 0.0], out["lifetime_order_count"].tolist())
         self.assertAlmostEqual(40.0, out["days_since_last_purchase"]["C1"])
         self.assertTrue(math.isnan(out["days_since_last_purchase"]["C3"]))  # 주문 없음 — 0 이 아니다
-        # C1: 첫 관측 100일 · 주문 2 · 40일 → eligible. C2: 첫 관측 30일 < 60. C3: 주문 없음.
-        self.assertEqual([True, False, False], out["eligible"].tolist())
+        self.assertEqual([True, False, True], out["eligible"].tolist())  # 호출자의 판정을 그대로 싣는다
+
+    def test_eligibility_follows_the_canonical_definition_in_kst_days(self) -> None:
+        """#194 정본 정의(data_spec §4.1) — 가입 ≥ 60일 · T0 이전 구매 ≥ 1 · 마지막 구매 ≥ 14일, KST 날짜 차.
+
+        경계는 날짜로 센다. 예전 판정은 시각 차(소수 일)라 T0 − 14일 날짜의 구매를 전부 13.x 일로 보고
+        빼서, 정의보다 하루 좁았다. 가입일은 첫 관측 근사가 아니라 명부 값이다."""
+        t0 = datetime(2025, 4, 1, tzinfo=KST)
+        d = lambda days: (t0 - timedelta(days=days)).date()  # noqa: E731
+
+        def buy(cid, when, order):
+            return {"customer_id": cid, "timestamp": when, "event_type": "purchase",
+                    "order_id": order, "event_id": f"{cid}-{order}"}
+
+        late_on_day_14 = t0 - timedelta(days=14) + timedelta(hours=23)  # 시각 차 13.04일 · 날짜 차 14일
+        events = pd.DataFrame([
+            buy("A", t0 - timedelta(days=30), "OA"),      # 기준 — 전부 충족
+            buy("B", t0 - timedelta(days=30), "OB"),      # 가입 59일
+            buy("C", late_on_day_14, "OC"),               # 마지막 구매 날짜 차 14일 → Eligible
+            buy("D", t0 - timedelta(days=13), "OD"),      # 13일 → 아니다
+            {"customer_id": "E", "timestamp": t0 - timedelta(days=30), "event_type": "page_view",
+             "order_id": None, "event_id": "E-pv"},       # 구매 없음
+            buy("F", t0 - timedelta(days=30), "OF"),      # 명부에 없음
+            buy("G", t0 - timedelta(days=30), "OG1"),
+            buy("G", t0 + timedelta(hours=1), "OG2"),     # T0 이후 — 세지 않는다(마지막 구매는 30일 전)
+        ])
+        signups = {"A": d(60), "B": d(59), "C": d(200), "D": d(200), "E": d(200), "G": d(200)}
+        population = pd.Index(list("ABCDEFG"), name="customer_id")
+        judged = rs.eligibility(events, t0, population, signups)
+        self.assertEqual({"A", "C", "G"}, {cid for cid, f in judged["flags"].items() if f})
+        self.assertEqual({"n_population": 7, "n_eligible": 3, "n_signup_missing": 1, "n_excluded_tenure": 2,
+                          "n_excluded_no_purchase": 1, "n_excluded_recent_purchase": 1}, judged["counts"])
+
+    def test_eligibility_reads_utc_stamps_as_kst_dates(self) -> None:
+        """UTC 로 들어온 시각도 KST 날짜로 센다 — 2025-03-18T15:30Z 는 KST 3/19 다.
+
+        UTC 날짜(3/18)로 세면 4/1 까지 14일이라 Eligible 이 되고, KST 날짜(3/19)로 세면 13일이라 아니다."""
+        t0 = datetime(2025, 4, 1, tzinfo=KST)
+        events = pd.DataFrame([{"customer_id": "U", "event_type": "purchase", "order_id": "O1", "event_id": "e1",
+                                "timestamp": datetime(2025, 3, 18, 15, 30, tzinfo=timezone.utc)}])
+        events["timestamp"] = pd.to_datetime(events["timestamp"], utc=True)
+        judged = rs.eligibility(events, t0, pd.Index(["U"]), {"U": datetime(2024, 1, 1).date()})
+        self.assertEqual([False], judged["flags"].tolist())
+        self.assertEqual(1, judged["counts"]["n_excluded_recent_purchase"])
 
     def test_default_budget_scales_design_estimate(self) -> None:
         self.assertEqual(8_833_000, rs.default_budget_krw(26_000))

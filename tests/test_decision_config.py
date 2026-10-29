@@ -68,6 +68,10 @@ PRE_206_EXPERIMENT = {
     "rct": {"control_share": 0.5, "active_days": 90},
     "ab_test": {"alpha": 0.05, "target_power": 0.8, "srm_p_threshold": 0.001},
 }
+#: 지금 판 — #206 값에서 `rct.active_days` 만 없앴다(#234 · DR-234: RCT 모집단은 설정값이 아니라
+#: data_spec §4.1 Eligible 정본 정의다). 나머지 값은 #206 이전과 같다.
+EXPERIMENT_NOW = copy.deepcopy(PRE_206_EXPERIMENT)
+del EXPERIMENT_NOW["rct"]["active_days"]
 
 
 def _model(**patch) -> dict:
@@ -92,7 +96,13 @@ class TestSchema(unittest.TestCase):
 
     def test_pre_206_values_pass_unchanged(self) -> None:
         self.assertEqual(PRE_206_MODEL, dc.validate(PRE_206_MODEL, dc.MODEL_SCHEMA, "t"))
-        self.assertEqual(PRE_206_EXPERIMENT, dc.validate(PRE_206_EXPERIMENT, dc.EXPERIMENT_SCHEMA, "t"))
+        self.assertEqual(EXPERIMENT_NOW, dc.validate(EXPERIMENT_NOW, dc.EXPERIMENT_SCHEMA, "t"))
+
+    def test_removed_active_days_is_rejected_not_ignored(self) -> None:
+        """#234 — 옛 설정 파일의 `active_days` 가 조용히 무시되면 그 값이 아직 쓰인다고 믿게 된다."""
+        with self.assertRaises(dc.DecisionConfigError) as caught:
+            dc.validate(copy.deepcopy(PRE_206_EXPERIMENT), dc.EXPERIMENT_SCHEMA, "t")
+        self.assertIn("active_days", str(caught.exception))
 
     def test_unknown_keys_are_rejected_at_every_level(self) -> None:
         cases = {
@@ -114,7 +124,7 @@ class TestSchema(unittest.TestCase):
         with self.assertRaises(dc.DecisionConfigError) as caught:
             dc.validate(_model(churn__shap_sample=_DELETE), dc.MODEL_SCHEMA, "t")
         self.assertIn("shap_sample", str(caught.exception))
-        raw = copy.deepcopy(PRE_206_EXPERIMENT)
+        raw = copy.deepcopy(EXPERIMENT_NOW)
         del raw["ab_test"]
         with self.assertRaises(dc.DecisionConfigError):
             dc.validate(raw, dc.EXPERIMENT_SCHEMA, "t")
@@ -144,7 +154,7 @@ class TestSchema(unittest.TestCase):
             "빈 프로파일": ("run", "profile", " "),
         }
         for label, (section, key, value) in experiment_bad.items():
-            raw = copy.deepcopy(PRE_206_EXPERIMENT)
+            raw = copy.deepcopy(EXPERIMENT_NOW)
             raw[section][key] = value
             with self.subTest(label), self.assertRaises(dc.DecisionConfigError):
                 dc.validate(raw, dc.EXPERIMENT_SCHEMA, "t")
@@ -178,7 +188,7 @@ class TestRepositoryFiles(unittest.TestCase):
 
     def test_experiment_config_equals_pre_206_constants(self) -> None:
         raw = cl.load_yaml(dc.EXPERIMENT_CONFIG)
-        self.assertEqual(PRE_206_EXPERIMENT, dc.validate(raw, dc.EXPERIMENT_SCHEMA, str(dc.EXPERIMENT_CONFIG)))
+        self.assertEqual(EXPERIMENT_NOW, dc.validate(raw, dc.EXPERIMENT_SCHEMA, str(dc.EXPERIMENT_CONFIG)))
 
     def test_loaders_return_typed_objects_and_cache(self) -> None:
         model = dc.load_model_config()
@@ -257,7 +267,7 @@ class TestNoConstantsWhereConfigIsRead(unittest.TestCase):
             "src/decision/churn.py": ("N_SPLITS", "INNER_SPLITS", "SHAP_SAMPLE"),
             "src/decision/segments.py": ("DEFAULT_THRESHOLDS",),
             "src/decision/ab_test.py": ("ALPHA", "POWER", "SRM_THRESHOLD"),
-            "src/orchestration/run_sprint.py": ("RCT_CONTROL_SHARE", "DEFAULT_ACTIVE_DAYS"),
+            "src/orchestration/run_sprint.py": ("RCT_CONTROL_SHARE",),
         }
         for relative, names in expected.items():
             tree = _source(relative)
@@ -350,9 +360,10 @@ class TestCodeUsesConfig(unittest.TestCase):
     def test_run_sprint_reads_experiment_config(self) -> None:
         from src.orchestration import run_sprint as rs
 
-        self.assertEqual((0.5, 90), (rs.RCT_CONTROL_SHARE, rs.DEFAULT_ACTIVE_DAYS))
+        self.assertEqual(0.5, rs.RCT_CONTROL_SHARE)
         args = rs.build_parser().parse_args(["--out", "x"])
-        self.assertEqual((42, 20000, "reference", 90), (args.seed, args.customers, args.profile, args.active_days))
+        self.assertEqual((42, 20000, "reference"), (args.seed, args.customers, args.profile))
+        self.assertFalse(hasattr(args, "active_days"), "#234 에서 없앤 RCT 모집단 창이 CLI 에 남아 있다")
         assignment = rs.rct_assign([f"C{i:08d}" for i in range(80)], 42)
         self.assertEqual(40, sum(1 for t in assignment.values() if t == "T0"))
 
