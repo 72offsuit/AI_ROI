@@ -60,7 +60,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from src.decision.config import load_experiment_config, load_model_config
-from src.decision.observation_contract import outcome_observation_status, verify_event_run
+from src.decision.observation_contract import (
+    outcome_observation_status as _contract_observation_status,
+    verify_event_run,
+)
 from src.measurement import contracts as mc
 from src.simulator import api as sim
 
@@ -425,9 +428,22 @@ def stratified_cap(X: Any, y: Any, max_rows: int | None, seed: int) -> tuple[Any
 
 
 def _pd():
-    import pandas as pd  # 지연 import — 의존성 없는 CI 에서 이 모듈의 정적 검사가 깨지지 않게
+    try:
+        import pandas as pd  # 지연 import — 의존성 없는 CI 에서 정적 검사를 허용한다
+    except ImportError as error:
+        missing = getattr(error, "name", None) or str(error)
+        raise NotRun(f"이벤트 처리의 필수 패키지를 불러올 수 없다: {missing}") from error
 
     return pd
+
+
+def outcome_observation_status(index_time, window_days: int, observation: Mapping | None) -> dict:
+    """계약 판정을 그대로 위임하고 필수 패키지 부재만 실행 상태로 변환한다 (#179 NB2)."""
+    try:
+        return _contract_observation_status(index_time, window_days, observation)
+    except ImportError as error:
+        missing = getattr(error, "name", None) or str(error)
+        raise NotRun(f"관측 판정의 필수 패키지를 불러올 수 없다: {missing}") from error
 
 
 def _timestamps(events: Any) -> Any:

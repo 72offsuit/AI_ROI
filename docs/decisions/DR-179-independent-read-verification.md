@@ -29,7 +29,8 @@ src.decision.data가 없으면 공개 events() 대체 읽기에 도달하기 전
 | 근거 | 확인한 사실 | 적용 범위 |
 |---|---|---|
 | [#179 공개 계보 결정 요청](https://github.com/72offsuit/AI_ROI/issues/179#issuecomment-6506729012) | N2 계약은 합의 대기, 모델 없는 읽기 회귀는 독립 수정 | 사용자 요청 범위 |
-| src/orchestration/AGENTS.md | 공개 API·decision 인터페이스 호출, 선택적 모델을 사용할 수 없는 단계는 not_run | 필수 관측 검증은 모델 선택과 별개 |
+| src/orchestration/AGENTS.md | 공개 API·decision 인터페이스만 호출하는 파트 경계 | 필수 관측 검증의 소유·호출 방향 |
+| src/orchestration/run_sprint.py의 NotRun·decision_fn·StageLog.stage | 선행 조건·선택적 모듈이 없으면 not_run, 그 밖의 실행 예외는 failed | 모델 선택과 독립적인 검증 및 오류 분류 |
 | src/decision/data.py | 파일·내용·원시 행 수·부모·거부 수 검증이 pandas 로더 모듈에 함께 있음 | 규칙을 옮기고 중복하지 않음 |
 | src/decision/features/sprint_table.py | 관측 상태 판정과 KST 기준점 정규화가 Feature 모듈에 있음 | 로직·시간 정밀도를 보존해 분리 |
 | tests/test_orchestration_sprint.py | 기존 모듈 부재 시험은 읽기·RCT·S0 경로를 보장하려 함 | 모델 불가로 검증 자체를 끄지 않음 |
@@ -63,7 +64,18 @@ B는 계층 역참조를 피하고, C는 공용 변경을 피하기 위해 택�
 
 N2의 None 부모 공개 계약은 합의 대기다. 실제 분기 경제값이 정상화된다고 선언하지 않는다. 실제 개발 데이터 성능·동점률·Final Holdout은 이 변경의 검증 대상이 아니다. 새 필수 모듈도 설치되지 않은 손상 배포는 기존 모델 부재와 다른 오류이며 정상으로 처리하지 않는다.
 
-## 구현·검증 기록 (2026-10-30)
+## 독립 검토 NB1~NB4의 후속 선택 (2026-10-30)
+
+[검토 후속 기록](https://github.com/72offsuit/AI_ROI/issues/179#issuecomment-6507792065)을 근거로 사용자 승인 범위의 보완을 진행한다. N2 합의는 아직 없으므로 부모 연결 조건은 유지한다.
+
+- NB1: 공개 계약 docs/simulator_api.md의 SimulatorError(Exception) 하위 OutputRootError·SinkFormatError가 스트림 중간에 발생하면, 받은 일부 행은 사용하지 않고 기존 StageLog의 failed 분류를 유지한다. 읽기를 시도하다 공개 API 검증이 실패한 경우라는 의미다. 이를 무조건 not_run으로 바꾸는 대안은 이번에 선택하지 않는다. 기존 OSError/ValueError 처리는 유지한다. 시험 대역은 공개 문서의 예외 상속만 구현하며 실제 시뮬레이터 내부·MRO 검증을 주장하지 않는다.
+- NB2: 필수 패키지 ImportError는 선행 조건 부족이므로 러너의 _pd 및 관측 상태 호출 경계에서 NotRun으로 변환한다. 빈 실행도 이 분류를 따른다. 관측 계약 모듈 자체는 orchestration에 의존하지 않고 기존 ImportError를 전파한다. 러너는 같은 판정 함수를 직접 위임 호출하며 계산을 복제하지 않는다. 모든 예외를 잡는 대안은 실제 계산 오류까지 숨기므로 기각한다. ValueError·RuntimeError 등은 원래의 failed 분류를 유지한다.
+- NB3: 별도 프로세스에서 모델·로더 10종과 sklearn·torch·shap을 import 단계부터 차단한다. 시뮬레이터 import 한 줄만 제거한 시스템 러너와 공개 API 모양의 대역으로 정상 본선·정확한 부모·이력 중복·잘못된 부모·손상/미주장 파일·중간 오류를 확인한다. 단순 decision_fn 패치와 달리 import 시도·적재도 보고한다.
+- NB4: not_run의 근거는 AGENTS가 아니라 실제 NotRun·decision_fn·StageLog 구현으로 교정했다.
+
+반증 조건은 필수 패키지 부재가 failed/ok가 되는 것, 중간 오류에서 일부 프레임이 성공으로 남는 것, 일반 실행 오류가 not_run으로 숨겨지는 것, 선택적 모델 적재 또는 N2 부모 판정 변화다. 새 반례와 기존 회귀를 실행한 뒤 결과를 별도로 기록한다.
+
+## 최초 분리 구현·검증 기록 (2026-10-30, eb5fb28)
 
 - 새 전용 시험 7건은 설치 환경에서 PASS7 / FAIL0 / ERROR0 / SKIP0이다. 선택적 모델 함수 전부 부재, 정상 부모의 대체 읽기, 이력 중복 방지, 잘못된 부모·손상 파일·스트림 중간 오류를 확인한다. ML 패키지와 모델 import를 막은 별도 프로세스에서도 필수 모듈 import와 빈 EventSink 실행 검증이 성공한다.
 - 기존 관련 시험과 경계 검사를 묶은 11모듈 하네스는 198수집 / PASS193 / FAIL0 / ERROR0 / SKIP5다. Torch 미설치2건과 숨김 상태 사용3건은 실행하지 않았다. 금지 모듈 import 시도·적재0이다. 전체 discover 또는 전체 격리 검사 통과를 뜻하지 않는다.
@@ -73,3 +85,15 @@ N2의 None 부모 공개 계약은 합의 대기다. 실제 분기 경제값이 
 - 공개 API 기반 오케스트레이션 모듈 전체는 59건 실행 / failure7 / error14 / skip0이다. 부모 연결 차단 뒤의 경제값·시간 평가·키 기대 실패가 남는다. 서브테스트가 있으므로 PASS 수를 단순 차감하지 않는다. 실제 모델을 학습한 전체 E2E는 아니다.
 - 처음 전용 시험에서 fixture ID가 UUID 계약에 맞지 않아 FAIL1이 발생했다. fixture를 수정한 뒤 7건 통과했고 초기 로그를 보존한다. 전체 오케스트레이션 시험에서는 sys.modules 가짜 주입 중 지연 Parquet 등록의 캐시가 제거돼 ArrowKeyError가 났다. 가짜 주입 전에 공개 DataFrame.to_parquet를 메모리에서 호출하도록 시험 준비만 보완한 뒤 이 오류는 사라지고, 모델 부재 시험은 N2 경제값 차단까지 진행했다. 제품 파서의 오류를 무시하지 않았다.
 - 재현 명령은 python3 -m unittest tests.test_orchestration_observation_contract tests.test_feature_sprint_table -v와 python3 -m unittest tests.test_orchestration_sprint -v다. 경계 제한 하네스·환경·초기/최종 로그는 plans/issue179_independent_read_20261030_v06/ 검토 패키지에 보존한다. plans는 로컬 참고 자료이며 이 결정 기록과 제품·시험 코드는 별도 추적한다.
+
+## NB 보완 이후 검증과 N2 범위 구분
+
+- 전용 시험은 11건으로 늘었다. 실제 import 차단 별도 프로세스에서 정상 본선·정확한 부모의 분기·전량 읽기·실패 분류를 확인한다. 모델/로더 10모듈의 등록 함수 26개는 사용할 수 없고, 적재된 decision 모듈은 config와 observation_contract뿐이다. 이 시험은 공개 계약 모양의 대역과 측정 EventSink를 사용한다. 실제 시뮬레이터 모델 평가가 아니다.
+- 최초 추가 반례에서 session_start의 page_type이 빠진 fixture 실패를 바로잡았다. 이후 제품 수정 전에는 pandas 부재 시 빈 실행 읽기와 관측 판정이 failed인 두 반례가 남았고, 러너 경계 보완 후 not_run으로 바뀌었다. 초기 실패 로그를 보존한다.
+- Python3.12.13 설치 환경의 전용 시험·기존 Feature 시험은 51건 모두 통과했다. 경계 제한 11모듈 검사는 202수집 / PASS197 / FAIL0 / ERROR0 / SKIP5다. Torch 미설치2건·숨김 상태 사용3건을 통과에 포함하지 않는다. 금지 모듈 import 시도·적재는 0이다.
+- 같은 버전 무의존 환경은 202수집 / PASS84 / FAIL0 / ERROR0 / SKIP118이다. 새 패키지 부재 시험도 러너의 기존 PyYAML 선행 조건이 없으면 미실행으로 표시한다. PyYAML 누락까지 pandas 분류의 성공으로 세지 않는다.
+- observation_contract의 검증·판정 코드는 이번 NB 보완에서 변경하지 않았다. N2 부모 조건을 유지했으므로 이전 전체 오케스트레이션의 N2 실패를 해결했다고 주장하지 않는다. 이 보완 후 독립 검수자의 새 검토와 실제 모델 학습은 아직 실시하지 않았다.
+
+**N2는 모든 작업의 선행 합의가 아니다.** [인성의 기존 R1 결정](https://github.com/72offsuit/AI_ROI/issues/179#issuecomment-6494889527)은 새 공통 계약 없이 RunSummary·측정 실행 기록을 사용하라고 정했다. 공개 simulator_api.md의 events는 활성 세계의 분기 이전 이력을 포함하고 파일 바이트·건수를 검증하며, 중간 예외가 나면 받은 전량을 폐기하도록 규정한다. 이 근거를 이용하는 시스템 내부 구현은 조사·설계할 수 있다. 새 공용 필드나 측정 계층 의미를 요구할 때 양 팀 합의가 필요하다.
+
+다만 공개 스트림의 정상 종료만으로 호출자가 넘긴 임의 history·run_id와 현재 활성 세계가 같다는 증명이 생기지는 않는다. snapshot/restore/advance의 호출 연결, 해당 RunSummary, 재검증된 본선·분기 기록 및 전량 읽기를 어떻게 결속할지 반례로 확인해야 한다. 부모 None을 무조건 정상으로 바꾸거나, 파일 검증 실패를 API 경로로 우회하지 않는다. 이 설계 검토는 아직 완료되지 않았으며 현재 코드의 N2 차단 조건은 유지한다. "새 팀 합의가 반드시 있어야 모든 후속 작업을 시작한다"와 "현재 N2가 해결됐다" 모두 이번 기록의 결론이 아니다.
