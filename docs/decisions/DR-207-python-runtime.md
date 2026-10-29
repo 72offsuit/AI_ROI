@@ -49,6 +49,7 @@ PRD NFR-04 는 `Python >= 3.10` 이고 SRS SYS-003 · 머리말(`Target Runtime:
 - Dockerfile 은 `python:3.12.15-slim-trixie`(다이제스트 고정)다.
   - 빌드 컨텍스트에서 `.agent-team/_state/*.audit-key` · `*.lock` 을 뺀다 — `.gitignore` 와 같은 줄(PR #240 리뷰 R1). `.agent-team` 전체는 빼지 않는다: 이미지에 함께 들어가는 `tests/` 중 4개(`test_publish_contract` · `test_publish_pipeline` · `test_contract_enforcement` · `test_schema`)가 `.agent-team/04-architecture/` 의 스키마 · 예시를 읽는다. 런타임(대시보드 · 파이프라인 명령)은 쓰지 않는다. `tests/test_docker_context.py` 가 `.gitignore` 의 `_state` 줄이 `.dockerignore` 에 있는지 대조한다(Docker 매칭 자체는 위 합성 빌드로 1회 확인).
 - README · TEAM_SETUP · AGENTS.md 에 "전체는 3.12, 3.10 은 측정 계층까지" 를 적는다.
+- `docs/gate1_checklist.md` §5.1 의 실행 전 확인 명령도 `python3` 이 아니라 `python3.12` 로 적는다(#248). `python3` 이 가리키는 판은 기기마다 다르다 — `python3` 이 3.11 인 기기에서 ① 이 실패했다. `tests/test_runtime_declaration.py` 가 그 명령들을 `Supported runtime` 과 대조한다.
 - `tests/test_runtime_declaration.py` 가 두 줄을 Dockerfile · CI 3종 · 설치된 패키지의 `Requires-Python` 과 대조한다. 선언 런타임이 "실제로 필요한 최소 판" 인지도 본다. 고정 의존성이 더 낮은 판을 허용하게 바뀌면 선언의 근거가 사라졌다고 실패한다.
   - `Requires-Python` 은 Dockerfile 의 **정확한 판**(3.12.15)으로 판정한다(PR #240 리뷰 R2). major.minor 하한 · 상한만 보던 이전 판정은 `>=3.12,!=3.12.*` · `~=3.10.0` · `>=3.12.16` 을 통과시켰다. 이제 절마다 PEP 440 의 정식 판 비교(크기 비교 4종 · `==` · `!=` · 와일드카드 `.*` · `~=`)로 보고, 하한은 실제로 만족하는 가장 낮은 판으로 찾는다(`>3.11` → 3.11). 그 밖의 절(`===` · 사전 배포판 · 환경 표지 등)은 **통과가 아니라 실패**다. 표준 파서(`packaging`)는 개발 의존성을 하나 늘리므로 택하지 않았다 — 지금 고정 9종의 조건은 전부 `>=X.Y` 다.
 
@@ -82,4 +83,5 @@ PRD NFR-04 는 `Python >= 3.10` 이고 SRS SYS-003 · 머리말(`Target Runtime:
 ## 남은 불확실성
 
 - NFR-04 를 평가하는 쪽이 하한으로 읽는지 확인하지 못했다. 과제 원문에 더 적힌 것이 없다.
+- 3.11 은 어느 CI 잡도 돌리지 않는다. 하한(3.10)과 지원 런타임(3.12) 사이의 판에서만 다르게 동작하는 표준 라이브러리 차이는 잡히지 않는다 — #248(dataclass 가 `mappingproxy` 기본값을 3.11 에서만 거부한다)이 그 틈에서 나왔다. `python-compat.yml` 에 3.11 을 더할지는 #248 의 선택 항목으로 남겼다.
 - 머리 주석의 Requires-Python 표는 2026-10-23 PyPI 조회 결과다. 의존성 설치 CI 잡이 설치된 메타데이터와 매번 대조하므로 고정 버전을 바꾸면 테스트가 알린다. 다만 의존성 없는 잡에서는 그 대조가 `BLOCKED` skip 이다.

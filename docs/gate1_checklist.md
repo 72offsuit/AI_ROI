@@ -181,18 +181,20 @@ if not lock_file.exists():
 
 ### 5.1 실행 전 확인 (전부 통과해야 한다)
 
+명령은 **지원 런타임 Python 3.12**(`requirements.txt` 의 `Supported runtime` · DR-207)로 적는다. `python3` 이 가리키는 판은 기기마다 다르다 — `python3` 이 3.11 인 기기에서 ① 이 실패했다(#248). ① 은 의존성 없는 3.12 와 `requirements.txt` 를 설치한 3.12 **양쪽**에서 돌린다(`freeze.py` G-14 근거 *"의존성 없이·설치 후 양쪽 OK"* 와 같다).
+
 ```bash
 # ① 전건 통과 (G-14)
-python3 -m unittest discover -s tests
+python3.12 -m unittest discover -s tests
 
 # ② 생성 문서 ↔ 코드 일치 (G-13)
-python3 scripts/gen_event_schema_doc.py | diff - docs/event_schema.md
+python3.12 scripts/gen_event_schema_doc.py | diff - docs/event_schema.md
 
 # ③ 소유 경계
-python3 .agent-team/04-architecture/tools/check_ownership.py
+python3.12 .agent-team/04-architecture/tools/check_ownership.py
 
 # ④ 선행 조건 16종 판정
-python3 -c "from src.measurement import freeze as fz; \
+python3.12 -c "from src.measurement import freeze as fz; \
   v = fz.verify(preconditions=fz.GATE1_PRECONDITIONS, items=fz.gate1_lock_items()); \
   print(v.overall, v.verification, 'can_lock:', v.can_lock); \
   [print(' 미충족', p.id, p.met, p.title) for p in v.unmet]"

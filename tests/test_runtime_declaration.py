@@ -11,6 +11,8 @@ floor`). 선언만 두면 아무도 대조하지 않으므로 여기서 맞댄�
 
   checked   Dockerfile 런타임 이미지 · CI 3.12 잡 2종이 `Supported runtime` 과 같은 판이다
   checked   python-compat.yml 이 `Measurement-layer floor` 에서 돈다
+  checked   docs/gate1_checklist.md §5.1 의 명령이 `python3` 이 아니라 `Supported runtime` 판을 부른다
+            (#248 — `python3` 이 3.11 인 기기에서 ① 이 실패했다)
   checked   (의존성이 있으면) 고정 버전 전부의 Requires-Python 을 Dockerfile 의 정확한 판
             (예: 3.12.15)이 만족한다. 이 파일이 판정하지 못하는 절(`===` · 사전 배포판 등)은
             통과가 아니라 실패다 — 모르는 조건을 만족한다고 적지 않는다 (PR #240 리뷰 R2)
@@ -31,6 +33,7 @@ REQUIREMENTS = REPO_ROOT / "requirements.txt"
 REQUIREMENTS_DEV = REPO_ROOT / "requirements-dev.txt"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
+GATE1_CHECKLIST = REPO_ROOT / "docs" / "gate1_checklist.md"
 
 
 def _declared(label: str) -> tuple[int, int]:
@@ -140,6 +143,17 @@ class TestDeclarationMatchesWhereItRuns(unittest.TestCase):
         self.assertEqual(floor, _workflow_python("python-compat.yml"))
         self.assertLessEqual(floor, _declared("Supported runtime"))
         self.assertGreaterEqual(floor, (3, 10), "PRD NFR-04 의 하한(3.10)보다 높은 판을 하한이라 적었다")
+
+    def test_gate1_checklist_runs_the_declared_runtime(self) -> None:
+        """§5.1 실행 전 확인의 python 호출이 전부 선언 런타임이다 — `python3` 의 판은 기기마다 다르다(#248)."""
+        runtime = "python{}.{}".format(*_declared("Supported runtime"))
+        section = GATE1_CHECKLIST.read_text(encoding="utf-8").partition("### 5.1")[2].partition("\n### ")[0]
+        block = re.search(r"```bash\n(.*?)```", section, re.S)
+        self.assertIsNotNone(block, "gate1_checklist.md §5.1 에 bash 명령 블록이 없다")
+        calls = re.findall(r"^(python[\d.]*)\s", block.group(1), re.M)
+        self.assertTrue(calls, "gate1_checklist.md §5.1 블록에 python 호출이 없다")
+        self.assertEqual([runtime] * len(calls), calls,
+                         f"gate1_checklist.md §5.1 의 명령이 선언 런타임({runtime})이 아닌 판을 부른다")
 
 
 class TestPinsAgreeWithTheDeclaredRuntime(unittest.TestCase):
