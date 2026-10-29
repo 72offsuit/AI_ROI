@@ -99,8 +99,15 @@ export interface StrategyComparison extends SprintHeader {
     churn_rate?: number | null;
     incremental_profit_vs_S1?: number | null;
     incremental_profit_basis?: string | null;
+    /** "ok" or "계산 불가 — …" (issue 169). A null increment always carries its reason here. */
+    incremental_profit_status?: string | null;
+    /** Direction check only — Δ(revenue − marketing cost), COGS not deducted. Never the increment. */
+    directional_revenue_minus_marketing_vs_S1?: number | null;
+    directional_status?: string | null;
     flags?: string[] | null;
     roi?: number | null;
+    /** "ok" or "계산 불가 — …". The screen also requires `incremental_profit_status === "ok"` (issue 169). */
+    roi_status?: string | null;
   }[];
 }
 
