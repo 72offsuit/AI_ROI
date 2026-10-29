@@ -18,7 +18,8 @@ GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 *
   ② `.github/workflows/*.yml` 중 `pull_request` 로 도는 워크플로우의 잡이 **전부**
      체크로 보고됐다. 아직 뜨지 않은 체크는 실패도 성공도 아니어서, 보고된 것만 보면
      통과로 보인다 — 푸시 직후가 그 상태다. 필수 잡은 정확한 (워크플로우, 잡) 쌍으로만
-     찾는다. 필수 목록이 비었거나 읽지 못하면 막는다.
+     찾는다. 필수 목록이 비었거나 읽지 못하면 막는다 — 워크플로우 하나 · 잡 하나만 읽지
+     못해도 막는다(목록이 조용히 줄면 그 체크는 안 떠도 병합된다).
      필수 목록은 **이 스크립트가 놓인 체크아웃**(작업 폴더가 아니다)의 워크플로우에서 읽는다 —
      최신 `main` 체크아웃에서 실행한다. 이름 변경 처리는 docs/GIT_WORKFLOW.md §5.1.
   ③ 보고된 체크가 **전부** `SUCCESS` 다. `SKIPPED` · `NEUTRAL` · 진행 중은 통과가 아니다.
@@ -58,19 +59,18 @@ PR_FIELDS = (
 _VERDICT_STATES = ("APPROVED", "CHANGES_REQUESTED", "DISMISSED")
 
 
-def _unquote(value: str) -> str:
-    value = value.strip()
-    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
-        return value[1:-1]
-    return value
-
-
 class WorkflowError(ValueError):
     """필수 체크 목록을 만들지 못했다 — 판정 기준이 없으니 병합하지 않는다."""
 
 
 #: `on:` 키. YAML 1.1 은 따옴표 없는 `on` 을 참(true)으로 읽으므로 그 표기도 받는다.
 _ON_KEY = re.compile(r"""^(?:on|"on"|'on'|true):(.*)$""")
+#: 블록 매핑의 키 줄 — 따옴표 없는 키 · `"키"` · `'키'`. 값은 `:` 뒤 공백 다음이다.
+_KEY_LINE = re.compile(r"""^(?:"([^"\\]+)"|'([^']+)'|([A-Za-z0-9_-]+))\s*:(?:\s+(.*))?$""")
+#: 블록 목록의 항목 줄 `- 값`.
+_ITEM_LINE = re.compile(r"^-(?:\s+(.*))?$")
+#: GitHub 이벤트 이름.
+_EVENT = re.compile(r"[A-Za-z_]+")
 #: `pull_request` 이벤트에 이 필터가 있으면 PR 마다 돈다는 보장이 없다.
 _PATH_FILTERS = ("paths", "paths-ignore")
 
@@ -79,52 +79,102 @@ def _indent(line: str) -> int:
     return len(line) - len(line.lstrip(" "))
 
 
+def _strip_comment(text: str) -> str:
+    """끝 주석을 뗀다. YAML 의 `#` 은 줄 처음이거나 앞에 공백이 있을 때만 주석이다."""
+    return re.sub(r"(?:^|\s+)#.*$", "", text).strip()
+
+
+def _scalar(text: str) -> str:
+    """한 줄 스칼라 값 — 따옴표를 벗기고 끝 주석을 뗀다. 따옴표를 읽지 못하면 `WorkflowError`."""
+    text = text.strip()
+    if text[:1] in ("'", '"'):
+        end = text.find(text[0], 1)
+        rest = text[end + 1:].strip() if end > 0 else None
+        if rest is None or (rest and not rest.startswith("#")):
+            raise WorkflowError(f"따옴표 값을 읽지 못했다: {text!r}")
+        return text[1:end]
+    return _strip_comment(text)
+
+
+def _mapping_key(item: str) -> tuple[str, str] | None:
+    """블록 매핑 키 줄의 (키, 값 원문). 키 줄이 아니면 None — 호출부가 막을지 정한다."""
+    match = _KEY_LINE.match(item)
+    if not match:
+        return None
+    return next(g for g in match.groups()[:3] if g is not None), (match.group(4) or "").strip()
+
+
+def _event(text: str, where: str) -> str:
+    name = _scalar(text)
+    if not _EVENT.fullmatch(name):
+        raise WorkflowError(f"{where} 를 이벤트 이름으로 읽지 못했다: {text.strip()!r}")
+    return name
+
+
 def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
     """(`pull_request` 로 도는가, **그 이벤트에** 붙은 경로 필터).
 
     `push.paths` 같은 다른 이벤트의 필터는 보지 않는다 — PR 필수 목록을 줄이지 못한다.
-    인라인 매핑(`on: {…}` · `pull_request: {…}`)은 읽지 않고 실패한다.
+
+    ★ 읽는 표기를 정해 두고, 그 밖의 줄은 `WorkflowError` 다(PR #238 리뷰 R4). 모르는 표기를
+      "PR 워크플로우가 아니다" 로 두면 그 워크플로우의 잡이 사유 없이 필수에서 빠진다.
+      읽는 것: `on:` 한 줄 값(이벤트 하나 · 한 줄 `[…]` 목록) · 블록 목록(`- 이벤트`) ·
+      블록 매핑(`이벤트:`) — 키와 항목의 따옴표, 끝 주석 포함. 인라인 매핑 `{…}` · 여러 줄
+      `[…]` · `jobs:` 뒤의 `on:` 은 읽지 않고 실패한다.
     """
-    for i, line in enumerate(head):
-        match = _ON_KEY.match(line)
-        if not match:
+    start = next((i for i, line in enumerate(head) if _ON_KEY.match(line)), None)
+    if start is None:
+        raise WorkflowError("`jobs:` 앞에서 최상위 `on:` 을 찾지 못했다")
+    inline = _strip_comment(_ON_KEY.match(head[start]).group(1))
+    if inline:  # `on: pull_request` · `on: [push, pull_request]` — 필터가 들어갈 자리가 없다
+        if inline.startswith("{"):
+            raise WorkflowError(f"인라인 매핑 `on: {inline}` 은 읽지 않는다")
+        if inline.startswith("["):
+            if not inline.endswith("]"):
+                raise WorkflowError(f"여러 줄 목록 `on: {inline}` 은 읽지 않는다")
+            events = [_event(item, "`on: […]` 의 항목") for item in inline[1:-1].split(",") if item.strip()]
+        else:
+            events = [_event(inline, "`on:` 의 값")]
+        return "pull_request" in events, []
+    block = [line for line in head[start + 1:] if line.strip()]
+    block = block[:next((k for k, line in enumerate(block) if _indent(line) == 0), len(block))]
+    if not block:
+        raise WorkflowError("`on:` 아래에 이벤트가 없다")
+    child = _indent(block[0])
+    found, filters = False, []
+    for j, line in enumerate(block):
+        if _indent(line) > child:
+            continue  # 이벤트의 설정 — `pull_request` 의 것만 아래에서 읽는다
+        item = line.strip()
+        listed = _ITEM_LINE.match(item)
+        key = None if listed else _mapping_key(item)
+        if _indent(line) < child or (listed is None and key is None):
+            raise WorkflowError(f"`on:` 아래 줄을 읽지 못했다: {item!r}")
+        if listed:
+            found = _event(listed.group(1) or "", "`on:` 목록 항목") == "pull_request" or found
             continue
-        inline = match.group(1).split("#", 1)[0].strip()
-        if inline:  # `on: pull_request` · `on: [push, pull_request]` — 필터가 들어갈 자리가 없다
-            if inline.startswith("{"):
-                raise WorkflowError(f"인라인 매핑 `on: {inline}` 은 읽지 않는다")
-            return "pull_request" in re.findall(r"[A-Za-z_]+", inline), []
-        block: list[str] = []
-        for line in head[i + 1:]:
-            if line.strip() and _indent(line) == 0:
-                break
-            if line.strip():
-                block.append(line)
-        if not block:
-            return False, []
-        child = _indent(block[0])
-        for j, line in enumerate(block):
-            if _indent(line) != child:
+        event, value = key
+        if not _EVENT.fullmatch(event):
+            raise WorkflowError(f"`on:` 아래 키를 이벤트 이름으로 읽지 못했다: {event!r}")
+        if event != "pull_request":
+            continue
+        value = _scalar(value)
+        if value.startswith("{"):
+            raise WorkflowError(f"인라인 매핑 `pull_request: {value}` 은 읽지 않는다")
+        if value not in ("", "~", "null"):
+            raise WorkflowError(f"`pull_request:` 의 값을 읽지 못했다: {value!r}")
+        found = True
+        sub = block[j + 1:]
+        sub = sub[:next((k for k, s in enumerate(sub) if _indent(s) <= child), len(sub))]
+        for setting in sub:
+            if _indent(setting) != _indent(sub[0]):
                 continue
-            item = line.strip()
-            if re.fullmatch(r"-\s*pull_request", item):  # 목록 형태 `- pull_request`
-                return True, []
-            event = re.match(r"^pull_request:(.*)$", item)
-            if not event:
-                continue
-            value = event.group(1).split("#", 1)[0].strip()
-            if value.startswith("{"):
-                raise WorkflowError(f"인라인 매핑 `pull_request: {value}` 은 읽지 않는다")
-            sub = []
-            for line in block[j + 1:]:
-                if _indent(line) <= child:
-                    break
-                sub.append(line)
-            keys = [m.group(1) for line in sub if _indent(line) == _indent(sub[0])
-                    for m in [re.match(r"^\s+([A-Za-z_-]+):", line)] if m]
-            return True, [k for k in keys if k in _PATH_FILTERS]
-        return False, []
-    return False, []
+            pair = _mapping_key(setting.strip())
+            if pair is None:
+                raise WorkflowError(f"`pull_request:` 아래 줄을 읽지 못했다: {setting.strip()!r}")
+            if pair[0] in _PATH_FILTERS:
+                filters.append(pair[0])
+    return found, filters
 
 
 def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, str]]]:
@@ -142,8 +192,9 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
         runs_on_pr, filters = _pull_request_trigger(head)
         if not runs_on_pr:
             continue
-        name_match = next((m for line in head for m in [re.match(r"^name:\s*(.+?)\s*$", line)] if m), None)
-        workflow = _unquote(name_match.group(1)) if name_match else path.name
+        names = [pair[1] for line in head if _indent(line) == 0
+                 for pair in [_mapping_key(line)] if pair and pair[0] == "name"]
+        workflow = (_scalar(names[0]) if names else "") or path.name
         if filters:
             excluded.append((workflow, f"{path.name}: pull_request.{' · '.join(filters)} 필터"))
             continue
@@ -151,17 +202,23 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
         job_id: str | None = None
         job_name: str | None = None
         for line in body.splitlines()[1:] if sep else []:
-            if line and not line.startswith(" ") and not line.startswith("#"):
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            if _indent(line) == 0:
                 break  # 다음 최상위 키
-            job = re.match(r"^  ([A-Za-z0-9_-]+):\s*$", line)
-            if job:
+            if _indent(line) < 4:
+                # ★ 잡 자리(2칸)의 줄은 전부 잡 ID 로 읽혀야 한다(PR #238 리뷰 R4). 못 읽은 줄을
+                #   건너뛰면 그 잡만 필수에서 빠지고, 나머지 잡이 있어 아무 오류도 나지 않는다.
+                pair = _mapping_key(line.strip()) if _indent(line) == 2 else None
+                if pair is None or _scalar(pair[1]):
+                    raise WorkflowError(f"{path.name}: 잡 자리의 줄을 잡 ID 로 읽지 못했다: {line.strip()!r}")
                 if job_id is not None:
                     jobs.append((workflow, job_name or job_id))
-                job_id, job_name = job.group(1), None
+                job_id, job_name = pair[0], None
                 continue
-            name = re.match(r"^    name:\s*(.+?)\s*$", line)
-            if name and job_id is not None and job_name is None:
-                job_name = _unquote(name.group(1))
+            pair = _mapping_key(line.strip()) if _indent(line) == 4 else None
+            if pair and pair[0] == "name" and job_id is not None and job_name is None:
+                job_name = _scalar(pair[1]) or None
         if job_id is not None:
             jobs.append((workflow, job_name or job_id))
         if not jobs:
@@ -179,7 +236,8 @@ def required_checks(workflow_dir: Path = WORKFLOWS) -> list[tuple[str, str]]:
     `paths` · `paths-ignore` 필터가 있는 워크플로우는 PR 마다 돈다는 보장이 없으므로 필수에서
     뺀다(`excluded_workflows()` 가 사유를 낸다) — 보고되면 ③이 여전히 SUCCESS 를 요구한다.
     `push.paths` 처럼 다른 이벤트의 필터는 필수 목록을 줄이지 않는다.
-    읽을 파일이 없거나 PR 워크플로우에서 잡을 못 읽으면 `WorkflowError` 다.
+    읽을 파일이 없거나, 트리거 · 잡 자리의 줄을 **하나라도** 읽지 못하면 `WorkflowError` 다 —
+    일부만 읽고 나머지를 버리면 버린 만큼 필수 목록이 조용히 준다(PR #238 리뷰 R4).
     """
     return _scan(workflow_dir)[0]
 
