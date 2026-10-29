@@ -3,12 +3,16 @@
 봉인(GATE 1)은 하지 않는다. `config/gate1_lock.yaml` 과 정본 4종을 읽지도 쓰지도 않는다.
 기준은 AI 성능이 아니라 SRS SIM-005(이탈률 15~25%)와 처치 강도 가드레일이다(src/simulator/AGENTS.md).
 
-절차: 세계를 진행한 시각 T0 에서
-- 평가 모집단 = 정본 eligible(docs/data_spec.html §4.1): 가입 60일 이상 ∧ T0 이전 구매 1건 이상 ∧ 마지막 구매가
-  T0 보다 14일 이상 전. 이탈률·ATE·쿠폰·4분면을 모두 이 모집단에서 잰다(#148 F12 와 같은 정의)
-- 이탈률 = eligible 중 T0(무처치) 팔에서 [T0, T0 + 42일) 무구매 비율
-- 참고값: 직전 active_lookback_days 일 활성 고객 기준 이탈률(처음 스프린트 지시 정의 — 판정하지 않는다)
-- ATE_k = 활성 고객 평균 [창 내 구매 여부 | T_k] − [… | T0] (CRN 반사실 실행)
+절차: 세계를 진행한 시각 T0 에서 모집단 두 개를 모두 계산하고, 지표마다 정본 모집단 하나로 판정한다
+(docs/decisions/DR-194-population.md, 2026-10-28 사용자 결정 — 역할별 분리).
+- ① 직전 active_lookback_days(42)일 구매 고객 — **이탈률(SIM-005)을 판정한다.** T0 와 무관하게 일정한
+  이탈 기제의 성질이다(#193)
+- ② 정본 eligible(docs/data_spec.html §4.1): 가입 60일 이상 ∧ T0 이전 구매 1건 이상 ∧ 마지막 구매가 T0 보다
+  14일 이상 전 — **처치 지표(ATE · 쿠폰 · 4분면)를 판정한다.** RCT 배정 모집단과 같다(#234 가 결정 계층에 적용)
+- 결과 JSON 최상위의 값이 판정값이다(이탈률은 ①, 처치 지표는 ②). 두 모집단의 전체 값은 `active42` ·
+  `eligible_spec41` 블록에, 판정하지 않는 쪽 검사는 `active42_*` · `spec41_*` 이름에 `role: 참고` 로 싣는다
+- 이탈률 = 모집단 중 T0(무처치) 팔에서 [T0, T0 + 42일) 무구매 비율
+- ATE_k = 모집단 평균 [창 내 구매 여부 | T_k] − [… | T0] (CRN 반사실 실행)
 - 쿠폰 사용률(판정) = 쿠폰 처치(T2·T3) 팔의 처치군 **전체** 중 유효기간 안에 쿠폰을 쓴 고객 비율. 띠 5~20%
   (2026-10-22 사용자 확정, docs/research/data_grounding.md §3-1 — PRD 원문 25~40% 폐기). 참고값으로
   "처치군 중 창 안 구매자" 분모도 함께 싣는다(판정하지 않는다)
@@ -81,11 +85,9 @@ def _block(rows: list[dict[str, object]], p: params.Params) -> dict[str, object]
 def evaluate(
     world: dict[str, object], orders: list[dict[str, object]], sample: int | None
 ) -> tuple[dict[str, object], list[dict[str, object]]]:
-    """판정 모집단 = 직전 active_lookback_days 일 구매 고객(스프린트 지시 정의).
+    """이탈률은 ① 직전 42일 구매 고객, 처치 지표는 ② §4.1 eligible 로 판정한다(DR-194, 모듈 docstring).
 
-    정본 eligible(docs/data_spec.html §4.1 — 가입 ≥60일 ∧ 구매 ≥1 ∧ 마지막 구매 ≥14일 전, #148 F12 의 정의)도
-    같은 지표를 계산해 `eligible_spec41` 블록과 `spec41_*` 검사로 함께 싣는다. 어느 쪽을 판정 기준으로 할지는
-    리드·사용자 결정이다(DR-143-sim-sprint).
+    돌려주는 반사실 행은 모집단별 `{"active42": …, "eligible_spec41": …}` 이다.
     """
     p = params.active()
     now = world["now_ms"]
@@ -100,12 +102,21 @@ def evaluate(
     )
     rows = treatment.potential_outcomes(world, _pick(active, sample))
     spec_rows = treatment.potential_outcomes(world, _pick(eligible, sample))
+    churn_block, treatment_block = _block(rows, p), _block(spec_rows, p)
     result: dict[str, object] = {
         "at": upper,
-        "population": f"직전 {p.active_lookback_days}일 구매 고객",
+        "population": {
+            "churn": f"① 직전 {p.active_lookback_days}일 구매 고객",
+            "treatment": "② data_spec §4.1 eligible",
+            "decision": "docs/decisions/DR-194-population.md",
+        },
         "active_customers": len(active),
-        **_block(rows, p),
-        "eligible_spec41": {"customers": len(eligible), **_block(spec_rows, p)},
+        "eligible_customers": len(eligible),
+        # 판정값 — 이탈률은 ①, 처치 지표는 ②.
+        "churn_rate_bp": churn_block["churn_rate_bp"],
+        **{key: value for key, value in treatment_block.items() if key not in _CHURN_KEYS},
+        "active42": {"customers": len(active), **churn_block},
+        "eligible_spec41": {"customers": len(eligible), **treatment_block},
     }
     # 참고값: Trait 반응 성향 Negative 비율(전 고객). 4분면 Sleeping Dog 과 정의가 달라 판정하지 않는다.
     population = world["customers"]
@@ -115,10 +126,23 @@ def evaluate(
         == treatment.NEGATIVE
     )
     result["negative_response_trait_bp_reference"] = _bp(negative, len(population))
-    result["checks"] = _checks(result, p) + [
-        {**check, "name": "spec41_" + check["name"]} for check in _checks(result["eligible_spec41"], p)
+    judged_churn, active_treatment = _split(_checks(churn_block, p))
+    spec_churn, judged_treatment = _split(_checks(treatment_block, p))
+    reference = [{**c, "name": "active42_" + c["name"], "role": "참고"} for c in active_treatment] + [
+        {**c, "name": "spec41_" + c["name"], "role": "참고"} for c in spec_churn
     ]
-    return result, rows
+    result["checks"] = [{**c, "role": "판정"} for c in judged_churn + judged_treatment] + reference
+    return result, {"active42": rows, "eligible_spec41": spec_rows}
+
+
+# `_block` 의 키 중 처치 지표가 아닌 것. 나머지는 모두 처치 지표라 ② 모집단 값이 최상위에 올라간다(DR-194) —
+# `_block` 에 처치 지표가 늘어도 손으로 목록을 고칠 필요가 없다(#245 리뷰).
+_CHURN_KEYS = frozenset({"evaluated_customers", "churn_rate_bp"})
+
+
+def _split(checks: list[dict[str, object]]) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """(이탈률 검사, 처치 지표 검사)."""
+    return [c for c in checks if c["name"] == "churn_rate"], [c for c in checks if c["name"] != "churn_rate"]
 
 
 def _quadrants(rows: list[dict[str, object]], tid: str) -> dict[str, object]:
@@ -182,20 +206,25 @@ def _percent(bp: int | None) -> str:
 
 
 def table(result: dict[str, object]) -> str:
+    population = result["population"]
     lines = [
-        f"가드레일 (T0 = {result['at']}, {result['population']} {result['active_customers']}명 중 "
-        f"{result['evaluated_customers']}명 평가)",
-        f"{'검사':<16}{'값':>10}{'범위':>16}  판정",
+        f"가드레일 (T0 = {result['at']}) — 이탈률: {population['churn']} {result['active_customers']}명 중 "
+        f"{result['active42']['evaluated_customers']}명 · 처치 지표: {population['treatment']} "
+        f"{result['eligible_customers']}명 중 {result['eligible_spec41']['evaluated_customers']}명",
+        f"{'검사':<24}{'값':>10}{'범위':>16}  결과  구분",
     ]
     for check in result["checks"]:
         lo, hi = check["range_bp"]
         bounds = "—" if lo is None else f"{_percent(lo)}~{_percent(hi)}"
-        lines.append(f"{check['name']:<16}{_percent(check['value_bp']):>10}{bounds:>16}  {check['status']}")
+        lines.append(
+            f"{check['name']:<24}{_percent(check['value_bp']):>10}{bounds:>16}  {check['status']}  {check['role']}"
+        )
     return "\n".join(lines)
 
 
-def write(root: Path, result: dict[str, object], rows: list[dict[str, object]], name: str) -> Path:
-    storage.write_ground_truth(root, f"{name}-potential-outcomes", rows)
+def write(root: Path, result: dict[str, object], rows: dict[str, list[dict[str, object]]], name: str) -> Path:
+    for population, found in rows.items():
+        storage.write_ground_truth(root, f"{name}-potential-outcomes-{population}", found)
     path = root.joinpath(f"{name}.json")
     storage.write_json(path, result)
     return path
