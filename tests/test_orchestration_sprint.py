@@ -152,6 +152,7 @@ class FakeDecision:
         if audit["status"] != "ok":
             if not allow_incomplete:
                 raise ValueError(str(audit["reasons"]))
+            out = out.astype(float)
             out.loc[:, :] = float("nan")
         return out
 
@@ -425,7 +426,11 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
         for strategy in rs.STRATEGIES:
             record = details[strategy]["measured_economics"]
-            self.assertEqual("ok", record["status"], strategy)
+            self.assertEqual("ok", record["status"], {
+                "strategy": strategy, "economics": record,
+                "event_read_evidence": details[strategy].get("event_read_evidence"),
+                "economics_input_observation": details[strategy].get("economics_input_observation"),
+            })
             self.assertEqual((self.base / "out" / "branches" / strategy / "simulator_exchange").resolve(),
                              Path(record["bundle_root"]).resolve(), strategy)
             self.assertEqual("ok", record["bundle"]["status"], strategy)
@@ -756,7 +761,7 @@ class TestSprintWithoutDecision(unittest.TestCase):
             status = {s["name"]: s for s in meta["stages"]}
             for name in ("simulate_warmup", "read_events_t1", "rct_assign", "simulate_rct",
                          "read_events_t2", "snapshot_t2", "strategy_S0"):
-                self.assertEqual("ok", status[name]["status"], name)
+                self.assertEqual("ok", status[name]["status"], status[name])
             for name in ("features_t1", "churn", "uplift", "clv", "ab_test", "strategy_S1", "roi_summary"):
                 self.assertEqual("not_run", status[name]["status"], name)
                 self.assertTrue(status[name]["reason"], name)

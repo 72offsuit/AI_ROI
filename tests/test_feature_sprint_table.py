@@ -533,6 +533,26 @@ class TestOutcomeObservationContract(unittest.TestCase):
         encoded = {k: contracts.metric_to_json(v) for k, v in self.raw_metrics().items()}
         self.assertIsNone(self.runner.purchase_generated(encoded)[0])
 
+    def test_ci_fake_outcomes_can_mask_integer_labels_without_importing_simulator(self):
+        import ast
+        import pandas as pd
+        from src.decision.features.sprint_table import outcome_observation_status
+        path = Path(__file__).with_name("test_orchestration_sprint.py")
+        tree = ast.parse(path.read_text())
+        selected = [node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "FakeDecision"]
+        self.assertEqual(1, len(selected))
+        future = ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0)
+        module = ast.fix_missing_locations(ast.Module(body=[future, *selected], type_ignores=[]))
+        namespace = {"pd": pd, "timedelta": timedelta, "outcome_observation_status": outcome_observation_status}
+        exec(compile(module, str(path), "exec"), namespace)
+        fake = namespace["FakeDecision"]()
+        evidence = {**self.evidence, "read_complete": False}
+        result = fake.build_outcomes(self.frame(), self.t0, observation=evidence, allow_incomplete=True)
+        self.assertTrue(result.isna().all().all())
+        self.assertEqual("not_run", result.attrs["outcome_observation"]["status"])
+        with self.assertRaises(ValueError):
+            fake.build_outcomes(self.frame(), self.t0, observation=evidence)
+
     def test_null_propagates_to_direction_and_guards_preserves_independent_roi(self):
         import numpy as np
         from src.decision.features.sprint_table import summarize_outcomes
