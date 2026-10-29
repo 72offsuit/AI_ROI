@@ -19,10 +19,12 @@ from src.measurement.timeparse import parse_datetime
 
 
 def event_content_hash(record: Mapping) -> bytes:
-    """공개 이벤트 22필드의 내용 지문. 행 순서·저장 형식과 무관하게 전량을 대조한다.
+    """공개 이벤트 22필드의 내용 지문. 전체 대조의 행 순서는 digest가 정규화한다.
 
     누락 필드는 null과 같으며 숫자 0으로 대치하지 않는다. 시각은 기존 공용 파서로
     같은 순간을 정규화한다. 같은 ID도 내용·중복 횟수가 다르면 다른 전량이다.
+    그 밖의 자료형은 JSON 표현 그대로 구분한다. CSV 문자열과 수치, 정수와 실수의
+    동치를 보장하는 저장 형식 변환기가 아니다. NaN·inf·비JSON 스칼라는 거부한다.
     """
     values = []
     for spec in EVENT_FIELDS:
