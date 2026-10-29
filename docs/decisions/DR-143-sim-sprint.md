@@ -4,7 +4,7 @@
 |---|---|
 | 태스크 | S4·S5·S6·S7-lite · #143 (에픽 #142) |
 | 작성 | 시뮬레이터 팀(Claude) · 2026-10-22 |
-| 상태 | 제안 — 가드레일 2건(쿠폰 사용률·Persuadable)은 **사용자 확정**(2026-10-22). 남은 모수는 #148 근거로 추가 조정 대상 |
+| 상태 | 제안 — 가드레일 2건(쿠폰 사용률·Persuadable)은 **사용자 확정**(2026-10-22). 남은 모수는 #148 근거로 추가 조정 대상. **2026-10-29 #183(sim-0.6)에서 `purchase.intent_scale_pct` 120 → 180 · `churn.onset_hazard_scale_ppm` 7,000 → 14,500 · `treatment.coupon_click_scale_pct` 50 → 40 으로 바뀌었다(DR-183-purchase-calibration) — 아래 본문의 이 세 값은 sim-0.4 시점 기록이다** |
 
 ## 무엇을 정하는가
 
