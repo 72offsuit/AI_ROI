@@ -1,6 +1,7 @@
 """AI 세그먼트(PRD §20 S1~S6 + Sleeping Dog) · Uplift 4분면 · 우선순위 점수 — 이슈 #145.
 
 SRS SEG-001~004 · UP-004. 순수 함수이며 임계는 **분위수 기반**이다(데이터 단위에 무관).
+분위수 경계는 ``config/model_config.yaml`` segmentation 에서 읽는다(#206).
 
 입력 규약:
   ``churn_p``  — 고객별 이탈 확률(높을수록 위험).
@@ -19,11 +20,11 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
-DEFAULT_THRESHOLDS: dict[str, float] = {
-    "clv_high_q": 0.8,      # CLV 상위 20% = 고가치 (SRS AT-CLV-01 Top20% 와 같은 경계)
-    "churn_high_q": 0.5,    # 이탈 확률 중앙값 이상 = 고위험
-    "uplift_band_q": 0.6,   # |uplift| 분포의 60% 분위수 = '≈0' 띠의 반폭. 그보다 크면 양/음
-}
+from src.decision.config import load_model_config
+
+#: 분위수 경계 — config/model_config.yaml `segmentation` (#206). 값과 각 값의 뜻은 그 파일 한 곳에만 있다
+#: (clv_high_q · churn_high_q · uplift_band_q). 호출자는 ``thresholds=`` 로 덮어쓸 수 있다.
+DEFAULT_THRESHOLDS: dict[str, float] = dict(load_model_config().segmentation)
 
 SEGMENT_PRD_ID = {
     "HV_PERSUADABLE": "S1", "HV_SURE_THING": "S2", "HV_LOST_CAUSE": "S3",

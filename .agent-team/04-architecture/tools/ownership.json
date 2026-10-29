@@ -447,6 +447,16 @@
       "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"
     },
     {
+      "pattern": "tests/test_decision_config.py",
+      "owner": "team",
+      "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). #206 model/experiment config 로더. 패턴(test_decision*)으로 두면 리드 소유 test_decision_records.py 와 겹친다"
+    },
+    {
+      "pattern": "src/main.py",
+      "owner": "team",
+      "why": "main CLI 디스패처 (#206 · SRS SYS-004). 시스템 팀 소유(docs/team_boundaries.json owned.sys) — run_sprint 와 의사결정 모듈만 부른다"
+    },
+    {
       "pattern": "docs/feature_dictionary.md",
       "owner": "team",
       "why": "C2 시스템 팀 테스트 (docs/team_boundaries.json owned.sys). 스프린트 1(#142)에서 새 파일마다 걸리지 않게 패턴으로 등록"

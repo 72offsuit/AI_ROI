@@ -15,12 +15,22 @@
   매출은 0 이 많고 꼬리가 길어 정규근사가 느리게 수렴한다 — 표본이 작으면 CI 를 믿지 않는다.
 
 결과 결측 행은 제외하고 건수를 남긴다(0 으로 채우지 않는다). scipy 는 함수 안에서 import 한다.
+
+α · 목표 검정력 · SRM 판정 임계의 기본값은 ``config/experiment_config.yaml`` ab_test 에서 읽는다(#206).
 """
 
 from __future__ import annotations
 
 import math
 from typing import Any, Mapping
+
+from src.decision.config import load_experiment_config
+
+#: config/experiment_config.yaml `ab_test` (#206). 값은 그 파일 한 곳에만 있다.
+CONFIG = load_experiment_config().ab_test
+ALPHA = CONFIG.alpha
+POWER = CONFIG.target_power
+SRM_THRESHOLD = CONFIG.srm_p_threshold
 
 
 def _z(q: float) -> float:
@@ -29,7 +39,7 @@ def _z(q: float) -> float:
     return float(norm.ppf(q))
 
 
-def sample_size_two_proportions(p_c: float, p_t: float, alpha: float = 0.05, power: float = 0.8) -> int | None:
+def sample_size_two_proportions(p_c: float, p_t: float, alpha: float = ALPHA, power: float = POWER) -> int | None:
     """양측 두 비율 검정의 군당 최소 표본(등배정, 정규근사). 효과 0 이면 None(정의 불가)."""
     if p_t == p_c:
         return None
@@ -39,7 +49,7 @@ def sample_size_two_proportions(p_c: float, p_t: float, alpha: float = 0.05, pow
     return int(math.ceil(num / (p_t - p_c) ** 2))
 
 
-def achieved_power(p_c: float, p_t: float, n_c: int, n_t: int, alpha: float = 0.05) -> float | None:
+def achieved_power(p_c: float, p_t: float, n_c: int, n_t: int, alpha: float = ALPHA) -> float | None:
     """관측된 두 비율·표본에서의 양측 검정력(정규근사)."""
     from scipy.stats import norm
 
@@ -67,7 +77,7 @@ def holm(pvalues: Mapping[str, float | None]) -> dict[str, float | None]:
 
 
 def srm_check(counts: Mapping[str, int], expected_ratio: Mapping[str, float] | None = None,
-              threshold: float = 0.001) -> dict[str, Any]:
+              threshold: float = SRM_THRESHOLD) -> dict[str, Any]:
     """SRM 카이제곱 적합도. ``expected_ratio`` 가 없으면 균등 배정을 가정한다(그 사실을 기록)."""
     from scipy.stats import chisquare
 
@@ -88,8 +98,8 @@ def srm_check(counts: Mapping[str, int], expected_ratio: Mapping[str, float] | N
             "threshold": threshold}
 
 
-def sample_size_two_means(sd_c: float, sd_t: float, delta: float, alpha: float = 0.05,
-                          power: float = 0.8) -> int | None:
+def sample_size_two_means(sd_c: float, sd_t: float, delta: float, alpha: float = ALPHA,
+                          power: float = POWER) -> int | None:
     """양측 평균 차 검정의 군당 최소 표본(등배정, 정규근사). 효과 0 이면 None."""
     if delta == 0:
         return None
@@ -130,8 +140,8 @@ def _compare_means(y_t, y_c, alpha: float, power: float, mde: float | None) -> d
     return out
 
 
-def analyze_ab(df, arm_col: str, outcome_col: str, control: str = "T0", alpha: float = 0.05,
-               power: float = 0.8, expected_ratio: Mapping[str, float] | None = None,
+def analyze_ab(df, arm_col: str, outcome_col: str, control: str = "T0", alpha: float = ALPHA,
+               power: float = POWER, expected_ratio: Mapping[str, float] | None = None,
                mde: float | None = None) -> dict[str, Any]:
     """처치군 각각을 ``control`` 과 비교한다. ``df`` 는 pandas DataFrame. 이진·연속 결과 모두."""
     from scipy.stats import chi2_contingency, norm
