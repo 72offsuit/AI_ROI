@@ -49,6 +49,7 @@ A 안 안의 세부 선택:
 | `src/measurement/economics.py` `contribution_profit` (DR-101) | 기여이익 = 매출 − COGS − 배송보조 − 메시지 − 캠페인 고정비. 쿠폰 할인은 순매출에 이미 반영돼 빼지 않는다 | 대체 계산 `Δ(매출 − 마케팅비)` 는 COGS 를 빼지 않고(과대) 마케팅비 안의 쿠폰을 다시 뺀다(이중 차감) — 이슈 본문 그대로 확인 |
 | SRS ROI-002 · ROI-003 · ROI-006 · MEA-003 (`Plan/AI_Customer_Retention_ROI_SRS_v2.0.md`) | 증분 기여 = 기여이익_AI − 기여이익_Rule. "결손 필드에 의존하는 지표는 계산 불가로 표시한다. 추정값을 만들어내지 않는다" | 정식 증분이익의 유일한 정의가 기여이익 차이다. 대체값을 그 칸에 두는 것은 MEA-003 의 "추정값" 이다 |
 | 소규모 확인 실행 (smoke · 300명 · warmup 60일 → 분기 42일, 한 분기만 앞 100명에게 T3) | 무처치 분기 기여이익 6,277,952원(매출 24,087,300 · COGS 17,809,348). T3 분기 6,198,289원 · 마케팅비 180,000원(메시지 3,000 · 쿠폰 77,000 · 고정비 100,000). **대체값은 +168,500원, 실측 Δ기여이익은 −79,663원** | 부호가 뒤집힌다. 매출↑(+348,500) · 이익↓ 이므로 가드레일이 발동해야 하는 경우인데, 대체 계산으로는 영원히 발동하지 않는다. 표본이 작고 처치 대상이 임의라 효과 크기의 근거는 아니다 — 대체값이 방향조차 보장하지 않는다는 반례로만 쓴다 |
+| 리뷰 R3 합성 반례 (`kwung0206`, 2026-10-29, 고정 SHA `45c3ac8`) | S1 주문 100,000원 · 원가 60,000원. S2 는 같은 주문 ID 의 purchase 를 300,000 → 100,000 순서로 두 번 + push 1건. DQ-02b fail · DQ-09 pass · 분기 `ok` → 정식 기여이익 239,970 · 증분이익 199,970 · ROI 1.999 `ok`. 순서를 뒤집으면 DQ-09 fail | 실제 시뮬레이터에서 난 일이 아니라 정식 값 경로의 검사 누락이다. 실제 분기 이벤트에 같은 주문의 purchase 를 하나 더 끼워 재현했다(+200,000 원본 앞 · 원본 뒤 · 같은 금액). 판정에서 DQ-02b 를 뺀 변이로는 새 테스트 6건(하위 케이스 포함)이, 출처를 나누지 않은 변이로는 1건이 실패한다 |
 
 마진율로 COGS 를 추정하는 외부 근거는 찾지 않았다 — 근거가 있어도 EC-1 이 금지한다.
 
@@ -57,7 +58,8 @@ A 안 안의 세부 선택:
 **A.**
 
 - `run_sprint.py` 분기 루트 = `out/branches/{S}/raw`. 분기 `advance(42)` 직후 그 분기 세계가 활성일 때 `sim.exchange_bundle(end)` → `out/branches/{S}/simulator_exchange`. 경제 지표는 `measured_economics()` 가 `src.measurement.publish.build_kpi_report` 로 계산하고 시뮬레이터 출처 값만 꺼낸다. 전 과정을 `strategy_details.{S}.measured_economics` 에 상태 · 사유 · 묶음 행 수와 함께 남기고, `ok` 인 값만 `metrics.measured_*` 에 싣는다(아니면 `null`). 묶음 · 측정 실패는 분기 단계를 실패시키지 않고 그 기록에 `failed` · `not_run` 으로 남는다.
-- **분기 창 금액 대조(DQ-09)** — 리뷰 R1(P1, 2026-10-27 `kwung0206`) 반영. `window_amount_check()` 가 묶음을 **그 분기 창의 시뮬레이터 출처 purchase 주문 ID** 로 좁힌 읽기 전용 뷰를 만들어 측정 계층 `validate.check_amount_equation` 에 그대로 넘긴다(대조 규칙은 측정 계층 한 벌). 결과(상태 · 대조 행 수 · 위반 수 · 표본 · 창 밖으로 뺀 묶음 주문 수 · 묶음에 없는 창 주문 수 · 못 잡는 것)는 `measured_economics.amount_check` 에 남는다. `fail` 이면 그 분기 기록이 `status: quality_failed` 가 되어 `metrics.measured_*` 가 전부 `null` — 정식 기여이익 · 증분이익 · ROI · 가드레일이 계산 불가로 나간다. 다른 분기는 각자 판정한다(S1 이 실패하면 S2~S5 증분이익이 기준선 쪽 결손으로 모두 계산 불가). 대조할 주문이 없으면 `not_run`(통과가 아니다)이고 값은 막지 않는다 — 이벤트에만 있고 묶음에 없는 주문은 `NO_COST_BASIS` 가 막는다.
+- **분기 창 금액 대조(DQ-09)** — 리뷰 R1(P1, 2026-10-27 `kwung0206`) 반영. `window_amount_check()` 가 묶음을 **그 분기 창의 시뮬레이터 출처 purchase 주문 ID** 로 좁힌 읽기 전용 뷰를 만들어 측정 계층 `validate.check_amount_equation` 에 그대로 넘긴다(대조 규칙은 측정 계층 한 벌). 결과(상태 · 대조 행 수 · 위반 수 · 표본 · 창 밖으로 뺀 묶음 주문 수 · 묶음에 없는 창 주문 수 · 못 잡는 것)는 `measured_economics.amount_check` 에 남는다. `fail` 이면 그 분기 기록이 `status: quality_failed` 가 되어 `metrics.measured_*` 가 전부 `null` — 정식 기여이익 · 증분이익 · ROI 가 계산 불가로 나간다. 가드레일 중 매출↑/이익↓(`revenue_up_profit_down`)는 공통 기여이익이 없어 `not_run` 이지만, 이탈↓/비용 급증(`retention_up_cost_surge`)은 이탈률(이벤트 결과)과 마케팅비 다음 후보(계획 비용 등)로 판정돼 `ok` 로 나올 수 있다. 다른 분기는 각자 판정한다(S1 이 실패하면 S2~S5 증분이익이 기준선 쪽 결손으로 모두 계산 불가). 대조할 주문이 없으면 `not_run`(통과가 아니다)이고 값은 막지 않는다 — 이벤트에만 있고 묶음에 없는 주문은 `NO_COST_BASIS` 가 막는다.
+- **분기 창 주문당 purchase 1건(DQ-02b)** — 리뷰 R3(P2, 2026-10-29 `kwung0206`) 반영. DQ-09 는 같은 주문의 purchase 가 여럿이면 마지막 금액만 대조한다 — 틀린 금액이 앞이면 통과하고 순서를 뒤집으면 실패한다. 측정 계층 `validate.run_all` 은 DQ-02b 를 함께 돌려 이것을 막는데 분기 경로는 DQ-09 만 돌렸다. `window_single_purchase_check()` 가 측정 계층 `validate.check_order_id_single_purchase` 를 분기 창의 **시뮬레이터 출처** 이벤트에 그대로 걸고 `measured_economics.single_purchase_check` 에 따로 남긴다. `branch_economics` 는 `BRANCH_QUALITY_CHECKS`(DQ-09 · DQ-02b) 중 하나라도 `fail` 이면 `quality_failed` 이고 사유에 실패한 검사를 모두 적는다. 측정 계층 규칙은 복제하지 않고 중복 이벤트를 지우지도 않는다. purchase 가 0건이면 `vacuous`(통과가 아니다)이고 값은 막지 않는다 — 중복이 생길 purchase 가 없다.
 - `src/decision/roi.py`:
   - `incremental_profit_vs_S1` 은 **전략과 기준선이 같은 키로 가진 기여이익의 차이로만** 낸다. 아니면 `null` 과 `incremental_profit_status = "계산 불가 — …"`(전략 쪽 결손 · 기준선 쪽 결손 · 양쪽 결손 · 키 불일치를 구분) · 플래그 `CONTRIBUTION_PROFIT_MISSING`.
   - 그때 `roi` · `ai_roi` · `ai_net_incremental_value` 도 `null` 이고 상태가 그 사유를 말한다. `roi_status = "ok"` 는 정식 증분이익이 있을 때만 나온다.
@@ -90,6 +92,7 @@ A 안 안의 세부 선택:
 - 가드레일이 `ok · triggered=false` 인데 매출↑ · 이익↓ 인 행이 있으면 판정 키가 어긋난 것이다.
 - 상태 필드가 없는 구형 `strategy_comparison.json` 으로 전략 화면을 열었을 때 증분이익 · ROI 칸이나 막대에 숫자가 보이면 화면 게이트가 빠진 것이다. 대시보드에는 단위 테스트 · CI 빌드 게이트가 없어 자동으로 잡히지 않는다 — 2026-10-29 개발 서버 렌더로 구형 · 신형 · 목업 3종을 확인했고, 같은 구형 파일을 이 수정 전 페이지로 열면 `+₩60` · `1.50` 이 막대에 그려지는 것(리뷰가 지적한 상태)을 대조군으로 확인했다.
 - 교환 묶음이 있는 정상 실행에서 `amount_check` 가 `pass` 가 아니거나 대조 행 수가 창의 purchase 주문 수와 다르면 뷰를 좁히는 규칙이 틀린 것이다. 좁히지 않은 묶음은 같은 실행에서 `fail` 이어야 한다(창 이전 주문) — `tests/test_orchestration_sprint.py` 가 둘을 함께 본다.
+- 같은 주문의 시뮬레이터 purchase 가 둘인 분기 기록이 `quality_failed` 가 아니면 DQ-02b 차단이 빠진 것이다. 틀린 금액을 앞에 둔 경우가 DQ-09 만으로는 통과하는 대조군이다 — `tests/test_orchestration_sprint.py` 가 두 순서와 같은 금액, 같은 주문 ID 의 커머스 이벤트(위반이 아니어야 한다)를 본다.
 
 ## 민감도
 
@@ -99,7 +102,8 @@ A 안 안의 세부 선택:
 
 ## 남은 불확실성
 
-- **분기 창 DQ-09 는 묶음에만 있고 창 purchase 이벤트가 빠진 주문을 못 잡는다.** `ExchangeOrder` 에 주문 시각이 없어 묶음 주문이 창 안인지 알 수 없다 — 그래서 뷰를 이벤트 쪽 주문 ID 로 좁혔다. 이 공백은 `amount_check.not_detected` 에 그대로 싣는다. 교환 계약에 주문 시각이 생기거나 측정 계층에 창 단위 대조가 생기면 해소된다.
+- **분기 창 DQ-09 는 묶음에만 있고 창 purchase 이벤트가 빠진 주문을 못 잡는다.** 교환 계약(`orders.schema.json`)은 `ordered_at` 을 필수로 두고 로더도 형식을 검사하지만, 로더가 돌려주는 `ExchangeOrder` 에는 그 필드가 없어 묶음 주문이 창 안인지 알 수 없다 — 그래서 뷰를 이벤트 쪽 주문 ID 로 좁혔다. 이 공백은 `amount_check.not_detected` 에 그대로 싣는다. 로더(`src/measurement/exchange.py`)가 `ordered_at` 을 돌려주거나 측정 계층에 창 단위 대조가 생기면 해소된다.
+- **분기 창 DQ-02b 는 분기 창 이벤트만 센다.** 창 밖(분기 이전 계보)에 같은 주문 ID 의 purchase 가 있으면 잡지 못한다 — `single_purchase_check.not_detected` 에 싣는다.
 - 측정 기여이익은 분기 창의 **전 고객** 주문이다. `revenue_krw` · `churn_rate`(이벤트 결과)는 Feature(t2) 모집단이다. 전략 비교표의 `revenue` 열이 이제 `measured_revenue` 를 먼저 쓰므로 표의 매출 · 마케팅비 · 기여이익은 같은 모집단이고 이탈률만 다르다. 같은 스냅샷 · 같은 난수라 비처치 고객의 차이는 전략 효과에 포함된다고 본다 — 확인한 사실이 아니라 `docs/simulator_api.md` restore 계약에 기댄 가정이다.
 - 시뮬레이터 묶음의 `discount` 는 쿠폰 처치 단가 그대로다(교환 계약 §11, 가정 A-DISCOUNT). 실제 커머스 할인과 다를 수 있다. 환불은 차감하지 않는다(A-REFUND).
 - S4 · S5 의 가치(CLV × `margin_rate`)는 여전히 `economic_config` 가중 마진을 계획 가정으로 쓴다 — #171 범위.

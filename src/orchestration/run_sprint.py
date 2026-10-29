@@ -16,8 +16,8 @@
    기준은 S1 이다(PRD §63). S1 은 상한 없이 실행하고 그 계획 비용 합(C_rule)을 S2~S5 의 예산으로 쓴다(DR-145).
    분기마다 그 세계가 활성일 때 ``sim.exchange_bundle`` 로 교환 묶음을 받고, 측정 계층
    ``publish.build_kpi_report`` 로 분기 창의 매출·마케팅비·**실측 기여이익**(묶음의 주문 시점 원가로
-   COGS 차감)을 계산해 ``measured_*`` 로 넘긴다(DR-169). 분기 창 금액 대조(DQ-09)가 실패하면 그 분기
-   값은 넘기지 않는다(``quality_failed``). 분기 루트는 ``out/branches/{S}/raw`` —
+   COGS 차감)을 계산해 ``measured_*`` 로 넘긴다(DR-169). 분기 창 금액 대조(DQ-09)나 주문당 purchase
+   1건(DQ-02b)이 실패하면 그 분기 값은 넘기지 않는다(``quality_failed``). 분기 루트는 ``out/branches/{S}/raw`` —
    묶음이 그 형제 ``simulator_exchange/`` 에 분기별로 남는다.
    S4·S5 의 가치는 CLV × margin_rate 다 — 측정 계층 실현 기여이익률, 없으면 economic_config 매출 가중 마진.
    결과 JSON 은 대시보드 sprint 로더 타입(dashboard/src/lib/artifacts/sprint-types.ts)의 키로 낸다.
@@ -604,10 +604,25 @@ def economic_events(raw_root: Path) -> list[dict[str, object]]:
 
 #: 분기 창 DQ-09 가 구조상 잡지 못하는 것 — 산출물에 그대로 싣는다(통과로 읽히지 않게).
 WINDOW_AMOUNT_CHECK_GAP = (
-    "묶음에만 있고 분기 창 purchase 이벤트가 빠진 주문 — ExchangeOrder 에 주문 시각이 없어 "
-    "그 주문이 창 안인지 알 수 없다. 이벤트에만 있고 묶음에 없는 주문은 이 검사가 아니라 "
-    "contribution_profit 의 NO_COST_BASIS 가 막는다"
+    "묶음에만 있고 분기 창 purchase 이벤트가 빠진 주문 — 로더의 ExchangeOrder 가 주문 시각(계약의 "
+    "ordered_at)을 돌려주지 않아 그 주문이 창 안인지 알 수 없다. 이벤트에만 있고 묶음에 없는 주문은 "
+    "이 검사가 아니라 contribution_profit 의 NO_COST_BASIS 가 막는다. 같은 주문의 purchase 가 여럿이면 "
+    "마지막 금액만 대조한다 — 그 경우는 single_purchase_check(DQ-02b)가 막는다"
 )
+
+#: 분기 창 DQ-02b 가 구조상 잡지 못하는 것.
+WINDOW_SINGLE_PURCHASE_GAP = (
+    "분기 창 밖(분기 이전 계보)에 같은 주문 ID 의 purchase 가 있는 경우 — 분기 창 이벤트만 읽는다"
+)
+
+#: 분기 기록에서 하나라도 ``fail`` 이면 ``quality_failed`` 인 검사 — (기록 키, 사유에 쓰는 이름).
+BRANCH_QUALITY_CHECKS = (("amount_check", "금액 대조"), ("single_purchase_check", "주문당 purchase 1건"))
+
+
+def _check_record(result: Any) -> dict[str, Any]:
+    return {"check": result.id, "status": result.status, "examined_rows": result.examined_rows,
+            "violations": result.violations, "samples": list(result.samples),
+            "reason_detail": result.reason_detail}
 
 
 def window_amount_check(bundle: Any, simulator_events: Any) -> dict[str, Any]:
@@ -642,9 +657,22 @@ def window_amount_check(bundle: Any, simulator_events: Any) -> dict[str, Any]:
         return {"check": "DQ-09", "status": "not_run", "examined_rows": 0, "violations": None,
                 "samples": [], "reason_detail": reason, **counts}
     result = validate.check_amount_equation([(view, simulator_events)])
-    return {"check": result.id, "status": result.status, "examined_rows": result.examined_rows,
-            "violations": result.violations, "samples": list(result.samples),
-            "reason_detail": result.reason_detail, **counts}
+    return {**_check_record(result), **counts}
+
+
+def window_single_purchase_check(simulator_events: Any) -> dict[str, Any]:
+    """분기 창의 ``DQ-02b`` — 주문 ID 당 시뮬레이터 purchase 1건 (#237 R3).
+
+    ``DQ-09`` 는 같은 주문의 purchase 가 여럿이면 마지막 금액만 대조한다. 앞선 이벤트 금액이 틀려도
+    마지막이 묶음과 맞으면 통과하고, 순서를 뒤집으면 실패한다 — 측정 계층 ``validate.run_all`` 이 두
+    검사를 함께 돌리는 이유다. 같은 검사(``validate.check_order_id_single_purchase``)를 그대로 건다.
+    ``simulator_events`` 는 **시뮬레이터 출처만** 이어야 한다 — 같은 주문 ID 의 커머스 이벤트까지 세면
+    거짓 위반이다(#116 · #117).
+    """
+    from src.measurement import validate
+
+    result = validate.check_order_id_single_purchase(simulator_events)
+    return {**_check_record(result), "not_detected": WINDOW_SINGLE_PURCHASE_GAP}
 
 
 def measured_economics(raw_root: Path, bundle_root: Path, index_date: Any,
@@ -654,8 +682,8 @@ def measured_economics(raw_root: Path, bundle_root: Path, index_date: Any,
     게시물 ``kpi_report`` 의 기여이익과 같은 함수·같은 조립이다(정의가 두 벌이 되지 않는다).
     묶음이 없으면 측정 계층이 ``contribution_profit`` 을 ``NO_COST_BASIS`` 로 낸다 — 그대로 싣는다.
     ``index_date`` 는 경제 지표에 쓰이지 않는다(``build_kpi_report`` 의 다른 지표용 인자).
-    금액 대조(``DQ-09``)는 ``amount_check`` 에 남긴다 — ``fail`` 이면 ``branch_economics`` 가 이 기록을
-    ``ok`` 로 두지 않는다(#237 R1).
+    금액 대조(``DQ-09``)는 ``amount_check`` 에, 주문당 purchase 1건(``DQ-02b``)은 ``single_purchase_check``
+    에 남긴다 — 어느 쪽이든 ``fail`` 이면 ``branch_economics`` 가 이 기록을 ``ok`` 로 두지 않는다(#237 R1 · R3).
     """
     from src.measurement import config_loader
     from src.measurement import exchange as ex
@@ -684,6 +712,7 @@ def measured_economics(raw_root: Path, bundle_root: Path, index_date: Any,
         "n_commerce_events_excluded": len(split.commerce),
         "amount_check": (window_amount_check(bundle, split.simulator) if bundle is not None else
                          {"check": "DQ-09", "status": "not_run", "reason_detail": "교환 묶음이 없다"}),
+        "single_purchase_check": window_single_purchase_check(split.simulator),
         "metrics": {name: by_name[name]["value"]["by_source"][source] for name in ECONOMIC_METRICS},
     }
 
@@ -693,9 +722,9 @@ def branch_economics(raw_root: Path, end: datetime) -> dict[str, Any]:
 
     실패해도 분기 단계를 멈추지 않는다 — ``status: failed`` 와 사유를 남기고, 그때 ``measured_*``
     는 ``None`` 이라 증분이익은 계산 불가가 된다(0 으로 채우지 않는다).
-    분기 창 금액 대조(``DQ-09``)가 ``fail`` 이면 ``status: quality_failed`` — 값과 근거는 그대로 남기되
-    ``measured_value`` 가 꺼내지 않아 이 분기의 정식 기여이익 · 증분이익 · ROI 가 계산 불가가 된다(#237 R1).
-    다른 분기는 각자 판정한다.
+    분기 창 품질 검사(``BRANCH_QUALITY_CHECKS`` — ``DQ-09`` · ``DQ-02b``) 중 하나라도 ``fail`` 이면
+    ``status: quality_failed`` — 값과 근거는 그대로 남기되 ``measured_value`` 가 꺼내지 않아 이 분기의
+    정식 기여이익 · 증분이익 · ROI 가 계산 불가가 된다(#237 R1 · R3). 다른 분기는 각자 판정한다.
     """
     try:
         bundle = sim.exchange_bundle(end)
@@ -703,10 +732,10 @@ def branch_economics(raw_root: Path, end: datetime) -> dict[str, Any]:
             return {"status": "not_run", "reason": f"sim.exchange_bundle 상태 {bundle.get('status')!r}"}
         last_day = (end - timedelta(days=1)).astimezone(KST).date()
         economics = measured_economics(raw_root, Path(str(bundle["path"])), last_day)
-        check = economics["amount_check"]
-        if check["status"] == "fail":
-            return {"status": "quality_failed",
-                    "reason": f"분기 창 DQ-09 금액 대조 실패 — {check['reason_detail']}", **economics}
+        failed = [f"{economics[key]['check']} {name} 실패 — {economics[key]['reason_detail']}"
+                  for key, name in BRANCH_QUALITY_CHECKS if economics[key]["status"] == "fail"]
+        if failed:
+            return {"status": "quality_failed", "reason": "분기 창 " + " · ".join(failed), **economics}
         return {"status": "ok", "reason": None, **economics}
     except Exception as error:  # noqa: BLE001 — 기여이익만 계산 불가로 두고 분기는 계속한다
         traceback.print_exc(file=sys.stderr)
@@ -1487,8 +1516,9 @@ def run(config: SprintConfig) -> Path:
                 "rct_effect_overlap": "RCT 처치 효과 창 [t1, t1+42) 는 t2 에서 끝난다 — 전략 창 [t2, t2+42) 와 겹치지 않는다(정의상)",
                 "contribution_profit": "분기마다 sim.exchange_bundle → 측정 계층 publish.build_kpi_report 의 "
                                        "contribution_profit(교환 묶음 COGS 차감, 시뮬레이터 출처만). 결손이면 증분이익 "
-                                       "계산 불가. 분기 창 DQ-09(창 주문으로 좁힌 묶음 ↔ 이벤트 금액)가 fail 이면 "
-                                       "quality_failed 로 같은 차단 — strategy_details.*.measured_economics (DR-169)",
+                                       "계산 불가. 분기 창 DQ-09(창 주문으로 좁힌 묶음 ↔ 이벤트 금액) · DQ-02b(주문당 "
+                                       "시뮬레이터 purchase 1건) 중 하나라도 fail 이면 quality_failed 로 같은 차단 — "
+                                       "strategy_details.*.measured_economics (DR-169)",
             },
             "decision_modules": {k: decision_available(k) for k in DECISION_API},
             "provenance": provenance(),
