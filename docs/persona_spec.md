@@ -9,11 +9,12 @@
 > | **코드** | `src/simulator/_internal/{genconfig,traits,fixedpoint,persona,world}.py` |
 > | **설명**(이 문서) | 위 셋을 한 흐름으로 묶는다. 숫자를 새로 정하지 않는다 |
 >
-> 현재 생성 config: `sim-gen-v4` · 생성 부분 다이제스트 `ed02312576af07f0de6b9831216716a672ee2fdcad267604b2661e169d15f0ed` · `SIMULATOR_VERSION` `sim-0.6`
+> 현재 생성 config: `sim-gen-v5` · 생성 부분 다이제스트 `28e8e6f2a4145afaefbc8b327f94d50c941fba8411fd2120df74a921ec680411` · `SIMULATOR_VERSION` `sim-0.7`
 > (S3 #77: P6 `signup_day_range` 추가 — `docs/decisions/DR-S3-p6-signup.md`. 페르소나·Trait 값은 `sim-gen-v1` 과 같다)
 > (#183: 관측 중 가입 고객의 첫 구매 뒤 재구매 게이트로 `sim-0.5` — `docs/decisions/DR-183-purchase-calibration.md`. 생성 config·Trait 값은 그대로다)
 > (S4~S6 #143: `behavior`·`catalog` 블록 추가 — Trait 이 행동·이탈·처치 반응을 구동한다. `docs/decisions/DR-143-sim-sprint.md`. 페르소나·Trait 값은 그대로다)
 > (#183 `sim-gen-v4`·`sim-0.6`: `behavior` 의 구매 의향·이탈 onset·쿠폰 받기 보정, 반복 노출 감쇠(`treatment.repeat_exposure`), 게이트 탈락 이탈의 회복 배율(`churn.gate_recovery_scale_pct`) — `docs/decisions/DR-183-purchase-calibration.md` · `DR-183-repeat-exposure.md`. 상태 형식 `sim-state-v4`. 페르소나·Trait 값은 그대로다)
+> (#196 `sim-gen-v5`·`sim-0.7`: Sleeping Dog 직접 경로 — Negative 고객은 노출 순간 이탈 진행에 들어간다(`treatment.negative_effect.onset_at_exposure_pct`), Negative 비율 배율 40 → 100, 반복 노출 상한 60 → 100 — `docs/decisions/DR-196-sleeping-dog-path.md`. 상태 형식·페르소나·Trait 값은 그대로다)
 
 ---
 

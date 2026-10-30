@@ -57,6 +57,13 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "65e275c9ae40f5bbe23a3149e04ea74a41e89876bb09193d7aab07136149ce3f",
         1213,
     ),
+    # #196(sim-gen-v5): Sleeping Dog 직접 경로는 처치 노출 때만 발화한다. 이 14일 창에는 처치가 없어 판 라벨과
+    # 생성 다이제스트(상태)만 다르다. 경로 자체는 tests/test_simulator_sleeping_dog.py 가 고정한다.
+    "sim-0.7": (
+        "b8199d8a01c7c5bd1b47a93a1b77808d2cd5c3631f08f3a7d155690c0940fe15",
+        "27e4c11d8b7885275c9c24fa1b106e472f3809f939cab9e5fd4c858896a87f13",
+        1213,
+    ),
 }
 # 행동은 그대로이고 판 라벨만 바뀐 판 → 행동 기준 판. S2 는 생성(페르소나·Trait)만 더하고 이벤트 규칙을
 # 건드리지 않는다(사용자 확정 U1·U4). sim-0.3(S3)은 가입일을 바꿔 행동이 바뀐 판이라 항목이 없다.
