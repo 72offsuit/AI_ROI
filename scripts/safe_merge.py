@@ -21,7 +21,8 @@ GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 *
      찾는다. 필수 목록이 비었거나 읽지 못하면 막는다 — 워크플로우 하나 · 잡 하나만 읽지
      못해도 막는다(목록이 조용히 줄면 그 체크는 안 떠도 병합된다). 여러 줄에 걸친 따옴표 ·
      흐름 표기는 어디에 있든 막는다 — 연속 줄이 0열이면 블록이 끝난 것처럼 보인다(N1).
-     흐름 안에서 파서마다 토큰을 다르게 나누는 표기도 한 줄이어도 막는다(P3).
+     흐름 안에서 파서마다 토큰을 다르게 나누는 표기도 한 줄이어도 막는다(P3). 최상위 키 · 이벤트
+     키 · 잡 ID 가 겹쳐도 막는다 — 파서마다 읽는 블록이 다르다(중복 키).
      필수 목록은 **이 스크립트가 놓인 체크아웃**(작업 폴더가 아니다)의 워크플로우에서 읽는다 —
      최신 `main` 체크아웃에서 실행한다. 이름 변경 처리는 docs/GIT_WORKFLOW.md §5.1.
   ③ 보고된 체크가 **전부** `SUCCESS` 다. `SKIPPED` · `NEUTRAL` · 진행 중은 통과가 아니다.
@@ -236,6 +237,37 @@ def _check_no_multiline_nodes(lines: list[str], where: str) -> None:
         content_deeper_than = _block_scalar_parent(line)
 
 
+def _key_identity(key: str) -> str:
+    """중복을 가리는 키 — 따옴표는 `_mapping_key` 가 벗긴다. 대소문자는 구분하지 않는다(Actions 파서는
+    키를 대문자로 바꿔 겹치면 거부한다)."""
+    return key.casefold()
+
+
+def _check_top_level_keys(lines: list[str], where: str) -> None:
+    """0열 줄은 전부 최상위 키이고, 같은 키가 두 번 나오지 않는다(PR #238 리뷰 중복 키).
+
+    ★ PyYAML 은 겹친 키의 마지막 값을, 이 스크립트는 첫 블록을 읽는다. `on:` · `jobs:` 가 겹치면
+      뒤 블록의 트리거 · 잡이 오류 없이 필수에서 빠진다. `true:` 는 `_ON_KEY` 처럼 `on:` 과 같은 키다.
+    맨 앞의 문서 시작 표시 `---` 하나만 키가 아닌 0열 줄로 받는다.
+    """
+    seen: dict[str, int] = {}
+    for number, line in enumerate(lines, 1):
+        if not line.strip() or line.lstrip().startswith("#") or _indent(line):
+            continue
+        if not seen and line.rstrip() == "---":
+            seen["---"] = number  # 다음 `---` 는 키가 아니라 아래에서 막힌다(문서 여러 개)
+            continue
+        pair = _mapping_key(line)
+        if pair is None:
+            raise WorkflowError(f"{where} {number}행: 0열 줄을 최상위 키로 읽지 못했다: {line.strip()!r}")
+        key = _key_identity(pair[0])
+        key = "on" if key == "true" else key
+        if key in seen:
+            raise WorkflowError(f"{where} {number}행: 최상위 키가 {seen[key]}행과 겹친다(`{pair[0]}`) — "
+                                f"파서마다 읽는 블록이 다르다")
+        seen[key] = number
+
+
 def _top_level_boundary(line: str, where: str) -> None:
     """블록을 끝내는 0열 줄은 최상위 키여야 한다. 아니면 블록의 끝을 확인하지 못한 것이다(PR #238 리뷰 N1)."""
     if _mapping_key(line) is None:
@@ -252,7 +284,7 @@ def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
       "PR 워크플로우가 아니다" 로 두면 그 워크플로우의 잡이 사유 없이 필수에서 빠진다.
       읽는 것: `on:` 한 줄 값(이벤트 하나 · 한 줄 `[…]` 목록) · 블록 목록(`- 이벤트`) ·
       블록 매핑(`이벤트:`) — 키와 항목의 따옴표, 끝 주석 포함. 인라인 매핑 `{…}` · 여러 줄
-      `[…]` · `jobs:` 뒤의 `on:` 은 읽지 않고 실패한다.
+      `[…]` · `jobs:` 뒤의 `on:` · 겹친 이벤트 키는 읽지 않고 실패한다.
     ★ 블록은 다음 0열 줄에서 끝나는데, 그 줄이 최상위 키가 아니면 끝을 확인하지 못한 것이라
       실패한다(PR #238 리뷰 N1). 여러 줄 따옴표 · 흐름 표기는 `_scan` 이 먼저 막는다.
     """
@@ -278,7 +310,7 @@ def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
     if not block:
         raise WorkflowError("`on:` 아래에 이벤트가 없다")
     child = _indent(block[0])
-    found, filters = False, []
+    found, filters, events = False, [], set()
     for j, line in enumerate(block):
         if _indent(line) > child:
             continue  # 이벤트의 설정 — `pull_request` 의 것만 아래에서 읽는다
@@ -293,6 +325,9 @@ def _pull_request_trigger(head: list[str]) -> tuple[bool, list[str]]:
         event, value = key
         if not _EVENT.fullmatch(event):
             raise WorkflowError(f"`on:` 아래 키를 이벤트 이름으로 읽지 못했다: {event!r}")
+        if _key_identity(event) in events:  # 겹치면 첫 이벤트의 필터만 본다(PR #238 리뷰 중복 키)
+            raise WorkflowError(f"`on:` 아래 이벤트가 두 번 나온다(`{event}`) — 파서마다 읽는 설정이 다르다")
+        events.add(_key_identity(event))
         if event != "pull_request":
             continue
         value = _scalar(value)
@@ -324,6 +359,7 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
     for path in files:
         text = path.read_text(encoding="utf-8")
         _check_no_multiline_nodes(text.splitlines(), path.name)
+        _check_top_level_keys(text.splitlines(), path.name)
         head_text, sep, body = text.partition("\njobs:")
         # 주석 줄은 트리거 판정에서 뺀다 — 설명문 속 "pull_request" 에 속지 않게.
         head = [line for line in head_text.splitlines() if not line.lstrip().startswith("#")]
@@ -339,6 +375,7 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
         jobs: list[tuple[str, str]] = []
         job_id: str | None = None
         job_name: str | None = None
+        job_ids: set[str] = set()
         for line in body.splitlines()[1:] if sep else []:
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
@@ -351,6 +388,9 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
                 pair = _mapping_key(line.strip()) if _indent(line) == 2 else None
                 if pair is None or _scalar(pair[1]):
                     raise WorkflowError(f"{path.name}: 잡 자리의 줄을 잡 ID 로 읽지 못했다: {line.strip()!r}")
+                if _key_identity(pair[0]) in job_ids:  # PR #238 리뷰 중복 키
+                    raise WorkflowError(f"{path.name}: 잡 ID가 두 번 나온다(`{pair[0]}`) — 파서마다 읽는 잡이 다르다")
+                job_ids.add(_key_identity(pair[0]))
                 if job_id is not None:
                     jobs.append((workflow, job_name or job_id))
                 job_id, job_name = pair[0], None

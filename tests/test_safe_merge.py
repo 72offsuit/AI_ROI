@@ -13,6 +13,7 @@
     기대값은 파서와 따로 정한다(직접 적은 목록 · PyYAML 독립 읽기) (PR #238 리뷰 R4)
   - 따옴표 · 흐름 표기의 연속 줄이 0열이어도 같다 — 블록의 끝으로 오인하지 않는다 (N1). 흐름 안의
     공백 없는 `:` · `? ` 뒤에서 열리는 따옴표도 같다 (P3)
+  - 최상위 키 · 이벤트 키 · 잡 ID 가 겹쳐도 같다 — 첫 블록만 읽지 않는다 (중복 키)
   - 우회 옵션이 생기지 않는다
 
 `gh` 는 부르지 않는다 — `subprocess.run` 을 바꿔 끼워 PR JSON 을 주입한다.
@@ -123,6 +124,21 @@ N1_CONTINUATIONS = {
     # P3 — 같은 계열로 더 찾은 것. PyYAML 만 `?` 를 키 표시로 · `,#` 를 주석으로 읽는다.
     "흐름 안 공백 없는 ? 뒤의 따옴표": (_before_first_steps('    env: {?"}\nB: end"}\n'), [*REQUIRED_TODAY, EXTRA], EXTRA),
     "흐름 구분 문자에 붙은 #": (_in_on_before_pull_request("    inputs: [a,#]\nB: x]\n"), REQUIRED_TODAY, DASHBOARD),
+}
+
+#: 중복 키 — PyYAML 은 겹친 키의 마지막 값을 읽고, 예전 파서는 첫 블록만 읽어 뒤의 트리거 · 잡을 오류 없이
+#:   빠뜨렸다(PR #238 리뷰 D1~D3). 값의 모양은 `N1_CONTINUATIONS` 와 같다.
+DUPLICATE_KEYS = {
+    "D1 on 두 번 — 뒤 블록에만 pull_request": (
+        _replaced(_ON_BLOCK, "on:\n  push:\n    branches: [main]\non:\n  pull_request:\n  workflow_dispatch:\n"),
+        REQUIRED_TODAY, DASHBOARD),
+    "D2 jobs 두 번 — 뒤 블록에만 둘째 잡": (
+        lambda text: _with_extra_job("평범한 키")(text + "\n" + text[text.index("\njobs:") + 1:]),
+        [*REQUIRED_TODAY, EXTRA], EXTRA),
+    "D3 pull_request 두 번 — 첫째에만 paths": (
+        _replaced("  pull_request:\n  workflow_dispatch:\n",
+                  "  pull_request:\n    paths:\n      - docs/**\n  pull_request:\n  workflow_dispatch:\n"),
+        REQUIRED_TODAY, DASHBOARD),
 }
 
 
@@ -330,9 +346,8 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                     continue
                 self.assertEqual(sorted([*REQUIRED_TODAY, EXTRA]), required)
 
-    def test_a_continuation_at_column_zero_keeps_every_check_or_blocks(self) -> None:
-        """N1 — 연속 줄이 0열이어도 필수 체크가 하나도 빠지지 않거나, `WorkflowError` 로 막는다."""
-        for label, (mutate, needed, _) in N1_CONTINUATIONS.items():
+    def _assert_keeps_every_check_or_blocks(self, cases: dict) -> None:
+        for label, (mutate, needed, _) in cases.items():
             with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
                 d = Path(tmp)
                 _workflow_copy(d, mutate)
@@ -343,6 +358,15 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                 except safe_merge.WorkflowError:
                     continue
                 self.assertEqual(sorted(needed), required)
+                self.assertEqual([], safe_merge.excluded_workflows(d))
+
+    def test_a_continuation_at_column_zero_keeps_every_check_or_blocks(self) -> None:
+        """N1 — 연속 줄이 0열이어도 필수 체크가 하나도 빠지지 않거나, `WorkflowError` 로 막는다."""
+        self._assert_keeps_every_check_or_blocks(N1_CONTINUATIONS)
+
+    def test_a_duplicate_key_keeps_every_check_or_blocks(self) -> None:
+        """중복 키 — `on:` · `jobs:` · 이벤트 키가 겹쳐도 필수 체크가 하나도 빠지지 않거나, `WorkflowError` 로 막는다."""
+        self._assert_keeps_every_check_or_blocks(DUPLICATE_KEYS)
 
     def test_plain_and_block_scalars_are_not_mistaken_for_open_nodes(self) -> None:
         """N1 대조군 — 여러 줄 표기를 막는 검사가 평범한 스칼라 속 따옴표 · 괄호와 블록 스칼라(`run: |`)
@@ -385,7 +409,12 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
             (d / "q4.yml").write_text(
                 "name: Q4\non:\n  \"pull_request\":\n    \"paths\":\n      - src/**\njobs:\n  q:\n    name: Q\n",
                 encoding="utf-8")
-            self.assertEqual([("Q1", "첫 잡"), ("Q1", "second"), ("Q2", "Q"), ("Q3", "Q")],
+            # 중복 키 검사의 대조군 — 맨 앞 `---` · 0열 주석 · 따옴표 최상위 키 · 이름이 다른 이벤트와 잡
+            (d / "q5.yml").write_text(
+                "# 머리 주석\n---\nname: Q5\n'on':\n  push:\n  pull_request:\n  pull_request_target:\n"
+                "\"permissions\":\n  contents: read\n# 잡\njobs:\n  q:\n    name: Q\n  q2:\n    name: Q2\n",
+                encoding="utf-8")
+            self.assertEqual([("Q1", "첫 잡"), ("Q1", "second"), ("Q2", "Q"), ("Q3", "Q"), ("Q5", "Q"), ("Q5", "Q2")],
                              safe_merge.required_checks(d))
             self.assertEqual(["Q4"], [w for w, _ in safe_merge.excluded_workflows(d)])
 
@@ -489,7 +518,25 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                     ("flow-tag.yml",
                      "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: [!t a]\n  k:\n    name: y\n"),
                     ("hash-glued-to-quote.yml",
-                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: \"a\"#x\n  k:\n    name: y\n")):
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: \"a\"#x\n  k:\n    name: y\n"),
+                    # 중복 키 — 따옴표를 벗기고 대소문자를 구분하지 않고 비교한다. `true:` 는 `on:` 이다
+                    ("duplicate-quoted-on.yml",
+                     "name: J\non:\n  push:\n\"on\":\n  pull_request:\njobs:\n  j:\n    name: x\n"),
+                    ("duplicate-true-on.yml",
+                     "name: J\ntrue:\n  push:\non:\n  pull_request:\njobs:\n  j:\n    name: x\n"),
+                    ("duplicate-cased-jobs.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\nJOBS:\n  k:\n    name: y\n"),
+                    ("duplicate-name.yml",
+                     "name: J\non:\n  pull_request:\nname: K\njobs:\n  j:\n    name: x\n"),
+                    ("duplicate-cased-event.yml",
+                     "name: J\non:\n  Pull_Request:\n  pull_request:\njobs:\n  j:\n    name: x\n"),
+                    ("duplicate-job-id.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n  'j':\n    name: y\n"),
+                    # 0열 줄은 전부 최상위 키다 — 맨 앞 `---` 하나만 예외
+                    ("column-zero-non-key.yml",
+                     "name: J\n? extra\non:\n  pull_request:\njobs:\n  j:\n    name: x\n"),
+                    ("second-document.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n---\nname: K\n")):
                 with self.subTest(name=name):
                     for old in d.glob("*.yml"):
                         old.unlink()
@@ -579,6 +626,7 @@ class TestMainWiring(unittest.TestCase):
         cases = [(f"트리거 {n}", _with_trigger(n), REQUIRED_TODAY, DASHBOARD) for n in TRIGGER_NOTATIONS]
         cases += [(f"잡 키 {n}", _with_extra_job(n), [*REQUIRED_TODAY, EXTRA], EXTRA) for n in JOB_KEY_NOTATIONS]
         cases += [(f"N1 {n}", *case) for n, case in N1_CONTINUATIONS.items()]
+        cases += [(f"중복 키 {n}", *case) for n, case in DUPLICATE_KEYS.items()]
         for label, mutate, needed, missing in cases:
             with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
                 d = Path(tmp)
