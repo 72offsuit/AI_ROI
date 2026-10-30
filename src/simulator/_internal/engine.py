@@ -137,6 +137,8 @@ def _loop(
                 records = _visit(window, customer, at_ms, seq)
             elif kind == "treat":
                 records = _treat(window, customer, at_ms, seq)
+            elif kind == "cs":
+                records = [window.event(customer, at_ms, seq, "cs_contact", None, in_session=False)]
             else:
                 records = _action(window, customer, at_ms, seq)
             yield from records
@@ -156,6 +158,7 @@ def _day_start(window: _Window, customer: dict[str, object], day_ms: int) -> Non
     arm, response = treatment.effect(window, customer, day_ms)
     positive = response == treatment.POSITIVE
     negative = response == treatment.NEGATIVE
+    _schedule_cs(window, customer, day_ms, traits)
     day = window.draws.stream(cid, "day")
     # 용도별 고정 순서: [0] 이탈 전이 [1] 방문 [2] 방문 시각. 처치가 달라도 같은 자리의 난수를 쓴다(CRN).
     u_transition = day.next_u64()
@@ -201,6 +204,17 @@ def _day_start(window: _Window, customer: dict[str, object], day_ms: int) -> Non
         return
     offset = day.below(clock.DAY_MS)
     window.push(customer, day_ms + offset, "visit")
+
+
+def _schedule_cs(window: _Window, customer: dict[str, object], day_ms: int, traits: dict[str, int]) -> None:
+    """가입 이후 매일 Bernoulli(CS 문의 성향 / 30 × cs_scale) — data_spec 3.4 원문 규칙(#198).
+
+    방문·이탈 진행과 무관하게 뽑는다. 전용 스트림(`cs`)이라 다른 추첨의 자리를 밀지 않는다.
+    """
+    chance = traits["cs"] * window.params.aux_events.cs_scale_pct // 3000
+    draw = window.draws.stream(customer["customer_id"], "cs")
+    if _below_ppm(draw.next_u64(), chance):
+        window.push(customer, day_ms + draw.below(clock.DAY_MS), "cs")
 
 
 # ── 처치 노출 ────────────────────────────────────────────────────────────────
@@ -276,8 +290,14 @@ def _visit(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -
         "stage": "browse",
         "order": None,
     }
-    customer["rfm"]["last_visit_ms"] = at_ms
-    records = [window.event(customer, at_ms, seq, "session_start", "home")]
+    rfm = customer["rfm"]
+    # 구매 뒤 첫 방문은 session_start 대신 return_visit 으로 연다 — 계약의 visit_count 가 둘을 함께 세므로
+    # 같은 세션에 둘 다 내면 이중 계산이 된다(#198). 구매는 세션 시작 뒤에만 일어나 같은 시각일 수 없다.
+    returning = rfm["last_purchase_ms"] is not None and (
+        rfm["last_visit_ms"] is None or rfm["last_purchase_ms"] > rfm["last_visit_ms"]
+    )
+    rfm["last_visit_ms"] = at_ms
+    records = [window.event(customer, at_ms, seq, "return_visit" if returning else "session_start", "home")]
     if _coupon_open(window, promo, at_ms, "claim") and not promo["clicked"]:
         # 받아 두기로 한 고객은 노출 뒤 첫 방문에서 쿠폰을 누른다. 누른 쿠폰만 결제에 쓴다.
         promo["clicked"] = True
@@ -286,8 +306,58 @@ def _visit(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -
         record["campaign_id"] = promo["campaign_id"]
         record["treatment_id"] = promo["treatment_id"]
         records.append(record)
+    _search(window, customer, at_ms, target, records)
+    _due_reviews(window, customer, at_ms, records)
     _continue(window, customer, at_ms, records[-1])
     return records
+
+
+def _search(
+    window: _Window, customer: dict[str, object], at_ms: int, intent: int, records: list[Event]
+) -> None:
+    """세션 시작 때 한 번 검색할지 정한다 — 검색 성향 × search_scale, 구매 의도 세션은 search_intent_weight 를 더 곱한다.
+
+    의도는 방문 시작에 이미 정해져 있어서 검색이 구매를 일으키지 않는다. 검색 세션의 전환 배수는 이 선택 효과로만
+    생기며 생성 모수가 아니라 실현 검증 항목이다(DR-198-aux-events). 전용 스트림(`search`)이다.
+    """
+    aux = window.params.aux_events
+    chance = window.traits(customer)["search"] * aux.search_scale_pct // 100
+    if intent:
+        chance = chance * aux.search_intent_weight_pct // 100
+    if _below_ppm(window.draws.stream(customer["customer_id"], "search").next_u64(), chance):
+        records.append(window.event(customer, at_ms, next_seq(customer), "search", "search"))
+
+
+def _due_reviews(window: _Window, customer: dict[str, object], at_ms: int, records: list[Event]) -> None:
+    """기록 창 안에 든 대기 리뷰를 이 세션에 낸다. 창이 지난 항목은 내지 않고 버린다(그 사이 방문이 없었다)."""
+    kept = []
+    for order_id, product_id, start_ms, end_ms in customer["pending_reviews"]:
+        if at_ms < start_ms:
+            kept.append([order_id, product_id, start_ms, end_ms])
+        elif at_ms < end_ms:
+            record = window.event(
+                customer, at_ms, next_seq(customer), "review", "history", window.params.product_index[product_id]
+            )
+            record["unit_price"] = None  # 리뷰 계약에 없는 필드다(schema._EVENT_RULES)
+            record["order_id"] = order_id
+            records.append(record)
+    customer["pending_reviews"] = kept
+
+
+def _schedule_review(window: _Window, customer: dict[str, object], order: dict[str, object], at_ms: int) -> None:
+    """구매마다 Bernoulli(리뷰 성향 × review_scale) — 당첨이면 주문의 한 상품을 기록 창과 함께 대기에 넣는다(#198).
+
+    주문당 최대 1건이다. 전용 스트림(`review`)이라 다른 추첨의 자리를 밀지 않는다.
+    """
+    aux = window.params.aux_events
+    draw = window.draws.stream(customer["customer_id"], "review")
+    if not _below_ppm(draw.next_u64(), window.traits(customer)["review"] * aux.review_scale_pct // 100):
+        return
+    product_id = order["lines"][draw.below(len(order["lines"]))][0]
+    lo, hi = aux.review_window_days
+    customer["pending_reviews"].append(
+        [order["order_id"], product_id, at_ms + lo * clock.DAY_MS, at_ms + hi * clock.DAY_MS]
+    )
 
 
 def _coupon_open(window: _Window, promo: dict | None, at_ms: int, flag: str) -> bool:
@@ -478,6 +548,7 @@ def _complete(window: _Window, customer: dict[str, object], at_ms: int, seq: int
     rfm["last_purchase_ms"] = at_ms
     if rfm["order_count"] == 1:
         _repurchase_gate(window, customer)
+    _schedule_review(window, customer, order, at_ms)
     if window.orders is not None:
         catalog = window.params.product_index
         window.orders.append({

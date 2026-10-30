@@ -202,9 +202,11 @@ class TestFlagIsHiddenState(SimulatorCase):
             self.assertNotIn(FLAG, str(caught.exception))
 
     def test_previous_state_format_is_rejected(self) -> None:
-        self.assertEqual("sim-state-v4", world_state.FORMAT_VERSION)
-        with self.assertRaises(world_state.IncompatibleState):
-            world_state.decode(self.forged(lambda d: d.__setitem__("format_version", "sim-state-v3")))
+        # #198 이 sim-state-v5 로 올렸다. v3(이 표시가 없던 형식)와 v4(대기 리뷰가 없던 형식) 모두 거부된다.
+        self.assertEqual("sim-state-v5", world_state.FORMAT_VERSION)
+        for previous in ("sim-state-v3", "sim-state-v4"):
+            with self.subTest(previous=previous), self.assertRaises(world_state.IncompatibleState):
+                world_state.decode(self.forged(lambda d: d.__setitem__("format_version", previous)))
 
     def test_flag_never_reaches_the_public_output(self) -> None:
         root = self.start(seed=5, customers=200, profile="small")

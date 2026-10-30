@@ -1,5 +1,5 @@
 {
-  "config_version": "sim-gen-v4",
+  "config_version": "sim-gen-v5",
   "notes": [
     "S2(#76) 생성 config. 내용은 JSON 문법만 쓴다 — 표준 json 으로 읽어 의존성 없는 Python 3.10 에서도 생성이 돈다(사용자 확정 U2).",
     "값은 모두 정수다. ratio_bp 는 1/10000, mu_ppm 은 1/1000000, kappa_milli·shape_milli 는 1/1000, sigma_ppm 은 1/1000000 단위다. 금액은 원, 구매 주기는 밀리일, 방문 빈도는 밀리회/주다.",
@@ -374,6 +374,17 @@
       "engagement_floor_ppm": 20000,
       "recovery_hazard_ppm": 5000,
       "gate_recovery_scale_pct": 10
+    },
+    "aux_events": {
+      "note": "#198 부수 이벤트 4종(DR-198-aux-events). search: 세션 시작 때 한 번, 확률 = 검색 성향 x search_scale_pct/100, 구매 의도 세션은 x search_intent_weight_pct/100(상한 100%). return_visit: 구매 뒤 첫 방문 세션의 시작 이벤트를 session_start 대신 낸다(모수 없음). review: 구매마다 Bernoulli(리뷰 성향 x review_scale_pct/100), 당첨 주문의 한 상품을 구매 시각부터 경과 시간이 review_window_days [lo, hi) x 24시간 안(기본 24시간 이상 144시간 미만, 날짜 차수가 아니다)인 첫 방문 세션 시작 때 기록, 그 안에 방문이 없으면 내지 않는다. cs_contact: 가입 이후 매일 Bernoulli(CS 문의 성향 / 30 x cs_scale_pct/100), 세션 밖. 배율 100 은 data_spec 3.4 원문이다. search_intent_weight_pct 는 외부 정량 근거 없음 — 검색 세션 전환 배수(외부 1.2~2.7)는 생성 모수가 아니라 실현 검증 항목이다.",
+      "search_scale_pct": 100,
+      "search_intent_weight_pct": 150,
+      "review_scale_pct": 100,
+      "review_window_days": [
+        1,
+        6
+      ],
+      "cs_scale_pct": 100
     },
     "treatment": {
       "window_days": 42,

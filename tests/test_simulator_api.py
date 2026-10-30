@@ -25,10 +25,12 @@ SIMULATOR_DIR = REPO_ROOT / "src" / "simulator"
 CONTRACT_DOC = REPO_ROOT / "docs" / "simulator_api.md"
 # S4(#143): 구매 퍼널(checkout_start·purchase)과 처치 노출·반응(마케팅 5종)이 더해졌다.
 MARKETING = {"campaign_exposed", "push_sent", "coupon_exposed", "coupon_clicked", "coupon_use"}
+# #198: 부수 이벤트 4종(search·return_visit·review·cs_contact)이 더해졌다. 처치 없이도 생긴다.
 UNTREATED = {
     "session_start", "page_view", "product_view", "add_to_cart", "remove_from_cart",
-    "checkout_start", "purchase",
+    "checkout_start", "purchase", "search", "return_visit", "review", "cs_contact",
 }
+SESSION_OPENERS = {"session_start", "return_visit"}
 PRODUCED = UNTREATED | MARKETING
 TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}\+09:00$")
 KST = timezone(timedelta(hours=9))
@@ -168,10 +170,11 @@ class TestGeneratedEventsMeetTheContract(SimulatorCase):
         end_ms = _ms(self.summary.end.isoformat(timespec="milliseconds"))
         sessions: dict[str, list[dict[str, object]]] = defaultdict(list)
         for record in self.records:
-            sessions[str(record["session_id"])].append(record)
+            if record["session_id"] is not None:  # cs_contact 는 세션 밖 이벤트다
+                sessions[str(record["session_id"])].append(record)
         for session_id, rows in sessions.items():
             first = rows[0]
-            self.assertEqual("session_start", first["event_type"], session_id)
+            self.assertIn(first["event_type"], SESSION_OPENERS, session_id)
             self.assertEqual(f"S-{first['customer_id']}-{_ms(str(first['timestamp']))}", session_id)
             stamps = [_ms(str(r["timestamp"])) for r in rows]
             self.assertTrue(all(b - a < 30 * 60_000 for a, b in zip(stamps, stamps[1:])), session_id)

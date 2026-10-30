@@ -10,6 +10,8 @@
 from __future__ import annotations
 
 import contextlib
+import copy
+import dataclasses
 import hashlib
 import io
 import json
@@ -441,6 +443,17 @@ GATE_GOLDEN: dict[str, tuple[dict[str, str], str, str]] = {
         "2baabf708f5f853a4eb5ff5b6cb2bf859ee7ace200fa240f51acb167aa2687e6",
         "9596ef01661c2c177b13aa3d08e03e8f274eeebc8b18a98179f3afe171e98a45",
     ),
+    # #198: 부수 이벤트 4종으로 이벤트·상태가 바뀐다. 리뷰·CS·검색은 전용 스트림이라 게이트 결정은 sim-0.6 과 같다.
+    "sim-0.7": (
+        {
+            "C00000043": "pass", "C00000066": "fail", "C00000081": "pass", "C00000113": "pass",
+            "C00000124": "pass", "C00000140": "pass", "C00000164": "fail", "C00000208": "pass",
+            "C00000236": "pass", "C00000244": "fail", "C00000249": "fail", "C00000253": "pass",
+            "C00000258": "pass", "C00000269": "fail", "C00000273": "fail", "C00000297": "pass",
+        },
+        "e4343ba1048512d5d31be3bbbb0af004c7da7c2c22e4f290ba8611cb9ba3c64b",
+        "0bb51e86f1a8cc81e2b8b25d68aa5b1898f4a48b8df261cf5c0e89925a4aa720",
+    ),
 }
 
 
@@ -488,6 +501,186 @@ class TestRepurchaseGateKeepsSplitInvariance(unittest.TestCase):
                 digest, state, _ = self.run_world(splits, reload=reload)
                 self.assertEqual(self.digest, digest)
                 self.assertEqual(self.state, state)
+
+
+class TestAuxEvents(unittest.TestCase):
+    """#198 부수 이벤트 4종 — search·return_visit·review·cs_contact 의 생성 규칙(DR-198-aux-events).
+
+    처치 없는 small 세계 한 벌(seed 8 · 300명 · 150일)을 엔진으로 직접 돌려 이벤트와 주문 기록을 함께 본다.
+    배율 0 이면 하나도 나지 않고 기존 이벤트가 그대로라는 것은 test_simulator_reproducibility 의
+    TestAuxEventsLeaveEarlierBehaviorUnchanged 가 본다.
+    """
+
+    SEED, CUSTOMERS, DAYS = 8, 300, 150
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.world = world_state.new_world(cls.SEED, cls.CUSTOMERS, "small")
+        cls.orders: list[dict[str, object]] = []
+        cls.records = list(engine.run(cls.world, cls.world["now_ms"] + cls.DAYS * clock.DAY_MS, cls.orders))
+        cls.by_customer: dict[str, list[dict[str, object]]] = defaultdict(list)
+        for record in cls.records:
+            cls.by_customer[str(record["customer_id"])].append(record)
+
+    def of_type(self, event_type: str) -> list[dict[str, object]]:
+        return [r for r in self.records if r["event_type"] == event_type]
+
+    def test_all_four_appear_and_every_event_meets_the_contract(self) -> None:
+        for event_type in ("search", "return_visit", "review", "cs_contact"):
+            self.assertTrue(self.of_type(event_type), event_type)
+        problems = [(r["event_id"], sc.validate_event(r)) for r in self.records if sc.validate_event(r)]
+        self.assertEqual([], problems)
+
+    def test_return_visit_opens_exactly_the_first_session_after_a_purchase(self) -> None:
+        for cid, rows in self.by_customer.items():
+            bought_since_last_open = False
+            for record in rows:
+                kind = record["event_type"]
+                if kind in ("session_start", "return_visit"):
+                    expected = "return_visit" if bought_since_last_open else "session_start"
+                    self.assertEqual(expected, kind, f"{cid} {record['timestamp']}")
+                    bought_since_last_open = False
+                elif kind == "purchase":
+                    bought_since_last_open = True
+
+    def test_a_session_has_exactly_one_opener(self) -> None:
+        openers: dict[str, int] = defaultdict(int)
+        for record in self.records:
+            if record["event_type"] in ("session_start", "return_visit"):
+                openers[str(record["session_id"])] += 1
+        self.assertEqual({1}, set(openers.values()))
+
+    def test_review_is_one_line_of_its_order_within_days_one_to_five_in_a_session(self) -> None:
+        orders = {o["order_id"]: o for o in self.orders}
+        purchased_at = {r["order_id"]: r["timestamp"] for r in self.of_type("purchase")}
+        openers = {
+            r["session_id"]: r["timestamp"] for r in self.records if r["event_type"] in ("session_start", "return_visit")
+        }
+        reviews = self.of_type("review")
+        self.assertEqual(len(reviews), len({r["order_id"] for r in reviews}), "주문당 리뷰는 1건 이하다")
+        for review in reviews:
+            order = orders[review["order_id"]]
+            self.assertEqual(review["customer_id"], order["customer_id"])
+            self.assertIn(review["product_id"], {item["product_id"] for item in order["items"]})
+            elapsed = _ms(review["timestamp"]) - _ms(purchased_at[review["order_id"]])
+            self.assertTrue(clock.DAY_MS <= elapsed < 6 * clock.DAY_MS, review["event_id"])
+            self.assertEqual(openers[review["session_id"]], review["timestamp"], "세션을 여는 시각에 기록한다")
+
+    def test_search_happens_at_most_once_at_the_start_of_a_session(self) -> None:
+        openers = {
+            r["session_id"]: r["timestamp"] for r in self.records if r["event_type"] in ("session_start", "return_visit")
+        }
+        searches = self.of_type("search")
+        self.assertEqual(len(searches), len({r["session_id"] for r in searches}))
+        for search in searches:
+            self.assertEqual(openers[search["session_id"]], search["timestamp"])
+            self.assertEqual("search", search["page_type"])
+
+    def test_cs_contact_is_outside_sessions_and_after_signup(self) -> None:
+        signup = {c["customer_id"]: c["signup_ms"] for c in self.world["customers"]}
+        for contact in self.of_type("cs_contact"):
+            self.assertIsNone(contact["session_id"])
+            self.assertGreaterEqual(_ms(contact["timestamp"]), signup[contact["customer_id"]])
+
+    def test_pending_review_survives_split_and_save_load(self) -> None:
+        split_at = 73
+        world = world_state.new_world(self.SEED, self.CUSTOMERS, "small")
+        records = list(engine.run(world, world["now_ms"] + split_at * clock.DAY_MS))
+        self.assertTrue(any(c["pending_reviews"] for c in world["customers"]), "경계를 넘는 대기 리뷰가 없다")
+        world = world_state.decode(world_state.encode(world))
+        records += engine.run(world, world["now_ms"] + (self.DAYS - split_at) * clock.DAY_MS)
+        self.assertEqual(event_digest(self.records), event_digest(records))
+        self.assertEqual(world_state.encode(self.world), world_state.encode(world))
+
+    def test_malformed_pending_reviews_are_rejected_without_naming_the_field(self) -> None:
+        document = json.loads(world_state.encode(self.world))
+        document["customers"][0]["pending_reviews"] = [["O1", "P-unknown", 1, 2]]
+        with self.assertRaises(ValueError) as caught:  # 상태 구조 위반(world._fail)
+            world_state.decode(rng.canonical_json(document))
+        self.assertNotIn("pending_reviews", str(caught.exception))
+
+
+class TestAuxEventRules(unittest.TestCase):
+    """부수 이벤트의 확률식과 리뷰 기록 창을 엔진 함수로 직접 본다 — 골든은 현재 구현으로 만든 값이라 식이 틀려도
+    다시 만들면 통과한다. 여기서는 Trait·배율을 고정하고 추첨에 넘어가는 확률(ppm)과 대기 리뷰 처리를 단언한다.
+    """
+
+    def setUp(self) -> None:
+        world = world_state.new_world(8, 1, "small")
+        self.window = engine._Window(world, None)
+        self.window.draws = rng.DayDraws(8, 0)
+        self.window.params = copy.copy(self.window.params)
+        self.window.params.aux_events = params.AuxEvents(
+            search_scale_pct=100, search_intent_weight_pct=150, review_scale_pct=50,
+            review_window_days=(1, 6), cs_scale_pct=100,
+        )
+        self.customer = world["customers"][0]
+        self.customer["session"] = {"session_id": f"S-{self.customer['customer_id']}-1735657200000"}
+        self.window._traits[self.customer["customer_id"]] = {"search": 400_000, "review": 200_000, "cs": 300_000}
+        self.product = self.window.params.catalog[0]
+
+    def drawn_ppm(self, call, outcome: bool = False) -> list[int]:
+        seen: list[int] = []
+        with mock.patch.object(engine, "_below_ppm", side_effect=lambda u, ppm: seen.append(ppm) or outcome):
+            call()
+        return seen
+
+    def test_search_chance_is_propensity_times_scale_and_intent_sessions_are_weighted(self) -> None:
+        records: list[dict[str, object]] = []
+        self.assertEqual([400_000], self.drawn_ppm(lambda: engine._search(self.window, self.customer, 0, 0, records)))
+        self.assertEqual(
+            [600_000], self.drawn_ppm(lambda: engine._search(self.window, self.customer, 0, 35_000, records))
+        )
+        self.assertEqual([], records)
+
+    def test_cs_chance_is_propensity_over_thirty_times_scale(self) -> None:
+        self.assertEqual([10_000], self.drawn_ppm(lambda: engine._schedule_cs(
+            self.window, self.customer, 0, self.window.traits(self.customer)
+        )))
+        self.window.params.aux_events = dataclasses.replace(self.window.params.aux_events, cs_scale_pct=50)
+        self.assertEqual([5_000], self.drawn_ppm(lambda: engine._schedule_cs(
+            self.window, self.customer, 0, self.window.traits(self.customer)
+        )))
+
+    def test_review_chance_is_propensity_times_scale_and_a_win_queues_one_line_with_its_window(self) -> None:
+        order = {"order_id": "O00000001-000001", "lines": [[self.product.product_id, 1, self.product.unit_price]]}
+        self.assertEqual([100_000], self.drawn_ppm(
+            lambda: engine._schedule_review(self.window, self.customer, order, 5_000)
+        ))
+        self.assertEqual([], self.customer["pending_reviews"])
+        self.drawn_ppm(lambda: engine._schedule_review(self.window, self.customer, order, 5_000), outcome=True)
+        self.assertEqual(
+            [["O00000001-000001", self.product.product_id, 5_000 + clock.DAY_MS, 5_000 + 6 * clock.DAY_MS]],
+            self.customer["pending_reviews"],
+        )
+
+    def test_due_review_is_written_once_in_the_first_session_inside_its_window(self) -> None:
+        pid = self.product.product_id
+        self.customer["pending_reviews"] = [["O00000001-000001", pid, 100, 200], ["O00000001-000002", pid, 300, 400]]
+        first: list[dict[str, object]] = []
+        engine._due_reviews(self.window, self.customer, 150, first)
+        self.assertEqual(["O00000001-000001"], [r["order_id"] for r in first])
+        self.assertEqual([["O00000001-000002", pid, 300, 400]], self.customer["pending_reviews"])
+        self.assertEqual([], sc.validate_event(first[0]))
+        later: list[dict[str, object]] = []
+        engine._due_reviews(self.window, self.customer, 180, later)
+        self.assertEqual([], later, "창 안의 두 번째 세션에는 다시 쓰지 않는다")
+
+    def test_review_whose_window_passed_without_a_visit_is_dropped(self) -> None:
+        self.customer["pending_reviews"] = [["O00000001-000001", self.product.product_id, 100, 200]]
+        records: list[dict[str, object]] = []
+        engine._due_reviews(self.window, self.customer, 200, records)
+        self.assertEqual([], records)
+        self.assertEqual([], self.customer["pending_reviews"])
+
+
+def _ms(stamp: object) -> int:
+    from datetime import datetime, timezone
+
+    from src.measurement import timeparse
+
+    epoch = datetime(1970, 1, 1, tzinfo=timezone.utc)
+    return (timeparse.parse_datetime(str(stamp)) - epoch) // timedelta(milliseconds=1)
 
 
 if __name__ == "__main__":
