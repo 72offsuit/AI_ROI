@@ -174,12 +174,20 @@ class TestDeclarationMatchesWhereItRuns(unittest.TestCase):
     def test_gate1_checklist_installs_what_the_deps_ci_installs(self) -> None:
         """§5.1 의 설치 후 환경이 의존성 설치 CI 와 같은 파일을 설치하고, 같은 `미설치` 게이트를 본다.
 
-        `requirements.txt` 만 설치하면 계약 스키마 검증이 skip 되고도 ① 이 `OK` 다(PR #249 리뷰 R1)."""
+        `requirements.txt` 만 설치하면 계약 스키마 검증이 skip 되고도 ① 이 `OK` 다(PR #249 리뷰 R1).
+        설치 명령은 선언 런타임의 `-m pip` 다 — 그냥 `pip` 는 다른 Python 에 설치할 수 있다(N2).
+        `미설치` 줄은 있는지만 본다. CI 게이트와 같은 동작인지는 검증하지 않는다(N3)."""
         ci = _requirement_files((WORKFLOWS / "tests-with-deps.yml").read_text(encoding="utf-8"))
         self.assertTrue(ci, "tests-with-deps.yml 에서 설치하는 requirements 파일을 읽지 못했다")
         section = _gate1_section()
         self.assertLessEqual(ci, _requirement_files(section),
                              "gate1_checklist.md §5.1 의 설치 후 환경이 의존성 설치 CI 가 설치하는 파일을 빠뜨린다")
+        runtime = "python{}.{}".format(*_declared("Supported runtime"))
+        installs = re.findall(r"(\S+) -m pip install", section)
+        self.assertTrue(installs, f"gate1_checklist.md §5.1 에 `{runtime} -m pip install` 설치 명령이 없다 — "
+                                  "그냥 `pip` 는 다른 Python 에 설치할 수 있다")
+        self.assertEqual([runtime] * len(installs), [i.strip("`") for i in installs],
+                         f"gate1_checklist.md §5.1 의 설치 명령이 선언 런타임({runtime})이 아닌 판의 pip 를 부른다")
         gate = [line for line in _gate1_block(section).splitlines()
                 if "unittest discover" in line and "미설치" in line]
         self.assertTrue(gate, "gate1_checklist.md §5.1 블록에 '미설치' 사유 skip 0건 확인이 없다 — CI 게이트와 같은 기준")
