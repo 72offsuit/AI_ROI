@@ -80,6 +80,16 @@ class TestExposureOnset(unittest.TestCase):
                     self.assertEqual(customer["engagement"], after["engagement"])
         self.assertGreater(negatives, 0)
 
+    def test_exposure_before_signup_does_not_start_churning(self) -> None:
+        pending = [c for c in self.world["customers"]
+                   if c["signup_ms"] > self.world["now_ms"] and self.kinds[c["customer_id"]] == treatment.NEGATIVE]
+        self.assertTrue(pending, "가입 전 Negative 고객이 있어야 이 검사가 의미 있다")
+        for customer in pending:
+            after = expose(self.world, customer, "T3", self.full)
+            with self.subTest(customer=customer["customer_id"]):
+                self.assertEqual(customer["churning"], after["churning"])
+                self.assertEqual(customer["engagement"], after["engagement"])
+
     def test_zero_probability_and_t0_leave_the_state_alone(self) -> None:
         for customer in self.active():
             for tid, p in (("T3", self.off), ("T0", self.full)):
