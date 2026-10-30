@@ -49,6 +49,7 @@
 - 판: `SIMULATOR_VERSION` `sim-0.8`, 생성 config `sim-gen-v6`, 상태 형식 `sim-state-v5`(고객 항목 `pending_reviews`, 큐 종류 `cs`). #246(`sim-0.7` · `sim-gen-v5`)이 먼저 병합되어 그 다음 판으로 매겼다(2026-10-30, main 병합).
 - **측정 계층(공유 영역) 변경** — 이탈 판정의 접속에 `return_visit` 을 더한다(`kpi._churn_elapsed`, `churn_rate`·`retention_rate`·`winback_rate`·`derived_state_count` 의 `source_events`). 2026-10-30 사용자 결정, 시스템 팀 리뷰 요청.
 - **`metrics()`** — 창 안 `purchase`·`coupon_use`·`push_sent`·캠페인 이벤트와 계보의 주문 기록으로 메모리 교환 묶음을 만들어 `publish.assemble_orders`·`assemble_campaign`·`economics.revenue`·`marketing_cost`·`contribution_profit` 을 부른다(게시물 `build_kpi_report` 와 같은 규칙, 같은 값 대조 테스트). 비용 설정을 읽지 못하면 비용 2종은 `not_run`. `churn_rate` 는 `not_run` 유지(2026-10-30 사용자 결정). 이 변경으로 시스템 팀 소유 테스트 11건이 실패한다 — 시스템 팀이 처리한다(2026-10-30 사용자 전달). 시뮬레이터 팀은 시스템 팀 코드를 읽지 않으므로 영향 판단은 시스템 팀이 한다.
+- **원문 규칙과 외부 근거가 다를 때 — 외부 근거를 따른다**(2026-10-30 사용자 결정, PR #252 민정 리뷰). 판정 범위는 리뷰 주문당 3~12%, CS 주문 100건당 5~20건(#197)이다. 배율 100 은 data_spec §3.4 ④ 원문 그대로 둔 출발값이고, 보정 seed 42~46 실측 평균이 범위를 벗어나면 `review_scale_pct`·`cs_scale_pct` 로 범위 안에 맞춘다(확인 seed 47~51). 그러면 원문(`review ~ Bernoulli(review_propensity_i)` 등)과 실효 확률이 달라지므로, 원문 문구는 리드 확인을 받은 뒤 고친다 — 이 PR 에서 data_spec 원문 규칙은 고치지 않는다. #149 근거(주문당 1~5%, 해외 벤더 2차)는 범위 하단의 참고값이다.
 
 **근거:** A 는 계약의 세션·방문 정의와 함께 성립하는 유일한 안이다. 접속 정의 수정은 계약의 방문 정의(`visit_count`·`last_visit_date`)와 맞추는 것이다. 배율 기본 100% 는 원문 그대로라 보정은 실측 수치로만 한다(과제 G3 "설정으로 변경"). 외부 근거로 보정하는 것은 PRD §80 Risk 1 이 금지하는 AI 성능 근거 조정이 아니다. 새 이벤트를 전용 스트림에서만 뽑아 기존 12종의 추첨 자리가 그대로다 — 배율을 0 으로 두고 `return_visit` 을 `session_start` 로 되돌리면 직전 판(#246 `sim-0.7`) 골든 이벤트와 바이트까지 같다(`tests/test_simulator_reproducibility.py` `TestAuxEventsLeaveEarlierBehaviorUnchanged`). 그래서 구매·이탈·처치 반응과 참 효과(주문만 쓴다)는 바뀌지 않는다.
 
@@ -60,6 +61,7 @@
 | C (원문만, 배율 없음) | 실측이 외부 범위를 벗어나면 보정에 판을 한 번 더 올려야 한다 |
 | 접속 정의를 두고 별도 이슈로 | 그 이슈가 처리될 때까지 시뮬레이터가 이탈 지표를 체계적으로 과대로 만드는 판을 낸다 |
 | `metrics()` 연동을 후속 이슈로 | 이슈 범위가 남는다. 사용자가 이번 PR 에 넣고 시스템 팀에 선행 수정을 요청하기로 했다 |
+| 원문 규칙(배율 100)을 그대로 따르고 외부 근거와의 차이는 기록만 | 원문대로면 리뷰가 주문당 약 18.7%(smoke 20.9%)로 외부 범위 3~12% 위다. 범위를 벗어난 값을 정본으로 두면 리뷰 기반 Feature 의 현실성이 떨어진다 |
 | search 를 세션 행동 가중치(`browse_weights`)에 넣기 | 기존 `browse` 스트림의 추첨 순서가 바뀌어 행동 불변 검사를 둘 수 없다 |
 | review 단위를 상품 라인당 | 원문이 구매당 Bernoulli 이고 외부 근거도 주문 단위다 |
 
