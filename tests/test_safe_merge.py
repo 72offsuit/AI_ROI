@@ -178,6 +178,84 @@ SHARED_CHECK_NAMES = {
         None, _dashboard_twin("on:\n  workflow_dispatch:\n"), REQUIRED_TODAY, DASHBOARD),
 }
 
+#: 이름 해석 — 필수가 아닌 워크플로우가 `dashboard.yml` 과 같은 쌍을 다른 표기로 쓴다. YAML 로는 같은 이름인데 예전
+#:   파서가 다른 글자로 읽어 겹침을 놓쳤다(PR #238 리뷰 이름 해석). 값: `_twin` 의 인자.
+_TWIN_ATTRS = "    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
+TWIN_TRIGGERS = {
+    "workflow_dispatch 전용": "on:\n  workflow_dispatch:\n",
+    "pull_request.paths 로 제외": "on:\n  pull_request:\n    paths:\n      - dashboard/**\n",
+}
+NAME_NOTATIONS = {
+    # 리뷰의 처음 네 표기
+    "잡 name 의 공백을 \\u0020 으로": {"job": '    name: "경로\\u0020격리 · 상태 매핑"\n' + _TWIN_ATTRS},
+    "워크플로우 name 의 공백을 \\u0020 으로": {"workflow": 'name: "대시보드\\u0020검증"\n'},
+    "잡 name 을 >- 블록으로": {"job": "    name: >-\n      경로 격리 · 상태 매핑\n" + _TWIN_ATTRS},
+    "워크플로우 name 을 >- 블록으로": {"workflow": "name: >-\n  대시보드 검증\n"},
+    # 리뷰의 독립 검수 11표기
+    "잡 속성을 6칸 들여쓰기": {"job": "      name: 경로 격리 · 상태 매핑\n      runs-on: ubuntu-latest\n"
+                                     "      steps:\n        - run: echo\n"},
+    "잡 name 을 여러 줄 평범한 스칼라로": {"job": "    name: 경로 격리\n      · 상태 매핑\n" + _TWIN_ATTRS},
+    "잡 name 에 앵커": {"job": "    name: &n 경로 격리 · 상태 매핑\n" + _TWIN_ATTRS},
+    "잡 name 에 태그": {"job": "    name: !!str 경로 격리 · 상태 매핑\n" + _TWIN_ATTRS},
+    "이스케이프한 name 키": {"job": '    "n\\x61me": 경로 격리 · 상태 매핑\n' + _TWIN_ATTRS},
+    "복합 키 ? name": {"job": "    ? name\n    : 경로 격리 · 상태 매핑\n" + _TWIN_ATTRS},
+    "잡 name 의 공백을 \\x20 으로": {"job": '    name: "경로\\x20격리 · 상태 매핑"\n' + _TWIN_ATTRS},
+    "잡 name 을 |- 블록으로": {"job": "    name: |-\n      경로 격리 · 상태 매핑\n" + _TWIN_ATTRS},
+    "잡 name 을 별칭으로": {"job": "    env:\n      LABEL: &n 경로 격리 · 상태 매핑\n    name: *n\n" + _TWIN_ATTRS},
+    "워크플로우 name 을 여러 줄 평범한 스칼라로": {"workflow": "name: 대시보드\n  검증\n"},
+    "워크플로우 name 에 앵커": {"workflow": "name: &w 대시보드 검증\n"},
+    # 같은 계열로 더 찾은 것 — 예전 파서는 jobs 앞의 name 만, 겹친 name 키는 첫 값만 읽었다(PyYAML 은 마지막 값)
+    "워크플로우 name 을 jobs 뒤에": {"workflow": "", "tail": "name: 대시보드 검증\n"},
+    "잡 name 키가 두 번 — 뒤의 값이 같은 이름": {"job": "    name: 다른 이름\n    name: 경로 격리 · 상태 매핑\n" + _TWIN_ATTRS},
+}
+
+
+def _twin(on: str, *, workflow: str = "name: 대시보드 검증\n",
+          job: str = "    name: 경로 격리 · 상태 매핑\n" + _TWIN_ATTRS, tail: str = "") -> dict[str, str]:
+    """`dashboard.yml` 옆에 둘 쌍둥이 워크플로우 — 기본값은 같은 쌍을 평범하게 쓴 것이다."""
+    return {"dashboard-twin.yml": f"{workflow}{on}jobs:\n  twin:\n{job}{tail}"}
+
+
+def _name_cases():
+    for notation, parts in NAME_NOTATIONS.items():
+        for trigger, on in TWIN_TRIGGERS.items():
+            yield f"{notation} · {trigger}", _twin(on, **parts)
+
+
+IDEO, NBSP = "\u3000", "\u00a0"
+X_WS = ("Shared", f"X{IDEO}")
+#: 유니코드 공백 — YAML 의 공백은 스페이스와 탭뿐이고 U+3000 · U+00A0 등은 글자다. 예전 파서는 파이썬의 `strip()` ·
+#:   `\s` 로 이 글자를 벗겨 주석이 아닌 줄을 주석으로, 다른 키를 name 으로, 다른 이름을 같은 이름으로 읽었다(이름 해석
+#:   적대 검증 — 퍼저 · 값 · 구조 · 배치 네 갈래 17건이 이 한 원인이었다). 값: (추가 파일, PyYAML 로 둘 이상이 내는 필수 쌍).
+UNICODE_WHITESPACE = {
+    "U+3000 # 로 시작하는 잡 ID 를 주석으로 오인해 잡을 숨김": (
+        {"twin.yml": f"name: 대시보드 검증\non: workflow_dispatch\njobs:\n  lead:\n    runs-on: ubuntu-latest\n"
+                     f"  {IDEO}#x:\n      name: 경로 격리 · 상태 매핑\n      runs-on: ubuntu-latest\n"}, DASHBOARD),
+    "키 앞 U+3000 을 벗겨 name 으로 오인": (
+        {"twin.yml": f"name: 대시보드 검증\non: workflow_dispatch\njobs:\n  '경로 격리 · 상태 매핑':\n"
+                     f"    runs-on: ubuntu-latest\n    {IDEO}name: other\n"}, DASHBOARD),
+    "평범한 이름 끝 U+3000 을 벗겨 다른 이름으로(교차 파일)": (
+        {"cross-a.yml": f"name: Shared\non: pull_request\njobs:\n  a:\n    name: 'X{IDEO}'\n    runs-on: x\n",
+         "cross-b.yml": f"name: Shared\non:\n  pull_request:\n    paths:\n      - 'docs/**'\njobs:\n  b:\n"
+                        f"    name: X{IDEO}\n    runs-on: x\n"}, X_WS),
+    "평범한 이름 끝 NBSP# 꼬리를 주석으로 떼어 다른 이름으로": (
+        {"cross-a.yml": f"name: Shared\non: pull_request\njobs:\n  a:\n    name: 'X{NBSP}#y'\n    runs-on: x\n",
+         "cross-b.yml": f"name: Shared\non: workflow_dispatch\njobs:\n  b:\n    name: X{NBSP}#y\n    runs-on: x\n"},
+        ("Shared", f"X{NBSP}#y")),
+    "U+3000 paths 를 경로 필터로 오인해 필수에서 뺌": (
+        {"twin.yml": f"name: Twin\non:\n  pull_request:\n    {IDEO}paths: [x]\njobs:\n  a:\n    name: X\n"
+                     f"    runs-on: x\n  b:\n    name: X\n    runs-on: x\n"}, ("Twin", "X")),
+}
+
+_DASHBOARD_TWIN_BODY = "name: 대시보드 검증\non: workflow_dispatch\njobs:\n  twin:\n    name: 경로 격리 · 상태 매핑\n    runs-on: x\n"
+#: 파일 이름 — 예전 파서는 `Path.suffix` 로 파일을 골라 대문자 확장자(1라운드)와 점으로만 된 이름(2라운드 — `.yml`,
+#:   그리고 파이썬 3.14 에서는 `..yml` 도)을 건너뛰었다. 그 파일의 잡이 겹침 판정에서 통째로 빠진다.
+FILE_NAME_MISREADS = {
+    "확장자가 대문자": {"extra.YML": _DASHBOARD_TWIN_BODY},
+    "점과 확장자뿐인 이름 .yml": {".yml": _DASHBOARD_TWIN_BODY},
+    "점이 둘인 이름 ..yaml": {"..yaml": _DASHBOARD_TWIN_BODY},
+}
+
 
 def _workflow_copy(directory: Path, mutate, extra: dict[str, str] | None = None) -> None:
     """실제 워크플로우를 `directory` 에 베끼고 `dashboard.yml` 만 `mutate` 로 바꾼다. `extra` 파일을 더한다."""
@@ -220,11 +298,12 @@ def _yaml_reading(directory: Path) -> tuple[list[tuple[str, str]], list[str]]:
 
 
 def _yaml_job_pairs(directory: Path) -> list[tuple[str, str]]:
-    """PyYAML 로 읽은 **모든** 워크플로우 잡의 (워크플로우, 체크 이름) — 트리거와 무관하다."""
+    """PyYAML 로 읽은 **모든** 워크플로우 잡의 (워크플로우, 체크 이름) — 트리거와 무관하다. 파일은 이름 끝으로 고르고
+    (`.YML` · `.yml` 도), 이름 없는 워크플로우는 GitHub 처럼 `.github/workflows/<파일>` 이다."""
     pairs: list[tuple[str, str]] = []
-    for path in sorted(directory.glob("*.yml")):
-        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
-        workflow = doc.get("name", path.name)
+    for path in sorted(p for p in directory.iterdir() if p.name.lower().endswith((".yml", ".yaml"))):
+        doc = yaml.load(path.read_text(encoding="utf-8-sig"), Loader=yaml.BaseLoader)
+        workflow = doc.get("name", f".github/workflows/{path.name}")
         pairs.extend((workflow, job.get("name", job_id)) for job_id, job in doc["jobs"].items())
     return pairs
 
@@ -433,6 +512,86 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                     safe_merge.required_checks(d)
                 self.assertIn(f"{shared[0]} / {shared[1]}", str(raised.exception))
 
+    def test_a_name_notation_is_read_exactly_or_blocks(self) -> None:
+        """이름 해석 — 필수가 아닌 워크플로우가 같은 쌍을 어떤 표기로 써도 `WorkflowError` 다(표기를 읽지 않아서든,
+        정확히 읽어 겹침을 찾아서든). 예전 파서는 이스케이프 · 블록 · 앵커 등을 글자 그대로 읽어 다른 쌍으로 셌다."""
+        for label, extra in _name_cases():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, None, extra)
+                if yaml is not None:  # PyYAML 로도 같은 쌍을 잡 둘이 낸다 — 아니면 반례가 아니다
+                    self.assertEqual(2, _yaml_job_pairs(d).count(DASHBOARD))
+                with self.assertRaises(safe_merge.WorkflowError):
+                    safe_merge.required_checks(d)
+
+    def test_unicode_whitespace_is_text_not_space(self) -> None:
+        """유니코드 공백 — YAML 이 글자로 읽는 공백을 벗기지 않는다. 같은 쌍을 다른 쌍으로 세거나 줄 · 잡을 숨기던
+        사례가 전부 `WorkflowError` 다(겹침을 찾아서든, 키 · 잡 ID 를 읽지 않아서든)."""
+        for label, (extra, shared) in UNICODE_WHITESPACE.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, None, extra)
+                if yaml is not None:  # PyYAML 로는 그 쌍을 잡 둘 이상이 낸다 — 아니면 반례가 아니다
+                    self.assertGreaterEqual(_yaml_job_pairs(d).count(shared), 2)
+                with self.assertRaises(safe_merge.WorkflowError):
+                    safe_merge.required_checks(d)
+
+    def test_every_workflow_file_name_is_read(self) -> None:
+        """파일 이름 — 이름이 .yml · .yaml 로 끝나는 파일은 대소문자 · 앞 점과 상관없이 전부 읽어 겹침을 센다."""
+        for label, extra in FILE_NAME_MISREADS.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, None, extra)
+                if yaml is not None:
+                    self.assertEqual(2, _yaml_job_pairs(d).count(DASHBOARD))
+                with self.assertRaises(safe_merge.WorkflowError):
+                    safe_merge.required_checks(d)
+
+    def test_file_level_readings_match_github(self) -> None:
+        """대조군 — 맨 앞 BOM 은 벗기고 읽는다. 이름 없는 워크플로우는 GitHub 처럼 `.github/workflows/<파일>` 이다.
+        `.` 같은 숫자가 아닌 이름 · 규칙에 맞는 잡 ID(`_ok-1`) · 대문자 확장자 파일도 그대로 읽는다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "b.yml").write_text("\ufeffname: BOM\non: pull_request\njobs:\n  _ok-1:\n    name: .\n    runs-on: x\n",
+                                     encoding="utf-8")
+            (d / "n.yml").write_text("on: pull_request\njobs:\n  j:\n    runs-on: x\n", encoding="utf-8")
+            (d / "u.YAML").write_text("name: U\non: pull_request\njobs:\n  u:\n    runs-on: x\n", encoding="utf-8")
+            expected = [("BOM", "."), (".github/workflows/n.yml", "j"), ("U", "u")]
+            if yaml is not None:
+                self.assertEqual(sorted(expected), sorted(_yaml_job_pairs(d)))
+            self.assertEqual(expected, safe_merge.required_checks(d))
+
+    def test_an_indented_root_is_named_as_such(self) -> None:
+        """들여쓴 최상위 매핑은 첫 내용 줄에서 그 이유로 막는다 — 다른 규칙(on 못 찾음)에 기대지 않는다. 적대 검증에서
+        들여쓴 루트 안의 따옴표 연속 줄에 숨긴 0열 줄을 진짜 on · jobs 로 읽게 한 사례가 있었다."""
+        with self.assertRaisesRegex(safe_merge.WorkflowError, "0열이 아니다"):
+            safe_merge._check_top_level_keys(["# 머리 주석", " name: J", " on: push"], "r.yml")
+        safe_merge._check_top_level_keys(["---", "name: J", "on: push"], "ok.yml")  # 대조군
+
+    def test_a_non_utf8_file_is_a_workflow_error(self) -> None:
+        """UTF-16 파일은 `WorkflowError` 다 — 예전에는 UnicodeDecodeError 가 그대로 올라가 'BLOCKED' 안내 없이 끝났다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "w.yml").write_bytes("name: W\non: pull_request\njobs:\n  j:\n    runs-on: x\n".encode("utf-16"))
+            with self.assertRaises(safe_merge.WorkflowError):
+                safe_merge.required_checks(d)
+
+    def test_supported_name_notations_are_read_exactly(self) -> None:
+        """이름 해석의 대조군 — 읽기로 한 표기(평범한 한 줄 · 작은따옴표 · 이스케이프 없는 큰따옴표 · 끝 주석 · 일정한
+        6칸 속성 · 같은 칸의 steps 목록 · jobs 뒤의 워크플로우 name)는 실제 이름 그대로 읽는다."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "n1.yml").write_text(
+                "name: 'N1'\non:\n  pull_request:\njobs:\n  a:\n    name: '작은 따옴표'  # 주석\n    runs-on: x\n"
+                "  b:\n    name: \"큰 따옴표\"\n    steps:\n    - run: echo\n    - name: 단계 이름\n      run: echo\n"
+                "  c:\n      name: 여섯 칸 속성\n      runs-on: x\n", encoding="utf-8")
+            (d / "n2.yml").write_text("on:\n  pull_request:\njobs:\n  d:\n    runs-on: x\nname: 뒤에 둔 이름\n",
+                                      encoding="utf-8")
+            expected = [("N1", "작은 따옴표"), ("N1", "큰 따옴표"), ("N1", "여섯 칸 속성"), ("뒤에 둔 이름", "d")]
+            if yaml is not None:
+                self.assertEqual(sorted(expected), _yaml_reading(d)[0])
+            self.assertEqual(expected, safe_merge.required_checks(d))
+
     def test_distinct_final_check_names_are_read_even_when_they_look_alike(self) -> None:
         """체크 이름 중복의 대조군 — 최종 쌍이 다르면 막지 않는다. 다른 워크플로우의 같은 잡 이름, 대소문자만
         다른 이름(보고 대조도 정확한 문자열이다), 다른 잡의 ID 와 같은 `name:`, PR 이 아닌 워크플로우의 다른 쌍."""
@@ -623,7 +782,42 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                     #   못 읽으면 막는다(4칸 들여쓴 잡은 YAML 로 유효하지만 이 스크립트는 읽지 않는다)
                     ("non-pr-unreadable-job.yml", "name: J\non:\n  push:\njobs:\n    deep:\n      name: x\n"),
                     ("filtered-unreadable-job.yml",
-                     "name: J\non:\n  pull_request:\n    paths:\n      - src/**\njobs:\n    deep:\n      name: x\n")):
+                     "name: J\non:\n  pull_request:\n    paths:\n      - src/**\njobs:\n    deep:\n      name: x\n"),
+                    # 이름 해석 — 파서마다 다르게 읽거나 실행 때 정해지는 이름은 읽지 않는다
+                    ("cased-job-name-key.yml", "name: J\non:\n  push:\njobs:\n  j:\n    Name: x\n    runs-on: y\n"),
+                    ("cased-workflow-name-key.yml", "Name: J\non:\n  push:\njobs:\n  j:\n    runs-on: y\n"),
+                    ("expression-name.yml",
+                     "name: J\non:\n  push:\njobs:\n  j:\n    name: ${{ 'x' }}\n    runs-on: y\n"),
+                    ("typed-number-name.yml", "name: J\non:\n  push:\njobs:\n  j:\n    name: 1.10\n    runs-on: y\n"),
+                    ("typed-bool-name.yml", "name: J\non:\n  push:\njobs:\n  j:\n    name: yes\n    runs-on: y\n"),
+                    ("null-name.yml", "name: ~\non:\n  push:\njobs:\n  j:\n    runs-on: y\n"),
+                    ("empty-name.yml", "name: J\non:\n  push:\njobs:\n  j:\n    name:\n    runs-on: y\n"),
+                    ("flow-name.yml", "name: J\non:\n  push:\njobs:\n  j:\n    name: [x]\n    runs-on: y\n"),
+                    ("merge-key-attribute.yml",
+                     "name: J\non:\n  push:\njobs:\n  j:\n    <<: *base\n    runs-on: y\n"),
+                    ("non-key-attribute-line.yml",
+                     "name: J\non:\n  push:\njobs:\n  j:\n    runs-on: y\n    stray text\n"),
+                    ("stray-list-item.yml", "name: J\non:\n  push:\njobs:\n  j:\n    runs-on: y\n    - z\n"),
+                    ("shallower-attribute-indent.yml",
+                     "name: J\non:\n  push:\njobs:\n  j:\n      runs-on: y\n    name: x\n"),
+                    ("empty-job.yml", "name: J\non:\n  push:\njobs:\n  j:\n  k:\n    runs-on: y\n"),
+                    # 적대 검증 — 파서마다 줄 · 문서 · 이름이 달라지는 파일은 읽지 않는다
+                    ("line-separator.yml", "name: J\non:\n  push:\n# a\u2028jobs:\njobs:\n  j:\n    runs-on: y\n"),
+                    ("next-line.yml", "name: J\non:\n  push:\njobs:\n  j:\x85    runs-on: y\n"),
+                    ("indented-root.yml", " name: J\n on:\n   push:\n jobs:\n   j:\n     runs-on: y\n"),
+                    ("ideographic-name-key.yml", f"name{IDEO}: J\non:\n  push:\njobs:\n  j:\n    runs-on: y\n"),
+                    ("quoted-job-id-with-space.yml",
+                     "name: J\non:\n  push:\njobs:\n  '경로 격리':\n    runs-on: y\n"),
+                    ("digit-job-id.yml", "name: J\non:\n  push:\njobs:\n  1job:\n    runs-on: y\n"),
+                    ("trailing-ws-job-id.yml", f"name: J\non:\n  push:\njobs:\n  twin{IDEO}:\n    runs-on: y\n"),
+                    ("matrix-job.yml",
+                     "name: J\non:\n  push:\njobs:\n  j:\n    strategy:\n      matrix:\n        v: [1, 2]\n    runs-on: y\n"),
+                    ("reusable-call.yml", "name: J\non:\n  push:\njobs:\n  j:\n    uses: ./.github/workflows/x.yml\n"),
+                    ("sexagesimal-name.yml",
+                     "name: J\non:\n  push:\njobs:\n  j:\n    name: 1:2:3.5\n    runs-on: y\n"),
+                    # 2라운드 — 대소문자만 다른 이벤트 이름은 PR 여부를 정할 수 없다
+                    ("cased-event-key.yml", "name: J\non:\n  Pull_Request:\njobs:\n  j:\n    runs-on: y\n"),
+                    ("cased-event-item.yml", "name: J\non: [push, PULL_REQUEST]\njobs:\n  j:\n    runs-on: y\n")):
                 with self.subTest(name=name):
                     for old in d.glob("*.yml"):
                         old.unlink()
@@ -734,6 +928,27 @@ class TestMainWiring(unittest.TestCase):
                 code, calls = self._main_with_workflows(d, pr)
                 self.assertNotEqual(0, code)
                 self.assertEqual([], self._merges(calls))
+
+    def test_a_name_notation_never_merges_on_the_twins_report(self) -> None:
+        """이름 해석 — 배선까지: 필수 dashboard 잡은 미보고이고 쌍둥이의 SUCCESS 만 그 쌍으로 보고되면 병합 호출 0회.
+        나머지 체크는 SUCCESS · 비작성자 승인 · 충돌 없음이다(리뷰의 합성 PR 입력)."""
+        for label, extra in _name_cases():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, None, extra)
+                code, calls = self._main_with_workflows(d, _pr(statusCheckRollup=[_run(w, n) for w, n in REQUIRED_TODAY]))
+                self.assertNotEqual(0, code)
+                self.assertEqual([], self._merges(calls))
+
+    def test_a_twin_with_a_different_name_still_merges(self) -> None:
+        """위 대조군 — 이름이 정말 다른 쌍둥이는 막지 않는다. 아니면 위 검사는 쌍둥이만 있으면 늘 막는 배선만 본 것이다."""
+        for trigger, on in TWIN_TRIGGERS.items():
+            with self.subTest(trigger=trigger), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, None, _twin(on, job="    name: 경로 격리 · 상태 매핑 (보조)\n" + _TWIN_ATTRS))
+                code, calls = self._main_with_workflows(d, _pr(statusCheckRollup=[_run(w, n) for w, n in REQUIRED_TODAY]))
+                self.assertEqual(0, code)
+                self.assertEqual(1, len(self._merges(calls)))
 
     def test_the_real_parser_still_merges_when_every_check_is_reported(self) -> None:
         """위 대조군 — 같은 배선에서 전부 보고되면 병합한다. 아니면 위 검사는 늘 막는 배선만 본 것이다."""
