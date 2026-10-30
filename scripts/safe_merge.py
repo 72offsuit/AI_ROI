@@ -22,7 +22,8 @@ GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 *
      못해도 막는다(목록이 조용히 줄면 그 체크는 안 떠도 병합된다). 여러 줄에 걸친 따옴표 ·
      흐름 표기는 어디에 있든 막는다 — 연속 줄이 0열이면 블록이 끝난 것처럼 보인다(N1).
      흐름 안에서 파서마다 토큰을 다르게 나누는 표기도 한 줄이어도 막는다(P3). 최상위 키 · 이벤트
-     키 · 잡 ID 가 겹쳐도 막는다 — 파서마다 읽는 블록이 다르다(중복 키).
+     키 · 잡 ID 가 겹쳐도 막는다 — 파서마다 읽는 블록이 다르다(중복 키). 서로 다른 잡이 같은
+     (워크플로우, 체크 이름) 쌍을 내도 막는다 — 보고는 그 쌍으로만 구분된다(체크 이름 중복).
      필수 목록은 **이 스크립트가 놓인 체크아웃**(작업 폴더가 아니다)의 워크플로우에서 읽는다 —
      최신 `main` 체크아웃에서 실행한다. 이름 변경 처리는 docs/GIT_WORKFLOW.md §5.1.
   ③ 보고된 체크가 **전부** `SUCCESS` 다. `SKIPPED` · `NEUTRAL` · 진행 중은 통과가 아니다.
@@ -356,6 +357,7 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
         raise WorkflowError(f"워크플로우 파일이 없다: {workflow_dir}")
     required: list[tuple[str, str]] = []
     excluded: list[tuple[str, str]] = []
+    made_by: dict[tuple[str, str], list[str]] = {}  # (워크플로우, 체크 이름) → 그 쌍을 내는 잡
     for path in files:
         text = path.read_text(encoding="utf-8")
         _check_no_multiline_nodes(text.splitlines(), path.name)
@@ -364,15 +366,11 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
         # 주석 줄은 트리거 판정에서 뺀다 — 설명문 속 "pull_request" 에 속지 않게.
         head = [line for line in head_text.splitlines() if not line.lstrip().startswith("#")]
         runs_on_pr, filters = _pull_request_trigger(head)
-        if not runs_on_pr:
-            continue
         names = [pair[1] for line in head if _indent(line) == 0
                  for pair in [_mapping_key(line)] if pair and pair[0] == "name"]
         workflow = (_scalar(names[0]) if names else "") or path.name
-        if filters:
-            excluded.append((workflow, f"{path.name}: pull_request.{' · '.join(filters)} 필터"))
-            continue
-        jobs: list[tuple[str, str]] = []
+        # ★ 잡은 PR 워크플로우가 아니어도 읽는다 — 경로 필터 · 다른 트리거로 돈 잡도 같은 head 에 보고될 수 있다.
+        jobs: list[tuple[str, str]] = []  # (잡 ID, 체크 이름)
         job_id: str | None = None
         job_name: str | None = None
         job_ids: set[str] = set()
@@ -392,17 +390,31 @@ def _scan(workflow_dir: Path) -> tuple[list[tuple[str, str]], list[tuple[str, st
                     raise WorkflowError(f"{path.name}: 잡 ID가 두 번 나온다(`{pair[0]}`) — 파서마다 읽는 잡이 다르다")
                 job_ids.add(_key_identity(pair[0]))
                 if job_id is not None:
-                    jobs.append((workflow, job_name or job_id))
+                    jobs.append((job_id, job_name or job_id))
                 job_id, job_name = pair[0], None
                 continue
             pair = _mapping_key(line.strip()) if _indent(line) == 4 else None
             if pair and pair[0] == "name" and job_id is not None and job_name is None:
                 job_name = _scalar(pair[1]) or None
         if job_id is not None:
-            jobs.append((workflow, job_name or job_id))
+            jobs.append((job_id, job_name or job_id))
         if not jobs:
-            raise WorkflowError(f"{path.name}: pull_request 워크플로우인데 잡을 하나도 읽지 못했다")
-        required.extend(jobs)
+            raise WorkflowError(f"{path.name}: 잡을 하나도 읽지 못했다")
+        for job, check in jobs:
+            made_by.setdefault((workflow, check), []).append(f"{path.name} `{job}`")
+        if not runs_on_pr:
+            continue
+        if filters:
+            excluded.append((workflow, f"{path.name}: pull_request.{' · '.join(filters)} 필터"))
+            continue
+        required.extend((workflow, check) for _, check in jobs)
+    # ★ 보고는 (워크플로우, 체크 이름) 쌍으로만 구분된다 — `statusCheckRollup` 에 잡 ID 가 없다. 같은 쌍을
+    #   내는 잡이 둘이면 한 잡의 SUCCESS 가 다른 잡의 미보고를 가린다(PR #238 리뷰 체크 이름 중복).
+    for pair in dict.fromkeys(required):
+        if len(made_by[pair]) > 1:
+            raise WorkflowError(f"필수 체크(`{pair[0]} / {pair[1]}`)를 잡 {len(made_by[pair])}개가 낸다"
+                                f"({' · '.join(made_by[pair])}) — 한 잡의 보고가 다른 잡의 미보고를 가린다. "
+                                f"체크 이름(잡 `name:` · 없으면 잡 ID)을 고유하게 바꾼다")
     return required, excluded
 
 
@@ -419,7 +431,8 @@ def required_checks(workflow_dir: Path = WORKFLOWS) -> list[tuple[str, str]]:
     일부만 읽고 나머지를 버리면 버린 만큼 필수 목록이 조용히 준다(PR #238 리뷰 R4).
     파일 어디에든 여러 줄에 걸친 따옴표 스칼라 · 흐름 컬렉션(`[…]` · `{…}`)이 있거나, 블록을
     끝내는 0열 줄이 최상위 키가 아니어도 `WorkflowError` 다(N1). 블록 스칼라(`run: |`)의 내용은
-    글자라 보지 않는다.
+    글자라 보지 않는다. 필수 쌍을 내는 잡이 **모든** 워크플로우 파일을 통틀어 둘 이상이어도
+    `WorkflowError` 다 — 필수에서 뺀 워크플로우 · PR 이 아닌 워크플로우의 잡도 센다(체크 이름 중복).
     """
     return _scan(workflow_dir)[0]
 

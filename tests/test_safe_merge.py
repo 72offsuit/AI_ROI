@@ -14,6 +14,8 @@
   - 따옴표 · 흐름 표기의 연속 줄이 0열이어도 같다 — 블록의 끝으로 오인하지 않는다 (N1). 흐름 안의
     공백 없는 `:` · `? ` 뒤에서 열리는 따옴표도 같다 (P3)
   - 최상위 키 · 이벤트 키 · 잡 ID 가 겹쳐도 같다 — 첫 블록만 읽지 않는다 (중복 키)
+  - 서로 다른 잡이 같은 (워크플로우, 체크 이름) 쌍을 내면 막는다 — 한 잡의 보고가 다른 잡을 대신하지
+    못한다 (체크 이름 중복)
   - 우회 옵션이 생기지 않는다
 
 `gh` 는 부르지 않는다 — `subprocess.run` 을 바꿔 끼워 PR JSON 을 주입한다.
@@ -142,16 +144,55 @@ DUPLICATE_KEYS = {
 }
 
 
-def _workflow_copy(directory: Path, mutate) -> None:
-    """실제 워크플로우를 `directory` 에 베끼고 `dashboard.yml` 만 `mutate` 로 바꾼다."""
+def _with_jobs(*jobs: tuple[str, str | None]):
+    """`dashboard.yml` 사본 끝에 잡을 붙인다 — (잡 ID, `name:` 값 · 없으면 None)."""
+    def mutate(text: str) -> str:
+        for job_id, name in jobs:
+            named = "" if name is None else f"    name: {name}\n"
+            text = text.rstrip("\n") + f"\n\n  {job_id}:\n{named}    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"
+        return text
+    return mutate
+
+
+def _dashboard_twin(on: str) -> dict[str, str]:
+    """`dashboard.yml` 과 워크플로우 이름 · 잡 이름이 같은 다른 파일. `on` 은 `on:` 블록 그대로."""
+    return {"dashboard-twin.yml": f"name: 대시보드 검증\n{on}jobs:\n  twin:\n    name: 경로 격리 · 상태 매핑\n"
+                                  "    runs-on: ubuntu-latest\n    steps:\n      - run: echo\n"}
+
+
+LINT = ("대시보드 검증", "lint")
+#: 체크 이름 중복 — 서로 다른 잡이 같은 최종 (워크플로우, 체크 이름) 쌍을 낸다. 보고 대조는 쌍의 집합이라
+#:   한 잡의 SUCCESS 가 다른 잡의 미보고를 가렸다(PR #238 리뷰 A~C). D · E 는 같은 계열 — 필수가 아닌
+#:   워크플로우의 잡도 같은 head 에 보고될 수 있다. 값: (`dashboard.yml` 변형 · 없으면 None, 더할 파일,
+#:   PyYAML 이 읽는 필수 체크 — 겹친 쌍은 겹친 수만큼, 겹친 쌍).
+SHARED_CHECK_NAMES = {
+    "A 둘째 잡의 name 이 첫 잡과 같다": (
+        _with_jobs(("review_extra", "경로 격리 · 상태 매핑")), {}, [*REQUIRED_TODAY, DASHBOARD], DASHBOARD),
+    "B name 없는 lint 와 name: lint 인 lint_check": (
+        _with_jobs(("lint", None), ("lint_check", "lint")), {}, [*REQUIRED_TODAY, LINT, LINT], LINT),
+    "C 다른 파일의 같은 워크플로우 이름 · 잡 이름": (
+        None, _dashboard_twin("on:\n  pull_request:\n"), [*REQUIRED_TODAY, DASHBOARD], DASHBOARD),
+    "D 경로 필터로 뺀 워크플로우의 같은 쌍": (
+        None, _dashboard_twin("on:\n  pull_request:\n    paths:\n      - dashboard/**\n"), REQUIRED_TODAY, DASHBOARD),
+    "E PR 이 아닌 트리거(workflow_dispatch)의 같은 쌍": (
+        None, _dashboard_twin("on:\n  workflow_dispatch:\n"), REQUIRED_TODAY, DASHBOARD),
+}
+
+
+def _workflow_copy(directory: Path, mutate, extra: dict[str, str] | None = None) -> None:
+    """실제 워크플로우를 `directory` 에 베끼고 `dashboard.yml` 만 `mutate` 로 바꾼다. `extra` 파일을 더한다."""
+    if mutate is None and not extra:
+        raise AssertionError("바꾼 것도 더한 것도 없다 — 대조군이 공허하다")
     for path in WORKFLOWS.glob("*.yml"):
         text = path.read_text(encoding="utf-8")
-        if path.name == "dashboard.yml":
+        if path.name == "dashboard.yml" and mutate is not None:
             changed = mutate(text)
             if changed == text:
                 raise AssertionError("사본을 바꾸지 못했다 — 대조군이 공허하다")
             text = changed
         (directory / path.name).write_text(text, encoding="utf-8")
+    for name, text in (extra or {}).items():
+        (directory / name).write_text(text, encoding="utf-8")
 
 
 def _with_trigger(notation: str):
@@ -176,6 +217,16 @@ def _yaml_reading(directory: Path) -> tuple[list[tuple[str, str]], list[str]]:
             continue
         required.extend((workflow, job.get("name", job_id)) for job_id, job in doc["jobs"].items())
     return sorted(required), excluded
+
+
+def _yaml_job_pairs(directory: Path) -> list[tuple[str, str]]:
+    """PyYAML 로 읽은 **모든** 워크플로우 잡의 (워크플로우, 체크 이름) — 트리거와 무관하다."""
+    pairs: list[tuple[str, str]] = []
+    for path in sorted(directory.glob("*.yml")):
+        doc = yaml.load(path.read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        workflow = doc.get("name", path.name)
+        pairs.extend((workflow, job.get("name", job_id)) for job_id, job in doc["jobs"].items())
+    return pairs
 
 
 def _run(workflow: str, name: str, conclusion: str | None = "SUCCESS", status: str = "COMPLETED") -> dict:
@@ -368,6 +419,37 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
         """중복 키 — `on:` · `jobs:` · 이벤트 키가 겹쳐도 필수 체크가 하나도 빠지지 않거나, `WorkflowError` 로 막는다."""
         self._assert_keeps_every_check_or_blocks(DUPLICATE_KEYS)
 
+    def test_a_check_name_made_by_two_jobs_blocks(self) -> None:
+        """체크 이름 중복 — 같은 최종 (워크플로우, 체크 이름) 쌍을 내는 잡이 둘이면 `WorkflowError` 다.
+        보고는 쌍으로만 구분돼(`statusCheckRollup` 에 잡 ID 가 없다) 한 잡의 보고가 다른 잡을 대신한다."""
+        for label, (mutate, extra, needed, shared) in SHARED_CHECK_NAMES.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, mutate, extra)
+                if yaml is not None:  # PyYAML 로도 그 쌍이 필수이고 잡 둘이 낸다 — 아니면 반례가 아니다
+                    self.assertEqual(sorted(needed), _yaml_reading(d)[0])
+                    self.assertEqual(2, _yaml_job_pairs(d).count(shared))
+                with self.assertRaises(safe_merge.WorkflowError) as raised:
+                    safe_merge.required_checks(d)
+                self.assertIn(f"{shared[0]} / {shared[1]}", str(raised.exception))
+
+    def test_distinct_final_check_names_are_read_even_when_they_look_alike(self) -> None:
+        """체크 이름 중복의 대조군 — 최종 쌍이 다르면 막지 않는다. 다른 워크플로우의 같은 잡 이름, 대소문자만
+        다른 이름(보고 대조도 정확한 문자열이다), 다른 잡의 ID 와 같은 `name:`, PR 이 아닌 워크플로우의 다른 쌍."""
+        with tempfile.TemporaryDirectory() as tmp:
+            d = Path(tmp)
+            (d / "u1.yml").write_text(
+                "name: U1\non:\n  pull_request:\njobs:\n  lint:\n    runs-on: x\n  upper:\n    name: Lint\n"
+                "  a:\n    name: b\n  b:\n    name: c\n", encoding="utf-8")
+            (d / "u2.yml").write_text("name: U2\non:\n  pull_request:\njobs:\n  lint:\n    runs-on: x\n",
+                                      encoding="utf-8")
+            (d / "u3.yml").write_text("name: U1\non:\n  workflow_dispatch:\njobs:\n  lint:\n    name: 배포\n",
+                                      encoding="utf-8")
+            expected = [("U1", "lint"), ("U1", "Lint"), ("U1", "b"), ("U1", "c"), ("U2", "lint")]
+            if yaml is not None:
+                self.assertEqual(sorted(expected), _yaml_reading(d)[0])
+            self.assertEqual(expected, safe_merge.required_checks(d))
+
     def test_plain_and_block_scalars_are_not_mistaken_for_open_nodes(self) -> None:
         """N1 대조군 — 여러 줄 표기를 막는 검사가 평범한 스칼라 속 따옴표 · 괄호와 블록 스칼라(`run: |`)
         내용을 열린 표기로 오인하면 정상 PR 이 병합되지 못한다. P3 대조군 — 흐름 안의 공백 없는 값 ·
@@ -536,7 +618,12 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                     ("column-zero-non-key.yml",
                      "name: J\n? extra\non:\n  pull_request:\njobs:\n  j:\n    name: x\n"),
                     ("second-document.yml",
-                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n---\nname: K\n")):
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: x\n---\nname: K\n"),
+                    # 체크 이름 중복 — PR 이 아닌 · 경로 필터로 뺀 워크플로우의 잡도 겹침을 세려고 읽는다.
+                    #   못 읽으면 막는다(4칸 들여쓴 잡은 YAML 로 유효하지만 이 스크립트는 읽지 않는다)
+                    ("non-pr-unreadable-job.yml", "name: J\non:\n  push:\njobs:\n    deep:\n      name: x\n"),
+                    ("filtered-unreadable-job.yml",
+                     "name: J\non:\n  pull_request:\n    paths:\n      - src/**\njobs:\n    deep:\n      name: x\n")):
                 with self.subTest(name=name):
                     for old in d.glob("*.yml"):
                         old.unlink()
@@ -632,6 +719,18 @@ class TestMainWiring(unittest.TestCase):
                 d = Path(tmp)
                 _workflow_copy(d, mutate)
                 pr = _pr(statusCheckRollup=[_run(w, n) for w, n in needed if (w, n) != missing])
+                code, calls = self._main_with_workflows(d, pr)
+                self.assertNotEqual(0, code)
+                self.assertEqual([], self._merges(calls))
+
+    def test_a_check_name_shared_by_two_jobs_is_never_merged_on_one_report(self) -> None:
+        """체크 이름 중복 — 배선까지: 겹친 쌍이 SUCCESS 한 건으로만 보고되면(한 잡은 미보고) 종료 0 이 아니고
+        병합 호출 0회. 나머지 체크는 전부 SUCCESS · 비작성자 승인 · 충돌 없음이다(리뷰의 합성 PR 입력)."""
+        for label, (mutate, extra, needed, _) in SHARED_CHECK_NAMES.items():
+            with self.subTest(case=label), tempfile.TemporaryDirectory() as tmp:
+                d = Path(tmp)
+                _workflow_copy(d, mutate, extra)
+                pr = _pr(statusCheckRollup=[_run(w, n) for w, n in sorted(set(needed))])
                 code, calls = self._main_with_workflows(d, pr)
                 self.assertNotEqual(0, code)
                 self.assertEqual([], self._merges(calls))
