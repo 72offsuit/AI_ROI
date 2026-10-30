@@ -19,7 +19,7 @@ import hashlib
 import json
 import os
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
 from typing import Callable, Mapping, TypeVar
@@ -139,9 +139,11 @@ class GenerationConfig:
     personas: tuple[PersonaSpec, ...]
     traits: tuple[TraitSpec, ...]
     # 정수·문자열·null 만 담은 원본 블록. 해석·검사는 params.py 가 한다(S4~S6).
-    behavior: Mapping[str, object] = MappingProxyType({})
-    catalog: Mapping[str, object] = MappingProxyType({})
-    guardrails: Mapping[str, object] = MappingProxyType({})
+    # 기본값은 default_factory 로 둔다 — Python 3.11 의 dataclass 는 해시할 수 없는 기본값(mappingproxy 는 3.12
+    # 부터 해시 가능)을 거부해 import 가 깨진다(#248).
+    behavior: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+    catalog: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
+    guardrails: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
     @property
     def persona_ids(self) -> tuple[str, ...]:

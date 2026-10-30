@@ -16,10 +16,11 @@ from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 # #183(F11 보정): 관측 중 가입 고객의 생애 첫 구매 뒤 재구매 게이트가 생겨 이벤트가 바뀐다. 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
 # #183(sim-0.6): 구매 의향·이탈 onset·쿠폰 받기 보정, 반복 노출 감쇠, 게이트 탈락자 회복 분리로 이벤트가 바뀐다.
 # 고객 항목에 gate_churning(재구매 게이트 탈락으로 시작한 이탈 표시)이 생겨 상태 형식도 바뀐다.
-# #198(sim-0.7): 부수 이벤트 4종(search·return_visit·review·cs_contact)이 생겨 이벤트가 바뀐다. 고객 항목에
+# #196(sim-0.7): Sleeping Dog 직접 경로(Negative 노출 즉시 onset)와 Negative 비율 배율 상향으로 처치 이후 이벤트가 바뀐다.
+# #198(sim-0.8): 부수 이벤트 4종(search·return_visit·review·cs_contact)이 생겨 이벤트가 바뀐다. 고객 항목에
 # pending_reviews(구매 후 기록 대기 중인 리뷰)와 큐 종류 cs 가 생겨 상태 형식도 바뀐다.
 FORMAT_VERSION = "sim-state-v5"
-SIMULATOR_VERSION = "sim-0.7"
+SIMULATOR_VERSION = "sim-0.8"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999

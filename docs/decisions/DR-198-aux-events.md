@@ -4,7 +4,7 @@
 |---|---|
 | 태스크 | S2·SIM · #198 (부모 #166) |
 | 작성 | 성환(limtjdghks) · 2026-10-30 |
-| 상태 | 제안 — 규칙·구조 확정, 배율값은 #246(Sleeping Dog 경로) 병합 뒤 실측으로 확정 |
+| 상태 | 제안 — 규칙·구조 확정, 배율값은 #246(Sleeping Dog 경로, 병합됨) 위 `sim-0.8` 실측으로 확정 |
 
 ## 무엇을 정하는가
 
@@ -37,7 +37,7 @@
 
 ## 결정
 
-**A 안**(2026-10-26 사용자 결정, 리드 합의 사용자 전달). 규칙과 config(`behavior.aux_events`, `sim-gen-v5`):
+**A 안**(2026-10-26 사용자 결정, 리드 합의 사용자 전달). 규칙과 config(`behavior.aux_events`, `sim-gen-v6`):
 
 | 이벤트 | 규칙 | config |
 |---|---|---|
@@ -46,11 +46,11 @@
 | `review` | 구매마다 Bernoulli(리뷰 성향 × `review_scale_pct`/100), 주문당 최대 1건. 당첨 주문의 한 상품을 대기(`pending_reviews`, 숨은 상태)에 넣고, 구매 시각부터 경과 `[1, 6)` × 24시간(24시간 이상 144시간 미만 — 날짜 차수가 아니라 23:50 구매 뒤 다음 날 00:10 방문은 들지 않는다) 안의 첫 방문 세션을 여는 시각에 `page_type = history`·`order_id` 와 함께 기록한다. 그 안에 방문이 없으면 버린다. 전용 스트림 `review` | `review_scale_pct` 100 · `review_window_days` [1, 6] (끝은 365 이하) |
 | `cs_contact` | 가입 이후 매일 Bernoulli(CS 성향 / 30 × `cs_scale_pct`/100), 그날 안 임의 시각, 세션 밖. 전용 스트림 `cs` | `cs_scale_pct` 100 |
 
-- 판: `SIMULATOR_VERSION` `sim-0.7`, 상태 형식 `sim-state-v5`(고객 항목 `pending_reviews`, 큐 종류 `cs`). **판 번호는 #246(`sim-0.7`)과 병합 순서를 정한 뒤 rebase 때 다시 매긴다.**
+- 판: `SIMULATOR_VERSION` `sim-0.8`, 생성 config `sim-gen-v6`, 상태 형식 `sim-state-v5`(고객 항목 `pending_reviews`, 큐 종류 `cs`). #246(`sim-0.7` · `sim-gen-v5`)이 먼저 병합되어 그 다음 판으로 매겼다(2026-10-30, main 병합).
 - **측정 계층(공유 영역) 변경** — 이탈 판정의 접속에 `return_visit` 을 더한다(`kpi._churn_elapsed`, `churn_rate`·`retention_rate`·`winback_rate`·`derived_state_count` 의 `source_events`). 2026-10-30 사용자 결정, 시스템 팀 리뷰 요청.
 - **`metrics()`** — 창 안 `purchase`·`coupon_use`·`push_sent`·캠페인 이벤트와 계보의 주문 기록으로 메모리 교환 묶음을 만들어 `publish.assemble_orders`·`assemble_campaign`·`economics.revenue`·`marketing_cost`·`contribution_profit` 을 부른다(게시물 `build_kpi_report` 와 같은 규칙, 같은 값 대조 테스트). 비용 설정을 읽지 못하면 비용 2종은 `not_run`. `churn_rate` 는 `not_run` 유지(2026-10-30 사용자 결정). 이 변경으로 시스템 팀 소유 테스트 11건이 실패한다 — 시스템 팀이 처리한다(2026-10-30 사용자 전달). 시뮬레이터 팀은 시스템 팀 코드를 읽지 않으므로 영향 판단은 시스템 팀이 한다.
 
-**근거:** A 는 계약의 세션·방문 정의와 함께 성립하는 유일한 안이다. 접속 정의 수정은 계약의 방문 정의(`visit_count`·`last_visit_date`)와 맞추는 것이다. 배율 기본 100% 는 원문 그대로라 보정은 실측 수치로만 한다(과제 G3 "설정으로 변경"). 외부 근거로 보정하는 것은 PRD §80 Risk 1 이 금지하는 AI 성능 근거 조정이 아니다. 새 이벤트를 전용 스트림에서만 뽑아 기존 12종의 추첨 자리가 그대로다 — 배율을 0 으로 두고 `return_visit` 을 `session_start` 로 되돌리면 sim-0.6 골든 이벤트와 바이트까지 같다(`tests/test_simulator_reproducibility.py` `TestAuxEventsLeaveEarlierBehaviorUnchanged`). 그래서 구매·이탈·처치 반응과 참 효과(주문만 쓴다)는 바뀌지 않는다.
+**근거:** A 는 계약의 세션·방문 정의와 함께 성립하는 유일한 안이다. 접속 정의 수정은 계약의 방문 정의(`visit_count`·`last_visit_date`)와 맞추는 것이다. 배율 기본 100% 는 원문 그대로라 보정은 실측 수치로만 한다(과제 G3 "설정으로 변경"). 외부 근거로 보정하는 것은 PRD §80 Risk 1 이 금지하는 AI 성능 근거 조정이 아니다. 새 이벤트를 전용 스트림에서만 뽑아 기존 12종의 추첨 자리가 그대로다 — 배율을 0 으로 두고 `return_visit` 을 `session_start` 로 되돌리면 직전 판(#246 `sim-0.7`) 골든 이벤트와 바이트까지 같다(`tests/test_simulator_reproducibility.py` `TestAuxEventsLeaveEarlierBehaviorUnchanged`). 그래서 구매·이탈·처치 반응과 참 효과(주문만 쓴다)는 바뀌지 않는다.
 
 ## 기각한 안과 기각 사유
 
@@ -81,6 +81,6 @@
 - **실측(미실행):** #246 병합 뒤 보정 seed 42~46 · 확인 47~51 로 리뷰·CS·검색 세션 비율·검색 전환 배수·return_visit 비율·이탈 고객 CS 비율·생성 시간을 잰다. 참고로 smoke 수준 1회(seed 42 · 500명 · small · 120일, 판정 아님)는 리뷰 주문당 약 20.9%(758/3,626), CS 주문 100건당 약 6.9건(249/3,626), 검색 세션 약 51%, return_visit 은 세션 시작의 약 19% 였다 — 리뷰가 외부 범위 위다.
 - **생성 시간:** `cs` 추첨이 고객 × 일수만큼 늘어난다(#167 생성 성능, DR-167 U3). 2,000명 · small · 275일 `advance` CPU 시간 2회씩은 main 26.1 · 19.6초, 이 판 23.8 · 22.3초로 차이가 실행 간 잡음보다 작았다(이벤트는 903,047 → 997,841건, +10%). cProfile(500명 · 275일)에서 `_schedule_cs` 는 전체 15.5초 중 0.43초이고 대부분은 측정 계층의 이벤트 검증·기록이다. 20K × 600일 시간은 실측 때 함께 잰다.
 - **시스템 팀 영향:** `metrics()` 비즈니스 값이 생기면 시스템 팀 소유 테스트(`tests/test_orchestration_sprint.py`) 11건이 실패한다. 영향 판단·수정과 Feature 값(`search_to_purchase_conversion` 등) 확인은 시스템 팀이 한다(2026-10-30 사용자 전달).
-- **실측 비교 주의:** `cs_contact` 는 세션 밖에서 방문 없이도 나서 고객의 첫 이벤트가 될 수 있다. 고객의 첫 관측 시점을 이벤트로 잡는 실측 지표(`scripts/research/realism_check.py` 의 첫 관측 기반 항목)는 이 판에서 값이 달라질 수 있어, #246 뒤 실측 때 sim-0.6 수치와 바로 비교하지 않는다.
+- **실측 비교 주의:** `cs_contact` 는 세션 밖에서 방문 없이도 나서 고객의 첫 이벤트가 될 수 있다. 고객의 첫 관측 시점을 이벤트로 잡는 실측 지표(`scripts/research/realism_check.py` 의 첫 관측 기반 항목)는 이 판에서 값이 달라질 수 있어, 실측 때 `sim-0.7` 수치와 바로 비교하지 않는다.
 - **`session_duration` 원천:** 세션이 `search`·`review`·`return_visit` 에서 끝나면 세션 길이가 그 이벤트에 실린다(계약상 허용). 공유 스키마의 `session_duration` 지표 원천 목록(`session_start`·`page_view`·`product_view`)에는 이 셋이 없다 — 공유 계약 쪽 사안이라 이 PR 에서 고치지 않는다.
 - `data_spec.html` §3.4 ④ 에 구현 규칙을 더했다(리드 합의 2026-10-26, 사용자 전달 — 합의 범위는 PR 에서 리드 확인).

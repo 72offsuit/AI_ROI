@@ -58,11 +58,18 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "65e275c9ae40f5bbe23a3149e04ea74a41e89876bb09193d7aab07136149ce3f",
         1213,
     ),
-    # #198(sim-gen-v5): 부수 이벤트 4종이 더해진다. 배율을 0 으로 두면 sim-0.6 과 같다
-    # (TestAuxEventsLeaveEarlierBehaviorUnchanged). 판 번호는 #246(sim-0.7)과 병합 순서에 따라 rebase 때 다시 정한다.
+    # #196(sim-gen-v5): Sleeping Dog 직접 경로는 처치 노출 때만 발화한다. 이 14일 창에는 처치가 없어 판 라벨과
+    # 생성 다이제스트(상태)만 다르다. 경로 자체는 tests/test_simulator_sleeping_dog.py 가 고정한다.
     "sim-0.7": (
-        "cf75d7bba4857277fca05dfac6726ea6ac1189ffb2035b879f624ed087e24079",
-        "d409c0a0503ac99e0e55afee331d167167aa62fc0b83863bcd8cdd1e39bbd9d5",
+        "b8199d8a01c7c5bd1b47a93a1b77808d2cd5c3631f08f3a7d155690c0940fe15",
+        "27e4c11d8b7885275c9c24fa1b106e472f3809f939cab9e5fd4c858896a87f13",
+        1213,
+    ),
+    # #198(sim-gen-v6): 부수 이벤트 4종이 더해진다. 배율을 0 으로 두면 sim-0.7 과 같다
+    # (TestAuxEventsLeaveEarlierBehaviorUnchanged).
+    "sim-0.8": (
+        "354162f1e0c9656bf9f71df5ea0b1c16790d875f496f35a944f462ead7c0c917",
+        "5e2321dc55018a975d61ba61f3c3db5fda18e8b578c898c9b4f5802e9febc3a9",
         1341,
     ),
 }
@@ -253,12 +260,12 @@ class TestBehaviorUnchangedSinceBaseline(SimulatorCase):
 class TestAuxEventsLeaveEarlierBehaviorUnchanged(SimulatorCase):
     """#198 은 기존 12종의 추첨 자리를 밀지 않는다 — 부수 이벤트는 전용 스트림에서만 뽑는다.
 
-    부수 이벤트 배율을 0 으로 둔 실험 config 로 돌리고 return_visit 을 session_start 로, 판 라벨을 sim-0.6 으로
-    되돌리면 sim-0.6 골든 이벤트와 바이트까지 같아야 한다. 새 이벤트가 하나도 나지 않아 고객별 seq·event_id 도
+    부수 이벤트 배율을 0 으로 둔 실험 config 로 돌리고 return_visit 을 session_start 로, 판 라벨을 sim-0.7 로
+    되돌리면 sim-0.7 골든 이벤트와 바이트까지 같아야 한다. 새 이벤트가 하나도 나지 않아 고객별 seq·event_id 도
     그대로다. 판을 올릴 때 이 시험의 기준 판은 #198 직전 판으로 둔다.
     """
 
-    BASELINE = "sim-0.6"
+    BASELINE = "sim-0.7"
 
     def test_zero_scales_and_relabeled_openers_match_the_previous_golden(self) -> None:
         document = json.loads((REPO_ROOT / "config" / "simulator_config.yaml").read_text(encoding="utf-8"))

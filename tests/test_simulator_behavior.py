@@ -443,7 +443,8 @@ GATE_GOLDEN: dict[str, tuple[dict[str, str], str, str]] = {
         "2baabf708f5f853a4eb5ff5b6cb2bf859ee7ace200fa240f51acb167aa2687e6",
         "9596ef01661c2c177b13aa3d08e03e8f274eeebc8b18a98179f3afe171e98a45",
     ),
-    # #198: 부수 이벤트 4종으로 이벤트·상태가 바뀐다. 리뷰·CS·검색은 전용 스트림이라 게이트 결정은 sim-0.6 과 같다.
+    # #196: 이 실행에는 처치가 없어 Sleeping Dog 경로가 발화하지 않는다 — 게이트 결정은 sim-0.6(#183 재보정판)과 같고
+    # 판 라벨·생성 다이제스트만 다르다.
     "sim-0.7": (
         {
             "C00000043": "pass", "C00000066": "fail", "C00000081": "pass", "C00000113": "pass",
@@ -451,8 +452,19 @@ GATE_GOLDEN: dict[str, tuple[dict[str, str], str, str]] = {
             "C00000236": "pass", "C00000244": "fail", "C00000249": "fail", "C00000253": "pass",
             "C00000258": "pass", "C00000269": "fail", "C00000273": "fail", "C00000297": "pass",
         },
-        "e4343ba1048512d5d31be3bbbb0af004c7da7c2c22e4f290ba8611cb9ba3c64b",
-        "0bb51e86f1a8cc81e2b8b25d68aa5b1898f4a48b8df261cf5c0e89925a4aa720",
+        "7a9eebe354b7c4259d75854501a3c391cace991f636403a06eace7afa395df5a",
+        "042a98f086bbc970cb02f2dd97c42fff17eaaf3fc7d79263985b1968d3ab8486",
+    ),
+    # #198: 부수 이벤트 4종으로 이벤트·상태가 바뀐다. 리뷰·CS·검색은 전용 스트림이라 게이트 결정은 sim-0.7 과 같다.
+    "sim-0.8": (
+        {
+            "C00000043": "pass", "C00000066": "fail", "C00000081": "pass", "C00000113": "pass",
+            "C00000124": "pass", "C00000140": "pass", "C00000164": "fail", "C00000208": "pass",
+            "C00000236": "pass", "C00000244": "fail", "C00000249": "fail", "C00000253": "pass",
+            "C00000258": "pass", "C00000269": "fail", "C00000273": "fail", "C00000297": "pass",
+        },
+        "7be1997db2ed2649133b6c866566b81e1784f4e353df6878bc820208986a102a",
+        "fdb85ae5873e6095e6e25d6b67770ab5681a55dabaddc434370257b195921490",
     ),
 }
 

@@ -235,10 +235,19 @@ def _treat(window: _Window, customer: dict[str, object], at_ms: int, seq: int) -
     coupon_id = f"CPN-{tid}{day_number % 10_000:04d}" if arm.coupon_discount_krw else None
     if customer["promo"] is not None and customer["promo"]["at_ms"] == at_ms:
         return []  # 같은 시각 두 번째 노출 항목(같은 배정의 재적용)은 한 번만 낸다
+    _, response = treatment.effect(window, customer, at_ms)
+    if response == treatment.NEGATIVE and not customer["churning"] and at_ms >= customer["signup_ms"]:
+        # #196 Sleeping Dog 직접 경로: Negative 고객은 노출 순간 onset_at_exposure_pct 확률로 이탈 진행에 들어간다
+        # (`_day_start` 의 onset 과 같은 처리). 용도 전용 스트림이라 다른 난수 자리를 밀지 않는다(CRN).
+        # 가입 전 노출은 건너뛴다 — `_day_start` 처럼 가입 전 고객의 상태를 바꾸지 않는다(#246 리뷰).
+        p = window.params
+        draw = window.draws.stream(customer["customer_id"], "negative_onset").next_u64()
+        if _below_ppm(draw, p.negative_onset_at_exposure_pct * PPM // 100):
+            customer["churning"] = True
+            customer["engagement"] = max(p.engagement_floor_ppm, customer["engagement"] * p.decay_ppm // PPM)
     claim = False
     if coupon_id:
         # 쿠폰을 받아 둘지는 노출 때 한 번 정한다. 반응 유형 Positive 는 민감도 그대로, 그 밖은 click_scale 만큼.
-        _, response = treatment.effect(window, customer, at_ms)
         scale = 100 if response == treatment.POSITIVE else window.params.coupon_click_scale_pct
         chance = window.traits(customer)["coupon"] * scale // 100
         claim = _below_ppm(window.draws.stream(customer["customer_id"], "claim").next_u64(), chance)

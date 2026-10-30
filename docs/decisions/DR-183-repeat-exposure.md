@@ -42,7 +42,7 @@
 - `negative_ppm` = 피로 × min(`negative_scale_pct` + n × `negative_step_pct`, `negative_max_pct`) // 100. `positive_ppm` = 첫 노출 확률 × keep(n), keep 은 노출마다 (100 − `positive_decay_pct`)% 곱, 첫 노출 대비 `positive_floor_pct`% 에서 멈춘다.
 - **n = 0 이면 이전 식 그대로** — 단일 배정 결과가 바뀌지 않는다(구현 시점 sim-0.5 config 에서 가드레일 seed 42·2,000명 결과 표·리포트·반사실 1,304행 바이트 동일).
 - 난수 열쇠(`response`·`response:` + 처치 id)는 그대로, n 은 문턱에만 들어간다(CRN). 한 고객의 유형은 Positive → Neutral → Negative 방향으로만 움직인다. 캐시 키는 `(cid, tid, n)`. 반사실(`potential_outcomes`)도 같은 이력으로 n 을 센다.
-- config `behavior.treatment.repeat_exposure` = `positive_decay_pct` 10 · `positive_floor_pct` 50 · `negative_step_pct` 5 · `negative_max_pct` 60(+ `note` "외부 정량 근거 없음"). Negative 는 n = 4 에서 상한, Positive 는 n = 7 에서 바닥.
+- config `behavior.treatment.repeat_exposure` = `positive_decay_pct` 10 · `positive_floor_pct` 50 · `negative_step_pct` 5 · `negative_max_pct` 60(+ `note` "외부 정량 근거 없음"). Negative 는 n = 4 에서 상한, Positive 는 n = 7 에서 바닥. **→ #196 에서 `negative_scale_pct` · `negative_max_pct` 를 모두 100 으로 올렸다 — 첫 노출 배율이 이미 상한이라 반복 노출은 Positive 만 줄이고 Negative 쪽 감쇠는 꺼진다(`DR-196-sleeping-dog-path` U3). 아래 「60%」 서술은 이 결정 당시 기록이다.**
 
 반응 유형 비율(seed 42, 5,000명 small, Positive / Negative):
 

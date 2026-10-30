@@ -40,7 +40,8 @@ CONFIG_PINS: dict[str, str] = {
     "sim-gen-v2": "49bfe06b2edaa9d45ca653d98175d7458b90e7707dca1d00f57a28f9e4d4006d",
     "sim-gen-v3": "66588097846aa9914aa57f62034a4d2d05bbe8cc66b2a01e3a89040b55df1157",
     "sim-gen-v4": "ed02312576af07f0de6b9831216716a672ee2fdcad267604b2661e169d15f0ed",  # 미머지 판 덮어쓰기 예외 — DR-183-purchase-calibration
-    "sim-gen-v5": "8130add399b86c627f18c428dce8966e189d7c7b0b3f10e751b88d710bc5d79b",  # #198 부수 이벤트 — DR-198-aux-events
+    "sim-gen-v5": "28e8e6f2a4145afaefbc8b327f94d50c941fba8411fd2120df74a921ec680411",
+    "sim-gen-v6": "84a07fa29f3bdd67b32d1da39ebb388a5fb4f12241256e9be81697f2a6444450",  # #198 부수 이벤트 — DR-198-aux-events
 }
 
 
