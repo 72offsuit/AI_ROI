@@ -13,7 +13,7 @@
     "2026-10-22 실측 검증(#148 F4·F9·F10) 반영: 탐색 세션의 담기는 장바구니 이탈 성향 Trait 이 정한다(browse_add_to_cart_weight_pct), 구매 세션은 목표 금액만큼만 담고 넘치면 덜어낸다(intent_trim_over_pct), 조회의 일부는 과거 구매 상품을 다시 본다(reorder_scale_pct × 브랜드 충성도). 쿠폰은 유효 14일(economic_config T3 조건).",
     "sim-gen-v4(#183, 2026-10-28): 구매 의향 intent_scale_pct 180·이탈 onset 14,500ppm·쿠폰 받기 배율 40% 보정(20K seed 42·7 realism + 가드레일 seed 42~46 평균, 2026-10-29 PR #243 리뷰로 재보정), 반복 노출 감쇠(treatment.repeat_exposure), 재구매 게이트 탈락 이탈의 회복 배율(churn.gate_recovery_scale_pct 10%)을 더했다. 새 계수 모두 외부 정량 근거가 없다 — 근거와 민감도: docs/decisions/DR-183-purchase-calibration.md · DR-183-repeat-exposure.md.",
     "sim-gen-v5(#196, 2026-10-30): Sleeping Dog 직접 경로 — Negative 고객은 노출 순간 이탈 진행에 들어간다(negative_effect.onset_at_exposure_pct 100), Negative 비율 배율 negative_scale_pct 40 → 100(상한, Negative 확률 = 피로 Trait), 반복 노출 상한 negative_max_pct 60 → 100. #183 재보정(onset 14,500 · 쿠폰 받기 40) 위에서 정본 모집단(②) 13,000명 × 보정 seed 42~46 · 확인 seed 47~51 로 정했다. 쿠폰 받기 배율 40 은 그대로(② 에서 T2 11~12% · T3 7%). 값은 문헌 가정(외부 정량 근거 없음) — 근거·실측: docs/decisions/DR-196-sleeping-dog-path.md.",
-    "sim-gen-v6(#198, 2026-10-30): behavior.aux_events 추가 — 부수 이벤트 4종(search·return_visit·review·cs_contact)을 전용 스트림에서 생성한다. 배율은 data_spec §3.4 원문 그대로(100)이고 실측으로 확정한다 — 근거: docs/decisions/DR-198-aux-events.md."
+    "sim-gen-v6(#198, 2026-10-30): behavior.aux_events 추가 — 부수 이벤트 4종(search·return_visit·review·cs_contact)을 전용 스트림에서 생성한다. 리뷰 배율 40 · 검색 의도 가중 175 는 실측으로 외부 근거 범위에 맞췄고 CS · 검색 배율은 원문 100 이다 — 근거·실측: docs/decisions/DR-198-aux-events.md."
   ],
   "personas": [
     {
@@ -378,10 +378,10 @@
       "gate_recovery_scale_pct": 10
     },
     "aux_events": {
-      "note": "#198 부수 이벤트 4종(DR-198-aux-events). search: 세션 시작 때 한 번, 확률 = 검색 성향 x search_scale_pct/100, 구매 의도 세션은 x search_intent_weight_pct/100(상한 100%). return_visit: 구매 뒤 첫 방문 세션의 시작 이벤트를 session_start 대신 낸다(모수 없음). review: 구매마다 Bernoulli(리뷰 성향 x review_scale_pct/100), 당첨 주문의 한 상품을 구매 시각부터 경과 시간이 review_window_days [lo, hi) x 24시간 안(기본 24시간 이상 144시간 미만, 날짜 차수가 아니다)인 첫 방문 세션 시작 때 기록, 그 안에 방문이 없으면 내지 않는다. cs_contact: 가입 이후 매일 Bernoulli(CS 문의 성향 / 30 x cs_scale_pct/100), 세션 밖. 배율 100 은 data_spec 3.4 원문이다. search_intent_weight_pct 는 외부 정량 근거 없음 — 검색 세션 전환 배수(외부 1.2~2.7)는 생성 모수가 아니라 실현 검증 항목이다.",
+      "note": "#198 부수 이벤트 4종(DR-198-aux-events). search: 세션 시작 때 한 번, 확률 = 검색 성향 x search_scale_pct/100, 구매 의도 세션은 x search_intent_weight_pct/100(상한 100%). return_visit: 구매 뒤 첫 방문 세션의 시작 이벤트를 session_start 대신 낸다(모수 없음). review: 구매마다 Bernoulli(리뷰 성향 x review_scale_pct/100), 당첨 주문의 한 상품을 구매 시각부터 경과 시간이 review_window_days [lo, hi) x 24시간 안(기본 24시간 이상 144시간 미만, 날짜 차수가 아니다)인 첫 방문 세션 시작 때 기록, 그 안에 방문이 없으면 내지 않는다. cs_contact: 가입 이후 매일 Bernoulli(CS 문의 성향 / 30 x cs_scale_pct/100), 세션 밖. 배율 100 은 data_spec 3.4 원문이다. review_scale_pct 40 · search_intent_weight_pct 175 는 #198 실측(13,000명 · small · 180일, 보정 seed 42~46 · 확인 47~51)으로 외부 근거 범위에 맞춘 값이다 — 리뷰 주문당 3~12%(실측 8.0%), 검색 세션 전환 배수 1.2~2.7 · F&B 1.35(실측 1.39). 원문 규칙보다 외부 근거를 따른다(DR-198, 2026-10-30 사용자 결정). 검색 전환 배수는 생성 모수가 아니라 실현값이라 가중치에 비선형으로 반응한다(150 → 1.11, 250 → 2.46, 300 → 3.60).",
       "search_scale_pct": 100,
-      "search_intent_weight_pct": 150,
-      "review_scale_pct": 100,
+      "search_intent_weight_pct": 175,
+      "review_scale_pct": 40,
       "review_window_days": [
         1,
         6

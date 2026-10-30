@@ -68,9 +68,9 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
     # #198(sim-gen-v6): 부수 이벤트 4종이 더해진다. 배율을 0 으로 두면 sim-0.7 과 같다
     # (TestAuxEventsLeaveEarlierBehaviorUnchanged).
     "sim-0.8": (
-        "354162f1e0c9656bf9f71df5ea0b1c16790d875f496f35a944f462ead7c0c917",
-        "5e2321dc55018a975d61ba61f3c3db5fda18e8b578c898c9b4f5802e9febc3a9",
-        1341,
+        "2ec052af891d27d975aa5b76203299673ff4348d3d0eadc9842d668a86662c3f",
+        "a85b1319ed11ad0e02c63a4d6441c15c6cacf8e3a97059dd48051786789cd9cf",
+        1342,
     ),
 }
 # 행동은 그대로이고 판 라벨만 바뀐 판 → 행동 기준 판. S2 는 생성(페르소나·Trait)만 더하고 이벤트 규칙을

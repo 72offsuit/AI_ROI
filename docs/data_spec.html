@@ -300,7 +300,8 @@ review       주문당 최대 1건 ~ Bernoulli(review_propensity_i × s_review),
              여는 시각에 기록 — 그 안에 방문이 없으면 발생하지 않는다
 cs_contact   가입 이후 매일 ~ Bernoulli(cs_contact_propensity_i / 30 × s_cs), 세션 밖
              s_search · w_search_intent · s_review · s_cs = config/simulator_config.yaml behavior.aux_events
-             (s_* 기본 100% = 위 원문, 실측으로 조정하면 DR-198 에 근거를 남긴다)</pre>
+             (s_* 100% = 위 원문. #198 실측으로 s_review 40% · w_search_intent 175% 로 정했다 — 실효 확률이
+              원문과 다르다. 원문 문구는 리드 확인 뒤 고친다. 근거·실측: DR-198)</pre>
 
 <h3>3.5 시간에 따른 행동 변화 (PRD §26 필수)</h3>
 <p>감쇠 <code>decay_i(t)</code>가 걸린 고객은 다음 5개 지표가 <b>동시에</b> 움직인다. 이 변화가 곧 Behavioral Change Feature(§8)가 잡아내야 할 신호다.</p>

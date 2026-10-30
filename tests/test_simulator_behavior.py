@@ -463,8 +463,8 @@ GATE_GOLDEN: dict[str, tuple[dict[str, str], str, str]] = {
             "C00000236": "pass", "C00000244": "fail", "C00000249": "fail", "C00000253": "pass",
             "C00000258": "pass", "C00000269": "fail", "C00000273": "fail", "C00000297": "pass",
         },
-        "7be1997db2ed2649133b6c866566b81e1784f4e353df6878bc820208986a102a",
-        "fdb85ae5873e6095e6e25d6b67770ab5681a55dabaddc434370257b195921490",
+        "1a137a03fe0c7f09357b9681da8fa7da2452f4af8ddb90ed049ae672547b9e9d",
+        "8b0c4475ebbc64608b1f3a7db7732159c8a44b5b9e1e90c844cf813bb6f79cef",
     ),
 }
 

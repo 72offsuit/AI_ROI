@@ -9,7 +9,7 @@
 > | **코드** | `src/simulator/_internal/{genconfig,traits,fixedpoint,persona,world}.py` |
 > | **설명**(이 문서) | 위 셋을 한 흐름으로 묶는다. 숫자를 새로 정하지 않는다 |
 >
-> 현재 생성 config: `sim-gen-v6` · 생성 부분 다이제스트 `84a07fa29f3bdd67b32d1da39ebb388a5fb4f12241256e9be81697f2a6444450` · `SIMULATOR_VERSION` `sim-0.8`
+> 현재 생성 config: `sim-gen-v6` · 생성 부분 다이제스트 `2526dec97ef3afad23283b288dca4eaf028843a2688214861425b96a795e5254` · `SIMULATOR_VERSION` `sim-0.8`
 > (S3 #77: P6 `signup_day_range` 추가 — `docs/decisions/DR-S3-p6-signup.md`. 페르소나·Trait 값은 `sim-gen-v1` 과 같다)
 > (#183: 관측 중 가입 고객의 첫 구매 뒤 재구매 게이트로 `sim-0.5` — `docs/decisions/DR-183-purchase-calibration.md`. 생성 config·Trait 값은 그대로다)
 > (S4~S6 #143: `behavior`·`catalog` 블록 추가 — Trait 이 행동·이탈·처치 반응을 구동한다. `docs/decisions/DR-143-sim-sprint.md`. 페르소나·Trait 값은 그대로다)
