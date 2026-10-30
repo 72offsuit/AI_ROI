@@ -13,6 +13,8 @@ floor`). 선언만 두면 아무도 대조하지 않으므로 여기서 맞댄�
   checked   python-compat.yml 이 `Measurement-layer floor` 에서 돈다
   checked   docs/gate1_checklist.md §5.1 의 명령이 `python3` 이 아니라 `Supported runtime` 판을 부른다
             (#248 — `python3` 이 3.11 인 기기에서 ① 이 실패했다)
+  checked   같은 §5.1 의 설치 후 환경이 의존성 설치 CI 가 설치하는 requirements 파일을 전부 설치하고,
+            CI 게이트처럼 `미설치` 사유 skip 0건을 본다 (PR #249 리뷰 R1)
   checked   (의존성이 있으면) 고정 버전 전부의 Requires-Python 을 Dockerfile 의 정확한 판
             (예: 3.12.15)이 만족한다. 이 파일이 판정하지 못하는 절(`===` · 사전 배포판 등)은
             통과가 아니라 실패다 — 모르는 조건을 만족한다고 적지 않는다 (PR #240 리뷰 R2)
@@ -34,6 +36,23 @@ REQUIREMENTS_DEV = REPO_ROOT / "requirements-dev.txt"
 DOCKERFILE = REPO_ROOT / "Dockerfile"
 WORKFLOWS = REPO_ROOT / ".github" / "workflows"
 GATE1_CHECKLIST = REPO_ROOT / "docs" / "gate1_checklist.md"
+
+
+def _gate1_section() -> str:
+    """`docs/gate1_checklist.md` §5.1 본문."""
+    return GATE1_CHECKLIST.read_text(encoding="utf-8").partition("### 5.1")[2].partition("\n### ")[0]
+
+
+def _gate1_block(section: str) -> str:
+    """§5.1 의 bash 명령 블록. 없으면 실패한다."""
+    block = re.search(r"```bash\n(.*?)```", section, re.S)
+    if block is None:
+        raise AssertionError("gate1_checklist.md §5.1 에 bash 명령 블록이 없다")
+    return block.group(1)
+
+
+def _requirement_files(text: str) -> set[str]:
+    return set(re.findall(r"-r\s+(requirements[\w-]*\.txt)", text))
 
 
 def _declared(label: str) -> tuple[int, int]:
@@ -147,13 +166,23 @@ class TestDeclarationMatchesWhereItRuns(unittest.TestCase):
     def test_gate1_checklist_runs_the_declared_runtime(self) -> None:
         """§5.1 실행 전 확인의 python 호출이 전부 선언 런타임이다 — `python3` 의 판은 기기마다 다르다(#248)."""
         runtime = "python{}.{}".format(*_declared("Supported runtime"))
-        section = GATE1_CHECKLIST.read_text(encoding="utf-8").partition("### 5.1")[2].partition("\n### ")[0]
-        block = re.search(r"```bash\n(.*?)```", section, re.S)
-        self.assertIsNotNone(block, "gate1_checklist.md §5.1 에 bash 명령 블록이 없다")
-        calls = re.findall(r"^(python[\d.]*)\s", block.group(1), re.M)
+        calls = re.findall(r"^(?:!\s+)?(python[\d.]*)\s", _gate1_block(_gate1_section()), re.M)
         self.assertTrue(calls, "gate1_checklist.md §5.1 블록에 python 호출이 없다")
         self.assertEqual([runtime] * len(calls), calls,
                          f"gate1_checklist.md §5.1 의 명령이 선언 런타임({runtime})이 아닌 판을 부른다")
+
+    def test_gate1_checklist_installs_what_the_deps_ci_installs(self) -> None:
+        """§5.1 의 설치 후 환경이 의존성 설치 CI 와 같은 파일을 설치하고, 같은 `미설치` 게이트를 본다.
+
+        `requirements.txt` 만 설치하면 계약 스키마 검증이 skip 되고도 ① 이 `OK` 다(PR #249 리뷰 R1)."""
+        ci = _requirement_files((WORKFLOWS / "tests-with-deps.yml").read_text(encoding="utf-8"))
+        self.assertTrue(ci, "tests-with-deps.yml 에서 설치하는 requirements 파일을 읽지 못했다")
+        section = _gate1_section()
+        self.assertLessEqual(ci, _requirement_files(section),
+                             "gate1_checklist.md §5.1 의 설치 후 환경이 의존성 설치 CI 가 설치하는 파일을 빠뜨린다")
+        gate = [line for line in _gate1_block(section).splitlines()
+                if "unittest discover" in line and "미설치" in line]
+        self.assertTrue(gate, "gate1_checklist.md §5.1 블록에 '미설치' 사유 skip 0건 확인이 없다 — CI 게이트와 같은 기준")
 
 
 class TestPinsAgreeWithTheDeclaredRuntime(unittest.TestCase):
