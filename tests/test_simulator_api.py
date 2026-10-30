@@ -17,6 +17,7 @@ import src.simulator
 import src.simulator.__main__ as cli
 from src.measurement import schema as sc
 from src.measurement import sink as sk
+from src.measurement.config_loader import yaml_available
 from src.simulator import api
 from src.simulator._internal import genconfig, profiles
 from tests.test_simulator_support import REPO_ROOT, SimulatorCase, event_digest, root_digest
@@ -342,6 +343,82 @@ class TestArgumentRules(SimulatorCase):
         ], exposures)
 
 
+@unittest.skipUnless(yaml_available(), "PyYAML 이 없으면 비용 설정을 읽지 못한다")
+class TestBusinessMetricsMatchThePublishedReport(SimulatorCase):
+    """`metrics()` 비즈니스 지표 3종이 게시물(`build_kpi_report`)과 같은 값인가(#198).
+
+    게시물 쪽은 디스크 교환 묶음(`exchange_bundle` → `read_exchange`)을, `metrics()` 는 메모리 묶음을 쓴다 —
+    두 조립이 같은 값을 내는지까지 본다. 처치를 걸어 쿠폰 비용·메시지 비용이 0 이 아니게 한다.
+    """
+
+    CUSTOMERS = 60
+
+    def test_revenue_marketing_cost_and_contribution_profit_equal_the_kpi_report(self) -> None:
+        from src.measurement import config_loader
+        from src.measurement import contracts as ct
+        from src.measurement import exchange as ex
+        from src.measurement import publish as mp
+
+        root = self.start(seed=11, customers=self.CUSTOMERS, profile="small")
+        warm = api.advance(30)
+        arms = ("T0", "T1", "T2", "T3", "T4")
+        api.apply_treatment({f"C{i:08d}": arms[i % 5] for i in range(1, self.CUSTOMERS + 1)})
+        end = api.advance(30).end
+        start = warm.start + timedelta(days=5)
+        values = api.metrics(start, end)
+
+        api.exchange_bundle(end)
+        bundle = ex.read_exchange(root.parent / "simulator_exchange", sk.EventSource.SIMULATOR)
+        window = [r for r in sk.read_events(root)
+                  if start.isoformat(timespec="milliseconds") <= r["timestamp"]
+                  < end.isoformat(timespec="milliseconds")]
+        report = mp.build_kpi_report(
+            window, mp.partition_by_source(window), index_date=end.date(),
+            config=config_loader.load_economic_config().cost_accounting, bundles={"simulator": bundle},
+        )
+        names = ("revenue", "marketing_cost", "contribution_profit")
+        published = {
+            entry["name"]: entry["value"]["by_source"]["simulator"]
+            for entry in report["metrics"] if entry["name"] in names
+        }
+        for name in names:
+            with self.subTest(metric=name):
+                self.assertEqual(sc.MetricStatus.OK, values[name].status)
+                self.assertGreater(values[name].value, 0)
+                self.assertEqual(published[name], ct.metric_to_json(values[name]))
+
+
+    def test_cost_metrics_do_not_depend_on_the_working_directory(self) -> None:
+        # 측정 계층 기본 경로는 cwd 기준이다 — metrics() 는 저장소 기준 경로를 넘겨 실행 위치와 무관해야 한다.
+        import os
+
+        self.start(seed=11, customers=self.CUSTOMERS, profile="small")
+        summary = api.advance(30)
+        here = api.metrics(summary.start, summary.end)
+        elsewhere_dir = self.fresh_root("cwd")
+        elsewhere_dir.mkdir(parents=True)
+        previous = os.getcwd()
+        os.chdir(elsewhere_dir)
+        try:
+            elsewhere = api.metrics(summary.start, summary.end)
+        finally:
+            os.chdir(previous)
+        for name in ("revenue", "marketing_cost", "contribution_profit"):
+            with self.subTest(metric=name):
+                self.assertEqual(sc.MetricStatus.OK, elsewhere[name].status)
+                self.assertEqual(here[name].value, elsewhere[name].value)
+
+    def test_unreadable_order_records_keep_counts_and_leave_cost_basis_missing(self) -> None:
+        self.start(seed=11, customers=self.CUSTOMERS, profile="small")
+        summary = api.advance(30)
+        with mock.patch("src.simulator._internal.storage.read_orders", return_value=None):
+            values = api.metrics(summary.start, summary.end)
+        self.assertEqual(sc.MetricStatus.OK, values["events_total"].status)
+        self.assertEqual(sc.MetricStatus.OK, values["revenue"].status)
+        self.assertEqual(sc.MetricStatus.UNAVAILABLE, values["contribution_profit"].status)
+        self.assertEqual(sc.ReasonCode.NO_COST_BASIS, values["contribution_profit"].reason_code)
+
+
 class TestMetricsAndBundle(SimulatorCase):
     def setUp(self) -> None:
         super().setUp()
@@ -368,10 +445,21 @@ class TestMetricsAndBundle(SimulatorCase):
                     self.assertEqual(sc.MetricStatus.NOT_RUN, value.status)
                     self.assertEqual(sc.ReasonCode.PRECONDITION_MISSING, value.reason_code)
                     self.assertIsNone(value.value)
-        for name in ("churn_rate", "revenue", "contribution_profit", "marketing_cost"):
+        self.assertEqual(sc.MetricStatus.NOT_RUN, values["churn_rate"].status)
+        self.assertIsNone(values["churn_rate"].value)
+
+    def test_cost_metrics_are_not_run_when_the_economic_config_cannot_be_read(self) -> None:
+        from src.measurement.errors import ConfigError
+
+        start, end = self.summary.start, self.summary.end
+        with mock.patch("src.measurement.config_loader.load_economic_config", side_effect=ConfigError("없음")):
+            values = api.metrics(start, end)
+        for name in ("marketing_cost", "contribution_profit"):
             with self.subTest(metric=name):
                 self.assertEqual(sc.MetricStatus.NOT_RUN, values[name].status)
+                self.assertEqual(sc.ReasonCode.PRECONDITION_MISSING, values[name].reason_code)
                 self.assertIsNone(values[name].value)
+        self.assertNotEqual(sc.MetricStatus.NOT_RUN, values["revenue"].status)
 
     def test_empty_window_is_a_measured_zero_for_produced_types(self) -> None:
         values = api.metrics(self.summary.end, self.summary.end)

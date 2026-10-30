@@ -17,6 +17,11 @@ import platform as _platform
 import re as _re
 import typing as _typing
 
+from src.measurement import config_loader as _mcl
+from src.measurement import economics as _mec
+from src.measurement import errors as _merr
+from src.measurement import exchange as _mex
+from src.measurement import publish as _mpub
 from src.measurement import schema as _sc
 from src.measurement import sink as _sk
 from src.simulator._internal import behavior as _behavior
@@ -60,7 +65,13 @@ __all__ = [
 ]
 
 _STATE_ID = _re.compile(r"state-[0-9a-f]{16}")
-_BUSINESS_METRICS = ("churn_rate", "revenue", "contribution_profit", "marketing_cost")
+# metrics() 가 경제 지표용으로 남기는 이벤트 — `publish.assemble_orders`·`assemble_campaign` 이 읽는 유형
+# (그리고 campaign_id 가 있는 이벤트)의 사본이다. 조립 함수가 다른 유형을 읽게 되면 여기도 함께 고친다 —
+# 어긋나면 TestBusinessMetricsMatchThePublishedReport 가 게시물과 값이 달라져 잡는다.
+_ECONOMIC_EVENT_TYPES = frozenset({"purchase", "coupon_use", "push_sent"})
+# 측정 계층 기본값(`config_loader.DEFAULT_ECONOMIC_CONFIG`)은 cwd 기준 상대 경로라, 실행 위치에 따라 비용 지표가
+# 조용히 not_run 이 되지 않게 저장소 기준 절대 경로를 넘긴다(genconfig.CONFIG_PATH 와 같은 방식).
+_ECONOMIC_CONFIG = _pathlib.Path(__file__).resolve().parents[2].joinpath("config", "economic_config.yaml")
 
 
 class SimulatorError(Exception):
@@ -405,10 +416,16 @@ def events(until: datetime) -> Iterator[dict[str, object]]:
 
 
 def metrics(start: datetime, end: datetime) -> dict[str, sc.MetricValue]:
-    """`[start, end)` 의 이벤트 건수.
+    """`[start, end)` 의 이벤트 건수와 비즈니스 지표.
 
-    `events_total` 과 `events.<event_type>` 16종을 낸다. 이 시뮬레이터 판이 만들지 않는 유형과
-    비즈니스 지표는 `not_run` · `PRECONDITION_MISSING` 이다 — 0 으로 채우지 않는다.
+    `events_total` 과 `events.<event_type>` 16종을 낸다. 이 시뮬레이터 판이 만들지 않는 유형은
+    `not_run` · `PRECONDITION_MISSING` 이다 — 0 으로 채우지 않는다.
+
+    `revenue`·`marketing_cost`·`contribution_profit` 은 측정 계층이 게시물(`build_kpi_report`)과 같은
+    함수로 계산한다. 창 안 `purchase`·`coupon_use`·`push_sent`·캠페인 이벤트와 계보의 주문 기록(품목·원가)을
+    쓴다. 주문 기록을 읽지 못하면 묶음 없이 계산해 원가가 드는 지표는 `NO_COST_BASIS` 다. 비용 설정
+    (`config/economic_config.yaml`, 저장소 기준 경로)을 읽지 못하면(PyYAML 없음 등) 비용이 드는 두 지표는
+    `not_run` 이다. `churn_rate` 는 `not_run` 이다.
 
     Raises:
         TypeError · ValueError: `events` 와 같고, `start > end` 도 `ValueError`.
@@ -420,9 +437,13 @@ def metrics(start: datetime, end: datetime) -> dict[str, sc.MetricValue]:
     if lower > upper:
         raise ValueError(f"start 가 end 보다 늦다: {start} > {end}")
     chain, files = _verified_chain(session)
-    counts: _collections.Counter[str] = _collections.Counter(
-        str(record["event_type"]) for record in _iter_events(chain, files, lower, upper)
-    )
+    counts: _collections.Counter[str] = _collections.Counter()
+    economic: list[dict[str, object]] = []
+    for record in _iter_events(chain, files, lower, upper):
+        counts[str(record["event_type"])] += 1
+        # 경제 지표가 읽는 이벤트만 남긴다(assemble_orders·assemble_campaign) — 창 전체를 메모리에 두지 않는다.
+        if record["event_type"] in _ECONOMIC_EVENT_TYPES or isinstance(record.get("campaign_id"), str):
+            economic.append(record)
     label = f"[{_clock.timestamp(lower)}, {_clock.timestamp(upper)})"
     window = _sc.Window(_sc.WindowDirection.RETROSPECTIVE, label=label)
     produced = frozenset(_behavior.PRODUCED_EVENT_TYPES)
@@ -440,11 +461,12 @@ def metrics(start: datetime, end: datetime) -> dict[str, sc.MetricValue]:
                 reason_code=_sc.ReasonCode.PRECONDITION_MISSING,
                 unit=_sc.Unit.COUNT,
             )
-    for name in _BUSINESS_METRICS:
-        result[name] = _sc.MetricValue.not_run(
-            f"시뮬레이터 {version} 의 metrics 는 건수만 센다 — 비즈니스 지표는 측정 계층(publish)이 계산한다",
-            reason_code=_sc.ReasonCode.PRECONDITION_MISSING,
-        )
+    result["churn_rate"] = _sc.MetricValue.not_run(
+        f"시뮬레이터 {version} 의 metrics 는 이탈률을 내지 않는다 — 이탈 정의(config churn 블록)와 관측 창은 "
+        "측정 계층 publish(--churn-config)가 정한다",
+        reason_code=_sc.ReasonCode.PRECONDITION_MISSING,
+    )
+    result.update(_business_metrics(session, chain, economic, upper))
     return result
 
 
@@ -584,16 +606,7 @@ def exchange_bundle(until: datetime) -> dict[str, object]:
     upper = _instant_ms("until", until, session)
     chain, _ = _verified_chain(session)
     stamp = _clock.timestamp(upper)
-    orders: list[dict[str, object]] = []
-    for record in chain:
-        run_id = str(record["run_id"])
-        try:
-            rows = _storage.read_orders(session.hidden_root, run_id)
-        except (OSError, ValueError) as error:
-            raise OutputRootError(f"실행 {run_id} 의 주문 기록을 읽지 못했다: {type(error).__name__}") from error
-        if rows is None:
-            raise OutputRootError(f"실행 {run_id} 의 주문 기록이 없다 — 이 판 이전의 계보다")
-        orders.extend(row for row in rows if str(row["ordered_at"]) < stamp)
+    orders = _chain_orders(session, chain, stamp)
     world = session.world
     customers = [
         {"customer_id": c["customer_id"], "signup_date": _clock.timestamp(c["signup_ms"])[:10]}
@@ -693,6 +706,89 @@ def _translated() -> _typing.Iterator[None]:
 
 def _reason(error: OSError) -> str:
     return error.strerror or type(error).__name__
+
+
+def _chain_orders(session: _runtime.Session, chain: list[dict[str, object]], stamp: str) -> list[dict[str, object]]:
+    """계보의 주문 기록 중 `ordered_at < stamp` 를 실행 순서대로 모은다(엔진 `orders` 형태)."""
+    orders: list[dict[str, object]] = []
+    for record in chain:
+        run_id = str(record["run_id"])
+        try:
+            rows = _storage.read_orders(session.hidden_root, run_id)
+        except (OSError, ValueError) as error:
+            raise OutputRootError(f"실행 {run_id} 의 주문 기록을 읽지 못했다: {type(error).__name__}") from error
+        if rows is None:
+            raise OutputRootError(f"실행 {run_id} 의 주문 기록이 없다 — 이 판 이전의 계보다")
+        orders.extend(row for row in rows if str(row["ordered_at"]) < stamp)
+    return orders
+
+
+def _in_memory_bundle(session: _runtime.Session, orders: list[dict[str, object]], upper: int) -> _mex.ExchangeBundle:
+    """계보의 주문 기록으로 교환 묶음을 메모리에서 만든다 — `assemble_*` 는 `orders` 만 읽는다.
+
+    디스크 묶음(`exchange_bundle`)과 달리 `read_exchange` 의 형식 검사·DQ-09 금액 대조를 거치지 않는다.
+    같은 엔진 주문 기록에서 나온 값이라 대조할 두 값이 없다.
+    """
+    world = session.world
+    return _mex.ExchangeBundle(
+        source=_sk.EventSource.SIMULATOR,
+        root=session.hidden_root,
+        manifest={"contract": "commerce-exchange/v1", "source": "simulator", "mode": "in-memory"},
+        generated_at=_dt.datetime.fromtimestamp(upper // 1000, _dt.timezone.utc),
+        orders={
+            str(order["order_id"]): _mex.ExchangeOrder(
+                order_id=str(order["order_id"]),
+                customer_id=str(order["customer_id"]),
+                order_amount=int(order["order_amount"]),
+                discount=int(order["discount"]),
+                shipping_fee=int(order["shipping_fee"]),
+                shipping_charged=int(order["shipping_charged"]),
+                items=tuple(
+                    _mec.OrderItem(
+                        product_id=str(item["product_id"]), quantity=int(item["quantity"]),
+                        unit_price=int(item["unit_price"]), unit_cost=item["unit_cost"],
+                    )
+                    for item in sorted(order["items"], key=lambda item: item["line_no"])
+                ),
+            )
+            for order in orders
+        },
+        signup_dates={},
+        product_ids=frozenset(product["product_id"] for product in world["catalog"]),
+    )
+
+
+def _business_metrics(
+    session: _runtime.Session, chain: list[dict[str, object]], events: list[dict[str, object]], upper: int
+) -> dict[str, _sc.MetricValue]:
+    """`[start, end)` 이벤트와 계보 주문 기록으로 매출·마케팅 비용·기여이익을 측정 계층 함수로 낸다(#198).
+
+    계산 규칙은 `publish.build_kpi_report` 와 한 벌이다(`assemble_orders`·`assemble_campaign`·`economics.*`).
+    계보의 주문 기록을 읽지 못하면 묶음 없이 계산한다 — 게시물이 교환 묶음 없이 계산할 때와 같아서 원가가 드는
+    지표는 측정 계층이 `NO_COST_BASIS` 로 낸다. 이벤트 건수는 그대로 남는다.
+    비용 설정(`config/economic_config.yaml`, PyYAML 필요)을 읽지 못하면 비용이 드는 두 지표는 `not_run` 이다.
+    `churn_rate` 는 이 함수가 내지 않는다 — 이탈 정의·관측 창 선택이 따로 필요하다.
+    """
+    try:
+        rows = _chain_orders(session, chain, _clock.timestamp(upper))
+    except OutputRootError:
+        bundle = None
+    else:
+        bundle = _in_memory_bundle(session, rows, upper)
+    orders = _mpub.assemble_orders(events, bundle)
+    result = {"revenue": _mec.revenue(orders)}
+    try:
+        config = _mcl.load_economic_config(_ECONOMIC_CONFIG).cost_accounting
+    except _merr.ConfigError as error:
+        for name in ("contribution_profit", "marketing_cost"):
+            result[name] = _sc.MetricValue.not_run(
+                f"비용 설정을 읽지 못했다 — {error}", reason_code=_sc.ReasonCode.PRECONDITION_MISSING
+            )
+        return result
+    campaign = _mpub.assemble_campaign(events, bundle)
+    result["marketing_cost"] = _mec.marketing_cost(campaign, config=config)
+    result["contribution_profit"] = _mec.contribution_profit(orders, campaign, config=config)
+    return result
 
 
 def _count(value: int, sources: _abc.Iterable[str], window: _sc.Window) -> _sc.MetricValue:
