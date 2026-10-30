@@ -11,7 +11,8 @@
     체크를 대신하지 못한다 · 필수 목록이 비거나 못 읽으면 막는다 (PR #238 리뷰 R1~R3)
   - 트리거 · 잡 자리의 표기를 하나라도 못 읽으면 막는다 — 목록이 **일부만** 줄어도 같다.
     기대값은 파서와 따로 정한다(직접 적은 목록 · PyYAML 독립 읽기) (PR #238 리뷰 R4)
-  - 따옴표 · 흐름 표기의 연속 줄이 0열이어도 같다 — 블록의 끝으로 오인하지 않는다 (N1)
+  - 따옴표 · 흐름 표기의 연속 줄이 0열이어도 같다 — 블록의 끝으로 오인하지 않는다 (N1). 흐름 안의
+    공백 없는 `:` · `? ` 뒤에서 열리는 따옴표도 같다 (P3)
   - 우회 옵션이 생기지 않는다
 
 `gh` 는 부르지 않는다 — `subprocess.run` 을 바꿔 끼워 PR JSON 을 주입한다.
@@ -87,10 +88,22 @@ def _replaced(old: str, new: str, then=lambda text: text):
     return lambda text: then(text.replace(old, new, 1))
 
 
-#: N1 — 흐름 컬렉션 · 따옴표 스칼라의 연속 줄을 **0열**에 둔 `dashboard.yml` 사본(PR #238 리뷰의 반례 3건).
+def _before_first_steps(snippet: str):
+    """첫 잡의 `steps:` 앞에 `snippet` 을 넣고 둘째 잡을 붙인다."""
+    return _replaced("    steps:\n", snippet + "    steps:\n", _with_extra_job("평범한 키"))
+
+
+def _in_on_before_pull_request(snippet: str):
+    """`on:` 안에서 `workflow_dispatch:` 아래에 `snippet` 을 넣고 `pull_request:` 를 그 뒤로 옮긴다."""
+    return _replaced("  pull_request:\n  workflow_dispatch:\n",
+                     "  workflow_dispatch:\n" + snippet + "  pull_request:\n")
+
+
+#: N1 — 흐름 컬렉션 · 따옴표 스칼라의 연속 줄을 **0열**에 둔 `dashboard.yml` 사본.
 #:   PyYAML 은 받아들이고 체크를 전부 읽는다. 예전 파서는 0열 줄을 블록의 끝으로 읽어 뒤의 트리거 · 잡을
 #:   오류 없이 빠뜨렸다. 값: (사본 변형, 필요한 체크, 미보고로 둘 체크).
 N1_CONTINUATIONS = {
+    # PR #238 리뷰 N1 의 반례 3건
     "on 블록의 flow 목록": (
         _replaced("    branches: [main]\n  pull_request:\n", "    branches: [main,\ndevelop]\n  pull_request:\n"),
         REQUIRED_TODAY, DASHBOARD),
@@ -101,6 +114,15 @@ N1_CONTINUATIONS = {
     "step 이름의 따옴표 스칼라": (
         _replaced("      - name: 경로 격리\n", '      - name: "경로\n격리"\n', _with_extra_job("평범한 키")),
         [*REQUIRED_TODAY, EXTRA], EXTRA),
+    # PR #238 리뷰 P3 의 X1~X4 — 흐름 안의 공백 없는 `:` · `? ` 뒤에서 따옴표가 열린다. 예전 파서는
+    #   그 따옴표를 글자로 보고 문자열 속 `}` 를 컬렉션의 끝으로 셌다.
+    "X1 공백 없는 값의 큰따옴표": (_before_first_steps('    env: {"A":"}\nB: end"}\n'), [*REQUIRED_TODAY, EXTRA], EXTRA),
+    "X2 공백 없는 값의 작은따옴표": (_before_first_steps("    env: {'A':'}\nB: end'}\n"), [*REQUIRED_TODAY, EXTRA], EXTRA),
+    "X3 흐름 안 복합 키의 따옴표": (_before_first_steps('    env: {? "}\nB: end"}\n'), [*REQUIRED_TODAY, EXTRA], EXTRA),
+    "X4 on 안의 공백 없는 값": (_in_on_before_pull_request('    inputs: {"a":"}\nB: x"}\n'), REQUIRED_TODAY, DASHBOARD),
+    # P3 — 같은 계열로 더 찾은 것. PyYAML 만 `?` 를 키 표시로 · `,#` 를 주석으로 읽는다.
+    "흐름 안 공백 없는 ? 뒤의 따옴표": (_before_first_steps('    env: {?"}\nB: end"}\n'), [*REQUIRED_TODAY, EXTRA], EXTRA),
+    "흐름 구분 문자에 붙은 #": (_in_on_before_pull_request("    inputs: [a,#]\nB: x]\n"), REQUIRED_TODAY, DASHBOARD),
 }
 
 
@@ -324,13 +346,16 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
 
     def test_plain_and_block_scalars_are_not_mistaken_for_open_nodes(self) -> None:
         """N1 대조군 — 여러 줄 표기를 막는 검사가 평범한 스칼라 속 따옴표 · 괄호와 블록 스칼라(`run: |`)
-        내용을 열린 표기로 오인하면 정상 PR 이 병합되지 못한다."""
+        내용을 열린 표기로 오인하면 정상 PR 이 병합되지 못한다. P3 대조군 — 흐름 안의 공백 없는 값 ·
+        복합 키도 한 줄에서 닫히면 읽고, 흐름 안 평범한 스칼라 속 `"` · `'` · `#` · `:` 는 글자다."""
         text = (
             "name: P\non:\n  pull_request:\njobs:\n"
             "  p:\n    name: \"P: 잡\"  # 따옴표 이름\n"
             "    if: ${{ github.event_name == 'pull_request' }}\n"
             "    runs-on: ubuntu-latest  # it's\n"
             "    env: &shared {A: \"1\", B: '2'}\n"
+            "    outputs: {\"C\":\"1\", 'D':'}', ? \"E\" : \"]\", f:\"g\"}\n"
+            "    services: [a\"b, c'd, -1, a#b, \"h\":i]\n"
             "    steps:\n"
             "      - name: don't [panic\n"
             "        run: |\n          {\n            echo \"it's [ {\n          } > out.txt\n          'x\n"
@@ -449,7 +474,22 @@ class TestRequiredChecksComeFromTheWorkflows(unittest.TestCase):
                      "        x'\n  k:\n    name: y\n"),
                     ("escaped-double-quote.yml",
                      "name: J\non:\n  pull_request:\njobs:\n  j:\n    steps:\n      - name: \"a\\\"\n"
-                     "        b\"\n  k:\n    name: y\n")):
+                     "        b\"\n  k:\n    name: y\n"),
+                    # P3 — 공백 없는 값의 따옴표도 들여쓴 여러 줄이면 막는다(리뷰 X1i)
+                    ("indented-adjacent-value.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: {\"A\":\"}\n      B: end\"}\n"
+                     "  k:\n    name: y\n"),
+                    # P3 — 흐름 안에서 YAML 1.2 와 PyYAML 이 토큰을 다르게 나누는 표기는 한 줄이어도 읽지 않는다
+                    ("flow-question-without-space.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: {?a: 1}\n  k:\n    name: y\n"),
+                    ("flow-colon-without-node.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: {:a}\n  k:\n    name: y\n"),
+                    ("flow-anchor.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: {A: &x 1}\n  k:\n    name: y\n"),
+                    ("flow-tag.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    env: [!t a]\n  k:\n    name: y\n"),
+                    ("hash-glued-to-quote.yml",
+                     "name: J\non:\n  pull_request:\njobs:\n  j:\n    name: \"a\"#x\n  k:\n    name: y\n")):
                 with self.subTest(name=name):
                     for old in d.glob("*.yml"):
                         old.unlink()

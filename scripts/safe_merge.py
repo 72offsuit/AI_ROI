@@ -21,6 +21,7 @@ GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 *
      찾는다. 필수 목록이 비었거나 읽지 못하면 막는다 — 워크플로우 하나 · 잡 하나만 읽지
      못해도 막는다(목록이 조용히 줄면 그 체크는 안 떠도 병합된다). 여러 줄에 걸친 따옴표 ·
      흐름 표기는 어디에 있든 막는다 — 연속 줄이 0열이면 블록이 끝난 것처럼 보인다(N1).
+     흐름 안에서 파서마다 토큰을 다르게 나누는 표기도 한 줄이어도 막는다(P3).
      필수 목록은 **이 스크립트가 놓인 체크아웃**(작업 폴더가 아니다)의 워크플로우에서 읽는다 —
      최신 `main` 체크아웃에서 실행한다. 이름 변경 처리는 docs/GIT_WORKFLOW.md §5.1.
   ③ 보고된 체크가 **전부** `SUCCESS` 다. `SKIPPED` · `NEUTRAL` · 진행 중은 통과가 아니다.
@@ -130,46 +131,75 @@ def _quote_end(line: str, start: int) -> int:
     return -1
 
 
+#: 흐름 컬렉션의 구분 문자 — 흐름 안에서는 평범한 스칼라도 여기서 끝난다.
+_FLOW_INDICATORS = ",[]{}"
+#: 흐름 안의 토큰 자리에서 읽지 않는 표시 문자(PR #238 리뷰 P3).
+_FLOW_UNREAD = "?:-&*!|>%@`"
+
+
 def _check_one_line_nodes(line: str, where: str) -> None:
     """한 줄 안에서 따옴표 스칼라와 흐름 컬렉션(`[…]` · `{…}`)이 전부 닫히는지 본다.
 
     ★ 여러 줄에 걸친 것은 읽지 않고 `WorkflowError` 다(PR #238 리뷰 N1). 이어지는 줄이 0열이면
       블록이 거기서 끝난 것처럼 보여, 뒤의 트리거 · 잡이 오류 없이 필수에서 빠진다.
-    스칼라가 시작되는 자리(줄 처음 · `- ` · `? ` · `: ` 뒤, 흐름 안의 `[` · `{` · `,` 뒤,
-    앵커 · 태그 뒤)의 따옴표 · 괄호만 표시로 본다. `${{ … }}` · `don't` 처럼 평범한 스칼라
-    속의 문자는 글자다.
+    따옴표 · 괄호는 토큰 자리에서만 표시다. 평범한 스칼라(`${{ … }}` · `don't`) 속에서는 글자고,
+    평범한 스칼라는 `: ` · ` #` 에서, 흐름 안에서는 `,[]{}` 에서도 끝난다.
+    ★ 흐름 안에서는 따옴표 · 괄호 바로 뒤의 `:` 도 값 표시다 — `{"A":"…"}` 의 둘째 따옴표가
+      스칼라를 연다(PR #238 리뷰 P3). YAML 1.2 와 PyYAML 이 토큰을 다르게 나누는 표기 —
+      그 밖의 공백 없는 `:` · `?`, 앵커 · 별칭 · 태그 — 는 흐름 안에서 읽지 않는다.
+      토큰 자리에 공백 없이 붙은 `#`(`"a"#` · `[a,#`)는 PyYAML 만 주석으로 읽으므로 어디서든
+      읽지 않는다. 평범한 스칼라 속 `a#b` 는 두 쪽 다 글자다.
     """
-    depth, start, i = 0, True, _indent(line)
+    depth, plain, after_node, i = 0, False, False, _indent(line)
     while i < len(line):
-        c = line[i]
+        c, ahead = line[i], line[i + 1:i + 2]
+        spaced = ahead in ("", " ", "\t")
         if c in " \t":
             i += 1
             continue
         if c == "#" and line[i - 1:i] in ("", " ", "\t"):
             break  # 끝 주석
-        if start and c in "'\"":
+        if plain:
+            if c == ":" and (spaced or (depth and ahead in _FLOW_INDICATORS)):
+                plain = False  # 값 표시 — 다음은 토큰 자리다
+                i += 1
+                continue
+            if not (depth and c in _FLOW_INDICATORS):
+                i += 1
+                continue  # 평범한 스칼라 속 글자
+            plain = False  # 흐름 구분 문자는 아래에서 토큰으로 읽는다
+        after, after_node = after_node, False
+        if c == "#":
+            raise WorkflowError(f"{where}: 공백 없이 붙은 `#` 는 파서마다 주석 여부가 다르다 — "
+                                f"읽지 않는다: {line.strip()!r}")
+        if c in "'\"":
             end = _quote_end(line, i)
             if end < 0:
                 raise WorkflowError(f"{where}: 따옴표 스칼라가 줄 안에서 닫히지 않는다 — "
                                     f"여러 줄 따옴표 스칼라는 읽지 않는다: {line.strip()!r}")
-            i, start = end + 1, False
+            i, after_node = end + 1, True
             continue
-        if c in "[{" and (start or depth):
-            depth, start = depth + 1, True
+        if c in "[{":
+            depth += 1
         elif c in "]}" and depth:
-            depth, start = depth - 1, False
+            depth, after_node = depth - 1, True
         elif c == "," and depth:
-            start = True
-        elif c == ":" and (line[i + 1:i + 2] in ("", " ", "\t") or (depth and line[i + 1] in ",]}")):
-            start = True
-        elif start and not depth and c in "-?" and line[i + 1:i + 2] in ("", " ", "\t"):
-            pass  # 블록 목록 항목 · 복합 키 표시 — 다음 자리도 스칼라 시작이다
-        elif start and c in "&!":
+            pass
+        elif c == ":" and (spaced or (depth and (ahead in _FLOW_INDICATORS or after))):
+            pass  # 값 표시
+        elif c == "?" and spaced:
+            pass  # 복합 키 표시
+        elif depth and c in _FLOW_UNREAD and (c != "-" or spaced):
+            raise WorkflowError(f"{where}: 흐름 표기 안의 `{c}` 는 읽지 않는다 — 파서마다 토큰을 다르게 "
+                                f"나누거나 받지 않는다: {line.strip()!r}")
+        elif c == "-" and spaced:
+            pass  # 블록 목록 항목
+        elif c in "&!":
             while i < len(line) and line[i] not in " \t":
                 i += 1  # 앵커 · 태그 — 그 뒤가 값이다
             continue
         else:
-            start = False
+            plain = True
         i += 1
     if depth:
         raise WorkflowError(f"{where}: 흐름 컬렉션이 줄 안에서 닫히지 않는다 — "
