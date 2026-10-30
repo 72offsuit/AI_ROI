@@ -97,8 +97,9 @@ class ChurnDefinition:
     (CFG-001 이 지정한 파일). 필드 기본값은 그 블록이 생기기 전의 가설값(28/42/60 · OR)이다.
 
     - 이탈 = (미구매 경과일 ≥ `no_purchase_days`) `rule_operator` (미접속 경과일 ≥ `no_login_days`).
-    - 미접속 경과일은 마지막 `session_start`·`purchase` 중 늦은 날부터 센다 — 스키마에 로그인
-      이벤트가 없고 구매도 접속이다. 그래서 미접속 경과일은 미구매 경과일보다 길 수 없고,
+    - 미접속 경과일은 마지막 `session_start`·`return_visit`·`purchase` 중 늦은 날부터 센다 — 스키마에
+      로그인 이벤트가 없고 구매도 접속이다. `return_visit` 은 구매 뒤 첫 방문 세션을 여는 이벤트라
+      방문이다(계약 `visit_count`·`last_visit_date`, #198). 그래서 미접속 경과일은 미구매 경과일보다 길 수 없고,
       `no_login_days ≥ no_purchase_days` 인 OR 규칙은 미구매 조건 하나와 같은 결과를 낸다.
     - ★ **가설값이다(data_spec §5.1).** C1 에서 Lock 하지 않았고, 이 정의를 쓰는 지표는
       `status: unconfirmed` + `params_used` 로 나간다.
@@ -578,11 +579,11 @@ def _days_since_last_purchase(
 def _churn_elapsed(
     events: Iterable[Mapping[str, object]], *, index_date: date
 ) -> dict[str, tuple[int, int]]:
-    """구매 이력 고객별 (미구매 경과일, 미접속 경과일). 접속 = `session_start`·`purchase`.
+    """구매 이력 고객별 (미구매 경과일, 미접속 경과일). 접속 = `session_start`·`return_visit`·`purchase`.
 
     한 번만 순회한다 — 1회용 iterable 이 들어와도 두 값이 같은 이벤트에서 나온다.
     """
-    access_types = (EventType.SESSION_START.value, EventType.PURCHASE.value)
+    access_types = (EventType.SESSION_START.value, EventType.RETURN_VISIT.value, EventType.PURCHASE.value)
     last_purchase: dict[str, date] = {}
     last_access: dict[str, date] = {}
     for event in events:
@@ -632,7 +633,7 @@ def churn_rate(
             window=Window(WindowDirection.POINT_IN_TIME, label="index_date 시점 상태"),
             denominator=len(elapsed),
             observed_count=len(elapsed),
-            source_event_types=("purchase", "session_start"),
+            source_event_types=("purchase", "session_start", "return_visit"),
         ),
         reason_detail=(
             f"이탈 정의 {definition.describe()} 가 가설값이다 — "
@@ -781,7 +782,7 @@ def winback_rate(
             ),
             denominator=len(churned_then),
             observed_count=len(churned_then),
-            source_event_types=("purchase", "session_start"),
+            source_event_types=("purchase", "session_start", "return_visit"),
         ),
         reason_detail=f"이탈 판정에 가설값 {definition.describe()} 를 썼다",
         params_used=definition.params_used(),
@@ -1035,7 +1036,7 @@ def derived_state_count(
                     WindowDirection.POINT_IN_TIME, label="index_date 시점 상태"
                 ),
                 observed_count=len(elapsed),
-                source_event_types=("purchase", "session_start"),
+                source_event_types=("purchase", "session_start", "return_visit"),
             ),
             reason_detail=(
                 f"이탈 정의(at_risk_days={definition.at_risk_days} · {churn_formula})가 "

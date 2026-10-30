@@ -301,6 +301,16 @@ class TestChurnDefinition(unittest.TestCase):
             1.0, kpi.churn_rate(events, index_date=INDEX_DATE, definition=self.SHORT_LOGIN_OR).value
         )
 
+    def test_return_visit_counts_as_access(self) -> None:
+        # 구매 뒤 첫 방문은 session_start 대신 return_visit 으로 열린다(#198) — 접속에서 빠지면 미접속이 과대가 된다.
+        events = [
+            purchase("C00000001", INDEX_DATE - timedelta(days=50)),
+            event_of(EventType.RETURN_VISIT, "C00000001", INDEX_DATE - timedelta(days=10)),
+        ]
+        result = kpi.churn_rate(events, index_date=INDEX_DATE, definition=self.AND)
+        self.assertEqual(0.0, result.value)
+        self.assertIn("return_visit", result.basis.source_event_types)
+
     def test_retention_and_winback_follow_the_definition(self) -> None:
         events = self._lapsed_buyer_still_visiting()
         self.assertEqual(
