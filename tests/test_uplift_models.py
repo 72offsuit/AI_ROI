@@ -197,6 +197,10 @@ class TestEvaluate(unittest.TestCase):
         self.assertIn(r["best_method"], ("t_learner", "x_learner"))
         self.assertIn("validation", r["best_method_selection"]["basis"])
         self.assertEqual(0, r["n_outcome_missing_excluded"])
+        # ID만 있는 외부 점수는 fit 계보가 없으므로 위험도 행만 거부해야 한다.
+        risk = next(m for m in r["models"] if m["name"] == "churn_risk_targeting")
+        self.assertEqual("not_run", risk["status"])
+        self.assertIn("계보", risk["reason"])
         json.dumps(r)   # 게시 가능한 형태
 
     def test_proposed_beat_random_on_strong_heterogeneity(self) -> None:
@@ -236,6 +240,174 @@ class TestEvaluate(unittest.TestCase):
         self.assertEqual("T1", r["primary_arm"])
         self.assertEqual("No E-Mail", r["benchmark"]["control_value"])
         self.assertGreater([m for m in r["models"] if m["name"] == "t_learner"][0]["qini"], 0)
+
+
+@unittest.skipUnless(DEPS, REASON)
+class Test179TiedEvaluation(unittest.TestCase):
+    def test_ties_are_invariant_for_area_curve_and_fractional_topk(self):
+        import itertools
+        from src.decision.uplift import uplift_at_k_details, METRIC_VERSION
+        score = np.array([3, 2, 1, 1, 1, 1, 0, 0, 0, 0], dtype=float)
+        treated = np.array([1, 0, 1, 1, 0, 0, 1, 0, 1, 0])
+        y = np.array([1, 0, 1, 0, 1, 0, 0, 0, 0, 0])
+        reference = qini_curve(score, treated, y)
+        for order in itertools.permutations(range(2, 6)):
+            ids = [0, 1, *order, 6, 7, 8, 9]
+            q = qini_curve(score[ids], treated[ids], y[ids])
+            self.assertEqual(reference, q)
+            self.assertAlmostEqual(2 / 3, uplift_at_k(score[ids], treated[ids], y[ids], 0.3))
+        top = uplift_at_k_details(score, treated, y, 0.3)
+        self.assertEqual(3, top["nominal_k"])
+        self.assertEqual(3, top["effective_k"])
+        self.assertEqual(0.25, top["boundary_weight"])
+        self.assertEqual(1.5, top["weight_treated"])
+        self.assertEqual(1.5, top["weight_control"])
+        self.assertEqual(METRIC_VERSION, reference["metric_version"])
+        # 동점 1명 무작위 추출 후 비율을 낸 평균은 3/4로 비례 가중 2/3과 다르다.
+        draws = []
+        for chosen in range(2, 6):
+            ids = [0, 1, chosen]
+            tt = treated[ids].astype(bool)
+            draws.append(y[ids][tt].mean() - y[ids][~tt].mean())
+        self.assertAlmostEqual(0.75, np.mean(draws))
+
+    def test_all_equal_scores_have_only_endpoints_and_random_area(self):
+        for points in (2, 50):
+            q = qini_curve([0] * 4, [1, 1, 0, 0], [1, 0, 0, 0], points=points)
+            self.assertAlmostEqual(0, q["qini"])
+            self.assertAlmostEqual(0.25, q["auuc"])
+            self.assertEqual([[0.0, 0.0], [1.0, 0.5]], q["curve"])
+            self.assertEqual(1, q["score_ties"]["tied_customer_fraction"])
+        self.assertAlmostEqual(0.5, uplift_at_k([0] * 4, [1, 1, 0, 0], [1, 0, 0, 0], 0.25))
+
+    def test_display_sampling_does_not_change_area_or_add_tie_interior(self):
+        score = np.repeat(np.arange(100), 10)
+        treated = np.arange(1000) % 2
+        y = np.arange(1000) % 3 == 0
+        small = qini_curve(score, treated, y, points=7)
+        full = qini_curve(score, treated, y, points=200)
+        self.assertEqual(small["qini"], full["qini"])
+        self.assertEqual(small["auuc"], full["auuc"])
+        self.assertLessEqual(len(small["curve"]), 7)
+        self.assertTrue(all(round(x * 1000) % 10 == 0 for x, _ in small["curve"]))
+
+    def test_invalid_values_are_rejected_not_sorted_into_a_score(self):
+        for score, t, y in [([np.inf, 0], [1, 0], [1, 0]), ([0, 1], [1, 0], [np.nan, 0]),
+                             ([0, 1], [2, 0], [1, 0]), ([1], [1, 0], [1, 0])]:
+            with self.subTest(score=score), self.assertRaises(ValueError):
+                qini_curve(score, t, y)
+        for fraction in (0, 1.1, np.nan):
+            with self.assertRaises(ValueError):
+                uplift_at_k([1, 0], [1, 0], [1, 0], fraction)
+
+
+@unittest.skipUnless(DEPS, REASON)
+class Test179RiskConnection(unittest.TestCase):
+    def setUp(self):
+        self.X, self.t, self.y, _ = synthetic(n=600, seed=17)
+        self.X = self.X[["x1", "x2", "x3"]]
+        self.y = self.y.astype(float)
+        self.y.iloc[:13] = np.nan
+
+    def factory(self, calls):
+        from src.decision.churn import make_risk_model_factory
+        base = make_risk_model_factory(7)
+        def factory():
+            underlying = base()
+            class Spy:
+                def fit(self, X, y):
+                    calls.append({"X": X.copy(), "y": y.copy()})
+                    underlying.fit(X, y)
+                    self.classes_ = underlying.classes_
+                    return self
+                def predict_proba(self, X):
+                    values = underlying.predict_proba(X)
+                    calls[-1].update(test=X.copy(), proba=values.copy())
+                    return values
+            return Spy()
+        factory.specification = base.specification
+        return factory
+
+    def run_eval(self, **kwargs):
+        return evaluate_uplift_models(self.X, self.t, self.y, seed=7, methods=("s_learner", "t_learner"), **kwargs)
+
+    @staticmethod
+    def risk(result):
+        return next(row for row in result["models"] if row["name"] == "churn_risk_targeting")
+
+    def test_actual_evaluate_fit_uses_only_cleaned_train_controls_and_no_test_labels(self):
+        calls = []
+        first = self.run_eval(risk_model_factory=self.factory(calls))
+        self.assertEqual("ok", self.risk(first)["status"])
+        self.assertEqual(1, len(calls))
+        train = pd.Index(first["evaluation_split"]["train_customer_ids"])
+        test = pd.Index(first["evaluation_split"]["test_customer_ids"])
+        expected = train[self.t.loc[train] == "T0"]
+        self.assertEqual(set(expected), set(calls[0]["X"].index))
+        self.assertEqual(set(), set(expected) & set(test))
+        self.assertEqual(13, first["n_outcome_missing_excluded"])
+        pd.testing.assert_series_equal(1 - self.y.loc[expected], calls[0]["y"])
+        before = self.y.copy()
+        self.y.loc[test] = 1 - self.y.loc[test]
+        later = []
+        second = self.run_eval(risk_model_factory=self.factory(later))
+        pd.testing.assert_frame_equal(calls[0]["X"], later[0]["X"])
+        pd.testing.assert_series_equal(calls[0]["y"], later[0]["y"])
+        np.testing.assert_array_equal(calls[0]["proba"], later[0]["proba"])
+        self.assertEqual(first["risk_baseline"]["model_spec"], second["risk_baseline"]["model_spec"])
+        self.assertTrue(self.y.isna().equals(before.isna()))
+        self.assertEqual(len(test), first["risk_baseline"]["test_n"])
+        primary_n = int(self.t.loc[test].isin(["T0", first["primary_arm"]]).sum())
+        self.assertEqual(primary_n, self.risk(first)["score_ties"]["n"])
+
+    def test_one_class_does_not_call_factory_and_keeps_other_models(self):
+        self.y.loc[self.t == "T0"] = 1.0
+        calls = []
+        result = self.run_eval(risk_model_factory=self.factory(calls))
+        self.assertEqual([], calls)
+        self.assertEqual("not_run", self.risk(result)["status"])
+        self.assertTrue(all(row["qini"] is not None for row in result["models"] if row["name"] != "churn_risk_targeting"))
+
+    def test_conflicting_inputs_do_not_call_factory(self):
+        calls = []
+        result = self.run_eval(churn_p=pd.Series(0.5, index=self.X.index), risk_model_factory=self.factory(calls))
+        self.assertEqual([], calls)
+        self.assertEqual("not_run", self.risk(result)["status"])
+        self.assertIn("동시 입력", self.risk(result)["reason"])
+
+    def test_external_predictions_are_disabled_even_with_plausible_lineage(self):
+        calls = []
+        base = self.run_eval(risk_model_factory=self.factory(calls))
+        cp = pd.Series(calls[0]["proba"][:, 1], index=calls[0]["test"].index)
+        cp.attrs.update(protocol="train-controls-to-test-v1", fit_customer_ids=calls[0]["X"].index.tolist(),
+                        test_ids_sha256=base["evaluation_split"]["test_ids_sha256"],
+                        model_spec=base["risk_baseline"]["model_spec"])
+        cases = [cp.copy(), cp.to_numpy(), cp.iloc[:-1].copy(), pd.concat([cp, cp.iloc[:1]]),
+                 cp.copy(), cp.copy(), cp.copy(), cp.copy()]
+        cases[4].iloc[0] = np.nan
+        cases[5].iloc[0] = np.inf
+        cases[6].iloc[0] = 1.01
+        cases[7].attrs.update(cp.attrs, model_spec={"name": "anything", "selection": "chosen_on_test"})
+        for candidate in cases:
+            with self.subTest(kind=type(candidate).__name__):
+                result = self.run_eval(churn_p=candidate)
+                self.assertEqual("not_run", self.risk(result)["status"])
+                self.assertIn("비활성화", self.risk(result)["reason"])
+                self.assertFalse(result["risk_baseline"]["external_predictions_supported"])
+                self.assertTrue(all(row["qini"] is not None for row in result["models"] if row["name"] != "churn_risk_targeting"))
+        result = evaluate_uplift_models(self.X, self.t, self.y, seed=7, churn_p=cases[7])
+        names = {row["name"] for row in result["models"] if row["qini"] is not None}
+        self.assertTrue({"s_learner", "t_learner", "x_learner"} <= names)
+
+    def test_factory_failure_and_invalid_probability_are_isolated(self):
+        def fail():raise RuntimeError("합성 학습 실패")
+        self.assertEqual("not_run", self.risk(self.run_eval(risk_model_factory=fail))["status"])
+        for probability in (np.nan, np.inf, -0.1, 1.1):
+            class Invalid:
+                def fit(self, X, y):self.classes_ = np.array([0, 1]);return self
+                def predict_proba(self, X):return np.tile([1-probability, probability], (len(X), 1))
+            result = self.run_eval(risk_model_factory=Invalid)
+            self.assertEqual("not_run", self.risk(result)["status"])
 
 
 if __name__ == "__main__":

@@ -30,7 +30,15 @@ _SKIP_REASON = "BLOCKED: numpy/pandas/scikit-learn 미설치"
 if _DEPS:
     import pandas as pd
 
+    if importlib.util.find_spec("pyarrow") is not None:
+        # sys.modules 가짜 주입 전에 지연 Parquet 등록을 끝낸다. patch.dict가 새 모듈만
+        # 제거하고 Arrow의 전역 등록은 남기면 다음 시험에서 pandas.period가 중복된다.
+        pd.DataFrame({"fixture": [0]}).to_parquet(io.BytesIO(), index=False)
+
     from src.measurement import sink
+    from src.decision.features.sprint_table import outcome_observation_status, summarize_outcomes
+    from src.decision.data import verify_event_run
+    from src.decision.churn import temporal_population_audit
     from src.orchestration import run_sprint as rs
     from src.simulator import api as sim
 
@@ -74,16 +82,19 @@ class FakeDecision:
             return mod
 
         return {
-            "src.decision.data": module("src.decision.data", load_events=self.load_events),
+            "src.decision.data": module("src.decision.data", load_events=self.load_events, verify_event_run=verify_event_run),
             "src.decision.features.sprint_table": module(
                 "src.decision.features.sprint_table",
                 build_feature_table=self.build_feature_table, build_outcomes=self.build_outcomes,
+                summarize_outcomes=summarize_outcomes,
+                outcome_observation_status=outcome_observation_status,
             ),
             "src.decision.churn": module(
                 "src.decision.churn",
                 evaluate_churn_models=self.evaluate_churn_models, fit_best_churn=self.fit_best_churn,
                 predict_churn_proba=self.predict_churn_proba,
                 evaluate_temporal_holdout=self.evaluate_temporal_holdout, N_SPLITS=5,
+                temporal_population_audit=temporal_population_audit,
             ),
             "src.decision.clv": module(
                 "src.decision.clv", fit_clv=self.fit_clv, predict_clv=self.predict_clv,
@@ -130,7 +141,7 @@ class FakeDecision:
         table["days_since_last_purchase"] = (index_time - last).dt.days.astype(float)
         return table.sort_index()
 
-    def build_outcomes(self, events, index_time, window_days=42):
+    def build_outcomes(self, events, index_time, window_days=42, *, observation=None, allow_incomplete=False):
         self.calls.append(("build_outcomes", {"index_time": index_time, "window_days": window_days}))
         before = events.loc[events["timestamp"] < index_time, "customer_id"].unique()
         window = events[(events["timestamp"] >= index_time)
@@ -139,8 +150,16 @@ class FakeDecision:
         carts = window[window["event_type"] == "add_to_cart"].groupby("customer_id").size()
         carts = carts.reindex(counts.index, fill_value=0)
         churn = (counts < counts.median()).astype(int)
-        return pd.DataFrame({"churn": churn, "purchases": carts.astype(float),
-                             "revenue": carts.astype(float) * 1000.0})
+        out = pd.DataFrame({"churn": churn, "purchases": carts.astype(float),
+                            "revenue": carts.astype(float) * 1000.0})
+        audit = outcome_observation_status(index_time, window_days, observation)
+        out.attrs["outcome_observation"] = audit
+        if audit["status"] != "ok":
+            if not allow_incomplete:
+                raise ValueError(str(audit["reasons"]))
+            out = out.astype(float)
+            out.loc[:, :] = float("nan")
+        return out
 
     # churn -----------------------------------------------------------------
     def evaluate_churn_models(self, X, y, seed):
@@ -412,7 +431,11 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         details = _read(self.run_dir, "strategy_comparison")["strategy_details"]
         for strategy in rs.STRATEGIES:
             record = details[strategy]["measured_economics"]
-            self.assertEqual("ok", record["status"], strategy)
+            self.assertEqual("ok", record["status"], {
+                "strategy": strategy, "economics": record,
+                "event_read_evidence": details[strategy].get("event_read_evidence"),
+                "economics_input_observation": details[strategy].get("economics_input_observation"),
+            })
             self.assertEqual((self.base / "out" / "branches" / strategy / "simulator_exchange").resolve(),
                              Path(record["bundle_root"]).resolve(), strategy)
             self.assertEqual("ok", record["bundle"]["status"], strategy)
@@ -743,7 +766,7 @@ class TestSprintWithoutDecision(unittest.TestCase):
             status = {s["name"]: s for s in meta["stages"]}
             for name in ("simulate_warmup", "read_events_t1", "rct_assign", "simulate_rct",
                          "read_events_t2", "snapshot_t2", "strategy_S0"):
-                self.assertEqual("ok", status[name]["status"], name)
+                self.assertEqual("ok", status[name]["status"], status[name])
             for name in ("features_t1", "churn", "uplift", "clv", "ab_test", "strategy_S1", "roi_summary"):
                 self.assertEqual("not_run", status[name]["status"], name)
                 self.assertTrue(status[name]["reason"], name)

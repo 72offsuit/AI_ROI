@@ -59,6 +59,10 @@ PRE_206_MODEL = {
     "segmentation": {"clv_high_q": 0.8, "churn_high_q": 0.5, "uplift_band_q": 0.6},
 }
 
+# #179는 기존 모델 수치를 그대로 두고 사전 고정 위험도 기준선 이름만 추가한다.
+MODEL_NOW = copy.deepcopy(PRE_206_MODEL)
+MODEL_NOW["churn"]["risk_baseline_model"] = "logistic_regression"
+
 #: #206 이전 — run_sprint.py(RCT_CONTROL_SHARE · DEFAULT_ACTIVE_DAYS · --seed/--customers/--profile 기본값) ·
 #: ab_test.py(alpha · power · SRM threshold 기본값).
 PRE_206_EXPERIMENT = {
@@ -75,7 +79,7 @@ del EXPERIMENT_NOW["rct"]["active_days"]
 
 
 def _model(**patch) -> dict:
-    raw = copy.deepcopy(PRE_206_MODEL)
+    raw = copy.deepcopy(MODEL_NOW)
     for dotted, value in patch.items():
         *head, leaf = dotted.split("__")
         node = raw
@@ -95,8 +99,16 @@ class TestSchema(unittest.TestCase):
     """스키마 — 의존성 없이 돈다."""
 
     def test_pre_206_values_pass_unchanged(self) -> None:
-        self.assertEqual(PRE_206_MODEL, dc.validate(PRE_206_MODEL, dc.MODEL_SCHEMA, "t"))
+        self.assertEqual(MODEL_NOW, dc.validate(MODEL_NOW, dc.MODEL_SCHEMA, "t"))
         self.assertEqual(EXPERIMENT_NOW, dc.validate(EXPERIMENT_NOW, dc.EXPERIMENT_SCHEMA, "t"))
+
+    def test_risk_baseline_must_be_explicit_and_predeclared(self):
+        with self.assertRaises(dc.DecisionConfigError):
+            dc.model_config_from(PRE_206_MODEL)
+        for name in ("best", "rule_recency", True, None):
+            with self.subTest(name=name), self.assertRaises(dc.DecisionConfigError):
+                dc.model_config_from(_model(churn__risk_baseline_model=name))
+        self.assertEqual("logistic_regression", dc.model_config_from(MODEL_NOW).churn.risk_baseline_model)
 
     def test_removed_active_days_is_rejected_not_ignored(self) -> None:
         """#234 — 옛 설정 파일의 `active_days` 가 조용히 무시되면 그 값이 아직 쓰인다고 믿게 된다."""
@@ -163,7 +175,7 @@ class TestSchema(unittest.TestCase):
         out = dc.validate(_model(churn__models__hist_gb__l2_regularization=1), dc.MODEL_SCHEMA, "t")
         value = out["churn"]["models"]["hist_gb"]["l2_regularization"]
         self.assertIsInstance(value, float)  # float 칸의 정수는 float 로 받는다
-        self.assertEqual(-1, dc.validate(PRE_206_MODEL, dc.MODEL_SCHEMA, "t")["churn"]["models"]
+        self.assertEqual(-1, dc.validate(MODEL_NOW, dc.MODEL_SCHEMA, "t")["churn"]["models"]
                          ["random_forest"]["n_jobs"])
 
     def test_error_is_a_config_error_with_exit_code_5(self) -> None:
@@ -171,7 +183,7 @@ class TestSchema(unittest.TestCase):
         self.assertEqual(5, dc.DecisionConfigError.exit_code)
 
     def test_built_objects_are_read_only(self) -> None:
-        built = dc.model_config_from(PRE_206_MODEL)
+        built = dc.model_config_from(MODEL_NOW)
         with self.assertRaises(TypeError):
             built.churn.models["hist_gb"]["max_iter"] = 1  # type: ignore[index]
         with self.assertRaises(dataclasses.FrozenInstanceError):
@@ -184,7 +196,11 @@ class TestRepositoryFiles(unittest.TestCase):
 
     def test_model_config_equals_pre_206_constants(self) -> None:
         raw = cl.load_yaml(dc.MODEL_CONFIG)
-        self.assertEqual(PRE_206_MODEL, dc.validate(raw, dc.MODEL_SCHEMA, str(dc.MODEL_CONFIG)))
+        checked = dc.validate(raw, dc.MODEL_SCHEMA, str(dc.MODEL_CONFIG))
+        self.assertEqual(MODEL_NOW, checked)
+        previous = copy.deepcopy(checked)
+        del previous["churn"]["risk_baseline_model"]
+        self.assertEqual(PRE_206_MODEL, previous)
 
     def test_experiment_config_equals_pre_206_constants(self) -> None:
         raw = cl.load_yaml(dc.EXPERIMENT_CONFIG)
@@ -358,14 +374,19 @@ class TestCodeUsesConfig(unittest.TestCase):
         self.assertEqual(0.05, inspect.signature(ab_test.achieved_power).parameters["alpha"].default)
 
     def test_run_sprint_reads_experiment_config(self) -> None:
-        from src.orchestration import run_sprint as rs
-
-        self.assertEqual(0.5, rs.RCT_CONTROL_SHARE)
-        args = rs.build_parser().parse_args(["--out", "x"])
-        self.assertEqual((42, 20000, "reference"), (args.seed, args.customers, args.profile))
-        self.assertFalse(hasattr(args, "active_days"), "#234 에서 없앤 RCT 모집단 창이 CLI 에 남아 있다")
-        assignment = rs.rct_assign([f"C{i:08d}" for i in range(80)], 42)
-        self.assertEqual(40, sum(1 for t in assignment.values() if t == "T0"))
+        # 이 검사는 설정 배선만 본다. 실제 시뮬레이터 import가 필요하지 않다.
+        import sys
+        from tests.test_feature_sprint_table import _contract_runner
+        rs = _contract_runner()
+        try:
+            self.assertEqual(0.5, rs.RCT_CONTROL_SHARE)
+            args = rs.build_parser().parse_args(["--out", "x"])
+            self.assertEqual((42, 20000, "reference"), (args.seed, args.customers, args.profile))
+            self.assertFalse(hasattr(args, "active_days"), "#234 에서 없앤 RCT 모집단 창이 CLI 에 남아 있다")
+            assignment = rs.rct_assign([f"C{i:08d}" for i in range(80)], 42)
+            self.assertEqual(40, sum(1 for t in assignment.values() if t == "T0"))
+        finally:
+            sys.modules.pop(rs.__name__, None)
 
 
 if __name__ == "__main__":

@@ -20,6 +20,8 @@ F1 · Lift@10% 를 구해 mean/std. 하이퍼파라미터 · fold 수도 그 파
 from __future__ import annotations
 
 import math
+import hashlib
+import json
 from dataclasses import dataclass, field
 from typing import Callable
 
@@ -102,6 +104,60 @@ def make_model(name: str, seed: int):
 
 def _kind(name: str) -> str:
     return "baseline" if name in BASELINES else "proposed"
+
+
+def make_risk_model_factory(seed: int = 0):
+    """#179 M: 설정으로 사전 고정한 미학습 모델. 평가 결과·최종 Churn 모델을 받지 않는다."""
+    name = CONFIG.risk_baseline_model
+    def factory():
+        from src.measurement.schema import FEATURE_FORBIDDEN_FIELDS, FORBIDDEN_FIELD_NAMES, FEATURE_FORBIDDEN_EVENT_TYPES
+        class RiskEstimator:
+            def fit(self, X, y):
+                forbidden = (FEATURE_FORBIDDEN_FIELDS | FORBIDDEN_FIELD_NAMES | FEATURE_FORBIDDEN_EVENT_TYPES
+                             | {"customer_id", "index_date", "timestamp", "label", "retention"})
+                if (not X.columns.is_unique or any(c in forbidden or str(c).endswith("_post_t0") for c in X.columns)):
+                    raise ValueError("위험도 입력에 금지·정답·중복 Feature가 있다")
+                self.columns_ = model_columns(X)
+                self.estimator_ = make_model(name, seed)
+                self.estimator_.fit(X[self.columns_], y)
+                self.classes_ = self.estimator_.classes_
+                return self
+            def predict_proba(self, X):
+                return self.estimator_.predict_proba(X[self.columns_])
+        return RiskEstimator()
+    factory.specification = {"name": name, "parameters": dict(CONFIG.models[name]),
+                             "seed": seed, "selection": "predeclared_config_no_data_selection",
+                             "feature_policy": "exclude_aliases_reject_forbidden_and_post_t0"}
+    return factory
+
+
+def temporal_population_audit(X_train, y_train, X_test, y_test, *,
+                              training_treatment=None, evaluation_prior_treatment=None) -> dict:
+    """실제 입력의 고객·결손·구성 감사. 새 분할을 만들거나 고객을 사후 재선정하지 않는다."""
+    def cohort(X, y, treatment):
+        values = y["churn"] if isinstance(y, pd.DataFrame) else y
+        values = values.reindex(X.index) if isinstance(values, pd.Series) else pd.Series(values, index=X.index)
+        good = values.notna()
+        ids = X.index[good]
+        if not X.index.is_unique or X.index.hasnans:
+            raise ValueError("모집단 감사의 고객 ID는 고유하고 결손이 없어야 한다")
+        digest = hashlib.sha256(json.dumps(sorted(map(str, ids)), ensure_ascii=False, separators=(",", ":")).encode()).hexdigest()
+        groups = treatment.reindex(ids) if isinstance(treatment, pd.Series) else None
+        return {"n_input": len(X), "n_labeled": len(ids), "n_label_missing": int((~good).sum()),
+                "ids_sha256": digest, "n_rows_with_feature_missing": int(X.loc[ids].isna().any(axis=1).sum()),
+                "feature_missing_cells": {str(k): int(v) for k, v in X.loc[ids].isna().sum().items() if v},
+                "label_counts": {str(k): int(v) for k, v in values[good].value_counts().items()},
+                "treatment_counts": None if groups is None else {str(k): int(v) for k, v in groups.value_counts().items()},
+                "n_prior_assignment_missing": None if groups is None else int(groups.isna().sum())}, ids
+    train, train_ids = cohort(X_train, y_train, training_treatment)
+    test, test_ids = cohort(X_test, y_test, evaluation_prior_treatment)
+    return {"training_and_selection": train, "future_evaluation": test,
+            "intersection_n": len(train_ids.intersection(test_ids)),
+            "evaluation_not_in_training_n": len(test_ids.difference(train_ids)),
+            "reporting_scope": "기존 고객의 미래 시점 성능",
+            "split_compliance": "not_established_by_this_audit",
+            "training_population": "실제 학습·선택 입력(현재 runner: Eligible(t1)의 RCT T0군·표본 제한 후)",
+            "evaluation_population": "Feature(t2) 고객의 S0 관측 라벨 — Eligible(t2) 집계와 별개"}
 
 
 # ── 지표 ────────────────────────────────────────────────────────────────────
@@ -364,4 +420,5 @@ def evaluate_temporal_holdout(model_factory=None, X_train: pd.DataFrame | None =
     return {"name": name, "scheme": "temporal_holdout", "model_source": source,
             "n_train": int(len(ytr)), "n_test": int(len(yte)),
             "pos_rate_train": float(ytr.mean()), "pos_rate_test": float(yte.mean()),
-            "threshold": float(threshold), **metrics}
+            "threshold": float(threshold), "population_audit": temporal_population_audit(
+                X_train, y_train, X_test, y_test), **metrics}

@@ -20,7 +20,9 @@ Qini·AUUC 는 직접 구현한다(외부 uplift 패키지 금지). 정의는 ``
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
+import hashlib
+import json
 
 import numpy as np
 import pandas as pd
@@ -36,6 +38,8 @@ MIN_ARM_N = 30
 N_THREADS: int | None = 1
 #: Qini 곡선 점 개수 상한(대시보드 페이로드 크기).
 CURVE_POINTS = 50
+METRIC_VERSION = "tied-endpoints-v1"
+TOPK_VERSION = "fractional-boundary-v1"
 #: PRD §15.1 — Uplift MVP 는 T0 vs T3 이진 처치. 평가의 대표 처치군 기본값.
 DEFAULT_PRIMARY_ARM = "T3"
 #: numpy 2.0 에서 trapz → trapezoid 로 이름이 바뀌었다. 고정 버전이 정해지기 전이라 둘 다 받는다.
@@ -80,8 +84,12 @@ def _check_inputs(X: pd.DataFrame, treatment: pd.Series, y: pd.Series):
     """
     if len(X) != len(treatment) or len(X) != len(y):
         raise ValueError("X · treatment · y 길이가 다르다")
+    if not X.index.is_unique or X.index.hasnans:
+        raise ValueError("공통 평가 입력의 고객 ID는 중복·결손이 없어야 한다")
     treatment = pd.Series(treatment).set_axis(X.index).astype(str)
     y = pd.Series(y).set_axis(X.index).astype(float)
+    if np.isinf(y.to_numpy()).any():
+        raise ValueError("평가 결과에 비유한 값이 있다")
     bad = sorted(set(treatment) - set(ARMS))
     if bad:
         raise ValueError(f"알 수 없는 처치 값: {bad[:5]} (T0~T4 만 허용)")
@@ -257,14 +265,35 @@ def _predict_cate(model: UpliftModel, X: pd.DataFrame) -> pd.DataFrame:
 # ── 평가 지표 ────────────────────────────────────────────────────────────────
 
 def _sorted_cumsums(score: np.ndarray, treated: np.ndarray, y: np.ndarray):
-    order = np.argsort(-score, kind="mergesort")       # 안정 정렬 — 동률은 입력 순서
+    order = np.argsort(-score, kind="mergesort")
     t = treated[order].astype(float)
     yy = y[order]
     n_t = np.cumsum(t)
     n_c = np.cumsum(1 - t)
     y_t = np.cumsum(yy * t)
     y_c = np.cumsum(yy * (1 - t))
-    return n_t, n_c, y_t, y_c
+    ends = np.flatnonzero(np.r_[score[order][1:] != score[order][:-1], True])
+    return n_t[ends], n_c[ends], y_t[ends], y_c[ends], ends + 1
+
+
+def _metric_inputs(score, treated, y):
+    score, raw_t, y = np.asarray(score, dtype=float), np.asarray(treated), np.asarray(y, dtype=float)
+    if any(a.ndim != 1 for a in (score, raw_t, y)) or not (len(score) == len(raw_t) == len(y)):
+        raise ValueError("점수·처치·결과는 같은 길이의 1차원 배열이어야 한다")
+    if not np.isfinite(score).all() or not np.isfinite(y).all() or not np.isin(raw_t, [0, 1]).all():
+        raise ValueError("점수·결과는 유한해야 하며 처치는 이진이어야 한다")
+    return score, raw_t.astype(bool), y
+
+
+def score_ties(score) -> dict[str, Any]:
+    values = np.asarray(score, dtype=float)
+    _, counts = np.unique(values, return_counts=True)
+    n = len(values)
+    return {"n": n, "n_unique_scores": len(counts),
+            "n_tied_customers": int(counts[counts > 1].sum()),
+            "tied_customer_fraction": float(counts[counts > 1].sum() / n) if n else None,
+            "duplicate_score_fraction": float((n - len(counts)) / n) if n else None,
+            "largest_tie": int(counts.max()) if n else 0}
 
 
 def qini_curve(score, treated, y, points: int = CURVE_POINTS) -> dict[str, Any]:
@@ -278,48 +307,61 @@ def qini_curve(score, treated, y, points: int = CURVE_POINTS) -> dict[str, Any]:
 
     AUUC 는 uplift 곡선 ``u(k) = (Ȳ_t(k) − Ȳ_c(k)) · k/N`` 아래 넓이다(상위 k 명의 평균 처치
     효과 × 도달 비율). 무작위 타깃팅의 기대값은 전체 ATE/2 다.
+
+    #179 tied-endpoints-v1: k는 동점 묶음 끝점만 사용한다. 면적과 표시 곡선의 정의가 같고,
+    무작위 동점 순서의 기댓값을 계산하는 규약은 아니다. 무동점 값은 이전 정의와 같다.
     """
-    score = np.asarray(score, dtype=float)
-    treated = np.asarray(treated, dtype=bool)
-    y = np.asarray(y, dtype=float)
-    if np.isnan(score).any():
-        raise ValueError("점수에 NaN 이 있다 — 계산 불가 처치군을 평가에 넣지 않는다")
+    score, treated, y = _metric_inputs(score, treated, y)
+    if type(points) is not int or points < 2:
+        raise ValueError("표시 점 수는 2 이상의 정수여야 한다")
     n = len(score)
     N_T, N_C = treated.sum(), (~treated).sum()
     if n == 0 or N_T == 0 or N_C == 0:
         raise ValueError("처치군·대조군이 모두 있어야 Qini 를 계산한다")
-    n_t, n_c, y_t, y_c = _sorted_cumsums(score, treated, y)
+    n_t, n_c, y_t, y_c, ends = _sorted_cumsums(score, treated, y)
     with np.errstate(divide="ignore", invalid="ignore"):
         gain = np.where(n_c > 0, y_t - y_c * n_t / np.where(n_c > 0, n_c, 1), 0.0) / N_T
         mean_t = np.where(n_t > 0, y_t / np.where(n_t > 0, n_t, 1), np.nan)
         mean_c = np.where(n_c > 0, y_c / np.where(n_c > 0, n_c, 1), np.nan)
-    x = np.arange(1, n + 1) / n
+    x = ends / n
     xs = np.concatenate([[0.0], x])
     gs = np.concatenate([[0.0], gain])
     uplift = np.nan_to_num((mean_t - mean_c) * x, nan=0.0)   # 한쪽 군이 없는 앞부분은 정의상 증분 0
     us = np.concatenate([[0.0], uplift])
     area_model = float(_trapezoid(gs, xs))
     area_random = float(gs[-1] / 2.0)
-    idx = np.unique(np.round(np.linspace(0, n, points)).astype(int))
+    idx = np.unique(np.round(np.linspace(0, len(xs) - 1, min(points, len(xs)))).astype(int))
     curve = [[round(float(xs[i]), 4), round(float(gs[i]), 6)] for i in idx]
     return {
         "qini": area_model - area_random,
         "auuc": float(_trapezoid(us, xs)),
         "curve": curve,
+        "metric_version": METRIC_VERSION,
+        "score_ties": score_ties(score),
     }
 
 
 def uplift_at_k(score, treated, y, fraction: float) -> float | None:
-    """상위 ``fraction`` 고객 안의 ``Ȳ_t − Ȳ_c``. 한쪽 군이 비면 None(계산 불가)."""
-    score = np.asarray(score, dtype=float)
-    treated = np.asarray(treated, dtype=bool)
-    y = np.asarray(y, dtype=float)
+    """경계 동점에 비례 가중한 상위 k의 평균 차. 무작위 추출 평균 비율과는 다르다."""
+    return uplift_at_k_details(score, treated, y, fraction)["value"]
+
+
+def uplift_at_k_details(score, treated, y, fraction: float) -> dict[str, Any]:
+    score, treated, y = _metric_inputs(score, treated, y)
+    if not np.isfinite(fraction) or not 0 < fraction <= 1 or not len(score):
+        raise ValueError("Top-k 비율은 (0,1]이고 표본이 있어야 한다")
     k = max(1, int(round(len(score) * fraction)))
-    top = np.argsort(-score, kind="mergesort")[:k]
-    t, yy = treated[top], y[top]
-    if t.sum() == 0 or (~t).sum() == 0:
-        return None
-    return float(yy[t].mean() - yy[~t].mean())
+    boundary = np.partition(score, len(score) - k)[len(score) - k]
+    above, ties = score > boundary, score == boundary
+    weight = (k - int(above.sum())) / int(ties.sum())
+    weights = above.astype(float) + ties * weight
+    nt, nc = float(weights[treated].sum()), float(weights[~treated].sum())
+    value = (float(np.dot(weights[treated], y[treated]) / nt - np.dot(weights[~treated], y[~treated]) / nc)
+             if nt > 0 and nc > 0 else None)
+    return {"value": value, "version": TOPK_VERSION, "nominal_k": k, "effective_k": float(weights.sum()),
+            "effective_fraction": float(weights.sum() / len(score)), "boundary_score": float(boundary),
+            "boundary_n": int(ties.sum()), "boundary_weight": weight, "weight_treated": nt,
+            "weight_control": nc, "status": "ok" if value is not None else "not_run"}
 
 
 def ate_with_ci(y_t, y_c, z: float = 1.959963984540054) -> dict[str, Any]:
@@ -339,24 +381,76 @@ def ate_with_ci(y_t, y_c, z: float = 1.959963984540054) -> dict[str, Any]:
 
 def _score_row(name: str, kind: str, score, treated, y, curve: bool) -> dict[str, Any]:
     q = qini_curve(score, treated, y)
+    top = {key: uplift_at_k_details(score, treated, y, frac) for key, frac in (("10", 0.10), ("30", 0.30))}
     row = {"name": name, "kind": kind, "qini": q["qini"], "auuc": q["auuc"],
-           "uplift_at_k": {"10": uplift_at_k(score, treated, y, 0.10),
-                           "30": uplift_at_k(score, treated, y, 0.30)}}
+           "uplift_at_k": {key: info["value"] for key, info in top.items()},
+           "uplift_at_k_details": top, "metric_version": METRIC_VERSION, "score_ties": q["score_ties"]}
     if curve:
         row["qini_curve"] = q["curve"]
     return row
 
 
+def _id_hash(index) -> str:
+    return hashlib.sha256(json.dumps(sorted(map(str, index)), ensure_ascii=False,
+                                     separators=(",", ":")).encode()).hexdigest()
+
+
+def _risk_predictions(X_tr, t_tr, y_tr, X_te, churn_p, factory):
+    """실제 정제·분할 뒤의 입력만 받는다. Test 결과는 인자 자체에 없다 (#179 M)."""
+    fit_ids = X_tr.index[t_tr == CONTROL]
+    audit = {"status": "not_run", "protocol": "train-controls-to-test-v1",
+             "fit_n": len(fit_ids), "fit_ids_sha256": _id_hash(fit_ids),
+             "test_n": len(X_te), "test_ids_sha256": _id_hash(X_te.index),
+             "fit_test_intersection_n": len(fit_ids.intersection(X_te.index)),
+             "model_spec": getattr(factory, "specification", None),
+             "external_predictions_supported": False, "lineage_verification": "not_verified"}
+    try:
+        if churn_p is not None and factory is not None:
+            raise ValueError("churn_p와 risk_model_factory 동시 입력 — factory를 실행하지 않는다")
+        if churn_p is None and factory is None:
+            raise ValueError("churn_p 또는 risk_model_factory가 주어지지 않았다")
+        if churn_p is not None:
+            raise ValueError("외부 위험도 계보는 자기 선언만으로 검증할 수 없어 비활성화했다 — risk_model_factory 필요")
+        if factory is not None:
+            target = 1.0 - y_tr.loc[fit_ids]
+            if len(target) < 2 or not np.isfinite(target).all() or set(target.unique()) != {0.0, 1.0}:
+                raise ValueError("위험도 Train∩T0에 유한 이진 라벨 두 클래스가 필요하다")
+            if audit["fit_test_intersection_n"]:
+                raise ValueError("위험도 학습 고객과 Test가 겹친다")
+            estimator = factory()
+            estimator.fit(X_tr.loc[fit_ids].copy(), target.copy())
+            classes = np.asarray(estimator.classes_)
+            if set(classes.tolist()) != {0, 1}:
+                raise ValueError("위험도 모델의 클래스가 이진 churn이 아니다")
+            proba = np.asarray(estimator.predict_proba(X_te.copy()), dtype=float)
+            if proba.shape != (len(X_te), 2):
+                raise ValueError("위험도 predict_proba의 행·클래스 수가 다르다")
+            if (not np.isfinite(proba).all() or not ((proba >= 0) & (proba <= 1)).all()
+                    or not np.allclose(proba.sum(axis=1), 1.0)):
+                raise ValueError("위험도 확률 행렬이 유한한 확률 분포가 아니다")
+            cp = pd.Series(proba[:, int(np.flatnonzero(classes == 1)[0])], index=X_te.index)
+        if cp.isna().any() or not np.isfinite(cp).all() or not cp.between(0, 1).all():
+            raise ValueError("위험도 필수 Test ID 누락·결손·비유한 값·[0,1] 밖 확률")
+        audit.update(status="ok", reason=None, lineage_verification="fit_observed_in_evaluator")
+        return cp, audit
+    except Exception as error:  # 위험도 기준선만 격리하고 정상 S/T/X 평가를 유지한다
+        audit["reason"] = f"{type(error).__name__}: {error}"
+        return None, audit
+
+
 def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, seed: int = 0,
                            churn_p: pd.Series | None = None, test_size: float = 0.3,
                            methods: tuple[str, ...] = METHODS,
-                           primary_arm: str | None = None) -> dict[str, Any]:
+                           primary_arm: str | None = None, *,
+                           risk_model_factory: Callable[[], object] | None = None) -> dict[str, Any]:
     """train/test 분할 → 메타러너 학습 → test 에서 Qini·AUUC·uplift@k 비교.
 
     Baseline 정책:
       * ``random`` — 무작위 타깃팅의 **해석적 기대값**(Qini 0, AUUC = ATE/2, uplift@k = 전체 차).
         난수 한 번의 우연을 기준선으로 삼지 않기 위함이다.
-      * ``churn_risk_targeting`` — ``churn_p`` 상위부터 타깃팅. 주어지지 않으면 ``not_run``.
+      * ``churn_risk_targeting`` — 실제 Train∩T0만 fit한 사전 고정 factory를 우선 사용한다.
+        외부 churn_p의 자기 선언 계보로 학습 사실을 검증할 수 없어 외부 점수 경로는 비활성화했다.
+        factory가 없거나 외부 점수가 함께 주어지면 위험도 행만 not_run이다.
       * ``s_learner`` — Baseline 메타러너.
     대표 처치군(``primary_arm``, 기본 T3 · 없으면 표본 최다 처치군)에서 모델 행을 내고,
     처치군별 결과는 ``by_arm`` 에 둔다. 처치군별 ATE·95% CI 는 **전체 표본**에서 낸다.
@@ -384,6 +478,7 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
     X_tr, X_te = X.iloc[idx_tr], X.iloc[idx_te]
     t_tr, t_te = treatment.iloc[idx_tr], treatment.iloc[idx_te]
     y_tr, y_te = y.iloc[idx_tr], y.iloc[idx_te]
+    risk, risk_audit = _risk_predictions(X_tr, t_tr, y_tr, X_te, churn_p, risk_model_factory)
 
     selection = _select_method(X_tr, t_tr, y_tr, methods, primary_arm, seed, stratified)
 
@@ -401,16 +496,13 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
         rows = [{"name": "random", "kind": "baseline", "method": "analytic_expectation",
                  "qini": 0.0, "auuc": overall / 2.0,
                  "uplift_at_k": {"10": overall, "30": overall}}]
-        if churn_p is None:
+        if risk is None:
             rows.append({"name": "churn_risk_targeting", "kind": "baseline", "status": "not_run",
-                         "reason": "churn_p 가 주어지지 않았다", "qini": None, "auuc": None})
+                         "reason": risk_audit["reason"], "qini": None, "auuc": None})
         else:
-            cp = pd.Series(churn_p).reindex(X_te.index[sel])
-            if cp.isna().any():
-                rows.append({"name": "churn_risk_targeting", "kind": "baseline", "status": "not_run",
-                             "reason": f"churn_p 결측 {int(cp.isna().sum())}건", "qini": None, "auuc": None})
-            else:
-                rows.append(_score_row("churn_risk_targeting", "baseline", cp.to_numpy(), tr, yy, curve))
+            cp = risk.reindex(X_te.index[sel])
+            rows.append({**_score_row("churn_risk_targeting", "baseline", cp.to_numpy(), tr, yy, curve),
+                         "status": "ok"})
         for m in methods:
             sc = cates[m][arm].to_numpy()[sel]
             rows.append(_score_row(m, METHOD_KIND[m], sc, tr, yy, curve))
@@ -426,6 +518,11 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
         "best_method_selection": selection,
         "n": int(len(X)), "n_train": int(len(idx_tr)), "n_test": int(len(idx_te)),
         "n_outcome_missing_excluded": n_missing,
+        "risk_baseline": risk_audit,
+        "evaluation_split": {"train_customer_ids": X_tr.index.tolist(), "test_customer_ids": X_te.index.tolist(),
+                             "train_ids_sha256": _id_hash(X_tr.index), "test_ids_sha256": _id_hash(X_te.index),
+                             "created_after_outcome_missing_filter": True},
+        "metric_version": METRIC_VERSION,
         "feature_screening": {
             "rule": "학습셋에서 전부 NaN 이거나 결측 없는 상수인 열은 제외(0 으로 채우지 않음)",
             "train_dropped": screen_features(_prep_X(X_tr)),
@@ -442,7 +539,8 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
         "definitions": {
             "qini": "area(model gain curve) − area(random line); gain per treated customer",
             "auuc": "area under (Ȳ_t(k) − Ȳ_c(k))·k/N",
-            "uplift_at_k": "Ȳ_t − Ȳ_c within top k% by score (None if an arm is empty)",
+            "uplift_at_k": "fractional-boundary-v1: weighted Ȳ_t − Ȳ_c; not a random tie-order expectation",
+            "ties": "tied-endpoints-v1: areas and displayed curves use the same tied-group endpoints",
             "ate_ci": "Welch normal approximation, full sample",
         },
     }
