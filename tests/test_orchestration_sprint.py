@@ -421,7 +421,12 @@ class TestSprintWithFakeDecision(unittest.TestCase):
                     "planned_treatment_cost_krw", "measured_revenue", "measured_marketing_cost",
                     "measured_contribution_profit"):
             self.assertIn(key, s0)
-        self.assertIsNone(s0["sim_marketing_cost"])  # 측정 계층이 만들지 않으면 None — 0 이 아니다
+        # 시뮬레이터가 만들지 않은 지표는 0 이 아니라 None, 만든 지표는 그 값 그대로다. 판에 기대지 않는다 —
+        # sim-0.7(#252)부터 매출 · 마케팅비 · 기여이익을 만든다
+        reported = _read(self.run_dir, "strategy_comparison")["strategy_details"]["S0"]["sim_metrics"]
+        for key in ("revenue", "marketing_cost", "contribution_profit", "churn_rate"):
+            metric = reported.get(key, {})
+            self.assertEqual(metric.get("value") if metric.get("status") == "ok" else None, s0[f"sim_{key}"], key)
 
     # #169 — 실측 기여이익 ------------------------------------------------------
     def _economics(self, strategy: str) -> dict:
@@ -774,8 +779,10 @@ class TestSprintWithoutDecision(unittest.TestCase):
             s0 = _read(run_dir, "strategy_comparison")["strategy_details"]["S0"]
             self.assertEqual("not_run", s0["event_outcomes"]["status"])
             self.assertNotIn("revenue_krw", s0["metrics"])
-            # 시뮬레이터가 아직 만들지 않는 지표는 0 이 아니라 null 이다
-            self.assertIsNone(s0["metrics"]["sim_revenue"])
+            # 시뮬레이터가 만들지 않은 지표는 0 이 아니라 null, 만든 지표는 그 값 그대로다(판에 기대지 않는다 — #252)
+            revenue = s0["sim_metrics"].get("revenue", {})
+            self.assertEqual(revenue.get("value") if revenue.get("status") == "ok" else None,
+                             s0["metrics"]["sim_revenue"])
             # 측정 계층 호출은 의사결정 모듈과 무관하게 돈다 (#169)
             self.assertEqual("ok", s0["measured_economics"]["status"])
             self.assertIn("status", s0["measured_economics"]["metrics"]["contribution_profit"])

@@ -14,17 +14,22 @@
                                ai_investment_cost 가 주어지지 않으면 계산 불가.
 값이 하나라도 없으면 파생값은 None 이다 — 0 으로 채우지 않는다.
 
-입력 키 — 오케스트레이션 집계(``sim_*`` · ``measured_*``)와 단순 형식을 둘 다 받는다. 값마다 아래
+입력 키 — 오케스트레이션 집계(``measured_*``)와 단순 형식을 둘 다 받는다. 값마다 아래
 후보를 순서대로 보되, **증분 계산에는 전략과 기준선 양쪽에 다 있는 첫 키**를 쓴다(기준이 섞이면
 차이가 의미를 잃는다). 어떤 키를 썼는지 ``basis`` 에 남긴다.
 
-  매출        sim_revenue → measured_revenue → revenue → revenue_krw
-  마케팅비    sim_marketing_cost → measured_marketing_cost → marketing_cost → planned_treatment_cost_krw(계획치)
-  기여이익    sim_contribution_profit → measured_contribution_profit → contribution_profit
-  이탈률      sim_churn_rate → churn_rate
+  매출        measured_revenue → revenue → revenue_krw
+  마케팅비    measured_marketing_cost → marketing_cost → planned_treatment_cost_krw(계획치)
+  기여이익    measured_contribution_profit → contribution_profit
+  이탈률      churn_rate
 
 ``measured_*`` 는 오케스트레이션이 분기마다 측정 계층(``publish.build_kpi_report``)으로 계산한
 값이다 — 교환 묶음의 주문 시점 원가로 COGS 를 뺀 실측 기여이익(DR-169).
+
+★ ``sim_*``(``sim.metrics`` 가 낸 값)는 **후보가 아니다** — 집계에 참고값으로만 남는다. 분기 품질 검사
+  (DQ-09 금액 대조 · DQ-02b 주문당 purchase 1건, #237 R1 · R3)는 ``measured_*`` 경로에만 걸린다.
+  ``sim_*`` 가 후보면 품질 검사에 걸린 분기도 그 값으로 정식 증분이익 · ROI 가 나간다 — 시뮬레이터가
+  비즈니스 지표를 채우면서(#252) 드러났다(DR-169 개정).
 
 ★ **기여이익이 양쪽에 같은 키로 없으면 정식 증분이익은 계산 불가다** (DR-169 · SRS MEA-003).
   ``incremental_profit_vs_S1`` 은 None, ``incremental_profit_status`` 가 사유(전략 쪽 · 기준선 쪽 ·
@@ -52,11 +57,10 @@ from .strategies import STRATEGY_NAMES
 ROW_KEYS = ("id", "name", "n_targeted", "treatment_mix", "revenue", "marketing_cost",
             "contribution_profit", "churn_rate")
 CANDIDATES: dict[str, tuple[str, ...]] = {
-    "revenue": ("sim_revenue", "measured_revenue", "revenue", "revenue_krw"),
-    "marketing_cost": ("sim_marketing_cost", "measured_marketing_cost", "marketing_cost",
-                       "planned_treatment_cost_krw"),
-    "contribution_profit": ("sim_contribution_profit", "measured_contribution_profit", "contribution_profit"),
-    "churn_rate": ("sim_churn_rate", "churn_rate"),
+    "revenue": ("measured_revenue", "revenue", "revenue_krw"),
+    "marketing_cost": ("measured_marketing_cost", "marketing_cost", "planned_treatment_cost_krw"),
+    "contribution_profit": ("measured_contribution_profit", "contribution_profit"),
+    "churn_rate": ("churn_rate",),
 }
 #: 그대로 옮겨 싣는 부가 키(있으면).
 PASSTHROUGH = ("n_population", "n_with_outcome", "n_outcome_missing", "retention_rate",
