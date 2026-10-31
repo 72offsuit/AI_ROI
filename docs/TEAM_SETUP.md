@@ -147,7 +147,7 @@ gh pr create --base main                                 # 본문은 docs/GIT_WO
 | 테스트 결과 | `unittest` 끝줄 (`skipped=` 포함) |
 | 결정 기록 | 이 PR 이 만든 `docs/decisions/DR-*.md` · `MC-*.md` |
 
-**병합 기준** — CI `Tests` 통과 · **리뷰 승인 1건** · squash merge. ★ **리뷰는 같은 팀 동료가 한다.** 다른 팀 사람은 그 코드를 읽으면 안 된다(§2) — 시뮬 PR 은 성환·민정이, 시스템 PR 은 인성·광진이 서로 본다.
+**병합 기준** — CI **전 잡** 통과 · **리뷰 승인(`APPROVED`) 1건** · squash merge. 브랜치 보호를 못 켜는 저장소라 병합은 `python3 scripts/safe_merge.py <PR>` 로만 한다 — 조건을 못 맞추면 병합하지 않는다(`docs/GIT_WORKFLOW.md` §5.1, #172). ★ **리뷰는 같은 팀 동료가 한다.** 다른 팀 사람은 그 코드를 읽으면 안 된다(§2) — 시뮬 PR 은 성환·민정이, 시스템 PR 은 인성·광진이 서로 본다.
 
 ---
 

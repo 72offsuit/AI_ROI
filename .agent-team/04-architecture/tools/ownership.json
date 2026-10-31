@@ -540,6 +540,16 @@
       "pattern": "docs/sprint_plan.md",
       "owner": "timothy",
       "why": "스프린트 2~5 정본 계획 — 리드 소유. 두 팀 모두 읽는다(성능 수치 · 시뮬레이터 내부를 적지 않는다)"
+    },
+    {
+      "pattern": "scripts/safe_merge.py",
+      "owner": "timothy",
+      "why": "병합 전 안전장치 (#172) — 브랜치 보호를 못 켜는 저장소(private+Free)에서 전 체크 SUCCESS + 승인 1건을 강제한다. 병합 규약(GIT_WORKFLOW §5.1)의 일부라 리드 소유"
+    },
+    {
+      "pattern": "tests/test_safe_merge.py",
+      "owner": "timothy",
+      "why": "위 스크립트가 #141 모양을 막는지 · 막히면 gh pr merge 를 부르지 않는지 · 우회 옵션이 없는지 고정한다 (#172)"
     }
   ],
   "planned": [
