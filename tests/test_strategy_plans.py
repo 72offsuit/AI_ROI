@@ -184,20 +184,45 @@ class TestRoi(unittest.TestCase):
         self.assertIn("revenue_up_profit_down", r["flags"])
         self.assertIn("retention_up_cost_surge", r["flags"])
 
-    def test_orchestrator_metrics_prefer_sim_contribution_profit(self) -> None:
+    def test_orchestrator_metrics_use_measured_not_sim(self) -> None:
+        """``sim_*`` 는 후보가 아니다 — 측정 값과 다르게 둬도 측정 값으로 낸다(DR-169 개정)."""
         base = {"strategy_id": "S1", "sim_revenue": 1000.0, "sim_contribution_profit": 300.0,
-                "sim_marketing_cost": 100.0, "revenue_krw": 990.0, "planned_treatment_cost_krw": 120.0,
+                "sim_marketing_cost": 100.0, "measured_revenue": 1010.0, "measured_contribution_profit": 310.0,
+                "measured_marketing_cost": 105.0, "revenue_krw": 990.0, "planned_treatment_cost_krw": 120.0,
                 "churn_rate": 0.2, "n_population": 10}
         ai = {"strategy_id": "S5", "sim_revenue": 1050.0, "sim_contribution_profit": 330.0,
-              "sim_marketing_cost": 120.0, "revenue_krw": 1040.0, "planned_treatment_cost_krw": 150.0,
+              "sim_marketing_cost": 120.0, "measured_revenue": 1070.0, "measured_contribution_profit": 350.0,
+              "measured_marketing_cost": 130.0, "revenue_krw": 1040.0, "planned_treatment_cost_krw": 150.0,
               "churn_rate": 0.18, "n_population": 10}
         r = summarize_strategy(ai, base)
         self.assertEqual("S5", r["id"])
-        self.assertAlmostEqual(30.0, r["incremental_profit_vs_S1"])
-        self.assertEqual("sim_contribution_profit", r["incremental_profit_basis"])
-        self.assertAlmostEqual(30.0 / 20.0, r["roi"])
+        self.assertAlmostEqual(40.0, r["incremental_profit_vs_S1"])
+        self.assertEqual("measured_contribution_profit", r["incremental_profit_basis"])
+        self.assertEqual("measured_marketing_cost", r["basis"]["incremental_marketing_cost"])
+        self.assertAlmostEqual(40.0 / 25.0, r["roi"])
+        self.assertEqual(1070.0, r["revenue"])
         self.assertNotIn("PROFIT_FALLBACK_REVENUE_BASED", r["flags"])
         self.assertEqual(10, r["n_population"])
+
+    def test_sim_values_never_stand_in_for_a_blocked_measurement(self) -> None:
+        """품질 검사로 측정 값이 막힌 분기(``measured_*`` None)는 ``sim_*`` 가 있어도 계산 불가다(#237 R1 · R3)."""
+        base = {"strategy_id": "S1", "sim_contribution_profit": 300.0, "sim_marketing_cost": 100.0,
+                "sim_revenue": 1000.0, "measured_contribution_profit": 310.0, "measured_marketing_cost": 105.0,
+                "measured_revenue": 1010.0}
+        blocked = {"strategy_id": "S2", "sim_contribution_profit": 330.0, "sim_marketing_cost": 120.0,
+                   "sim_revenue": 1050.0, "measured_contribution_profit": None, "measured_marketing_cost": None,
+                   "measured_revenue": None}
+        r = summarize_strategy(blocked, base, ai_investment_cost=5.0)
+        self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIn("전략 쪽 contribution_profit 결손", r["incremental_profit_status"])
+        self.assertIsNone(r["roi"])
+        self.assertIsNone(r["ai_roi"])
+        self.assertEqual("not_run", r["guardrails"]["revenue_up_profit_down"]["status"])
+        self.assertNotIn("sim_", repr(r["basis"]))
+        # 기준선 쪽이 막혀도 같다
+        r = summarize_strategy(base | {"strategy_id": "S3"}, blocked | {"strategy_id": "S1"})
+        self.assertIsNone(r["incremental_profit_vs_S1"])
+        self.assertIn("기준선 쪽 contribution_profit 결손", r["incremental_profit_status"])
 
     def test_revenue_fallback_is_separate_and_not_profit(self) -> None:
         """#169 — 대체값은 별도 필드다. 정식 증분이익 · ROI 는 계산 불가(이전에는 대체값으로 ROI ok)."""
@@ -221,8 +246,8 @@ class TestRoi(unittest.TestCase):
         self.assertIn("MARKETING_COST_PLANNED_NOT_REALIZED", r["flags"])
 
     def test_mixed_basis_is_not_compared(self) -> None:
-        """한쪽만 sim 기여이익이 있고 매출도 공통 키가 없으면 계산 불가."""
-        r = summarize_strategy({"strategy_id": "S2", "sim_contribution_profit": 10.0},
+        """한쪽만 측정 기여이익이 있고 매출도 공통 키가 없으면 계산 불가."""
+        r = summarize_strategy({"strategy_id": "S2", "measured_contribution_profit": 10.0},
                                {"strategy_id": "S1", "contribution_profit": 5.0})
         self.assertIsNone(r["incremental_profit_vs_S1"])
         self.assertIn("기준 불일치", r["incremental_profit_status"])
@@ -299,15 +324,15 @@ class TestRoiProfitBasis(unittest.TestCase):
 
     def test_key_mismatch_is_not_compared_even_with_revenue(self) -> None:
         """키 이름이 다르면 같은 정의라는 대조가 없다 — 차이를 내지 않는다."""
-        ai = {"strategy_id": "S5", "sim_contribution_profit": 330.0, "revenue_krw": 1100.0,
+        ai = {"strategy_id": "S5", "contribution_profit": 330.0, "revenue_krw": 1100.0,
               "planned_treatment_cost_krw": 150.0}
         base = {"strategy_id": "S1", "measured_contribution_profit": 300.0, "revenue_krw": 1000.0,
                 "planned_treatment_cost_krw": 100.0}
         r = summarize_strategy(ai, base)
         self.assertIsNone(r["incremental_profit_vs_S1"])
         self.assertIn("기준 불일치", r["incremental_profit_status"])
-        self.assertIn("sim_contribution_profit", r["incremental_profit_status"])
-        self.assertIn("measured_contribution_profit", r["incremental_profit_status"])
+        self.assertIn("전략 contribution_profit", r["incremental_profit_status"])
+        self.assertIn("기준선 measured_contribution_profit", r["incremental_profit_status"])
         self.assertIsNone(r["roi"])
         self.assertAlmostEqual(100.0 - 50.0, r["directional_revenue_minus_marketing_vs_S1"])
 

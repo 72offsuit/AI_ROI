@@ -18,13 +18,12 @@
 
 from __future__ import annotations
 
-import gzip
-import json
 from pathlib import Path
 
 import pandas as pd
 
 from src.measurement.schema import EVENT_FIELDS, TIMEZONE
+from src.decision.observation_contract import read_event_part as _read_part, verify_event_run
 
 EVENT_COLUMNS: list[str] = [spec.name for spec in EVENT_FIELDS]
 INT_COLUMNS: list[str] = [spec.name for spec in EVENT_FIELDS if spec.dtype == "int"]
@@ -44,17 +43,6 @@ def _events_dir(raw_root: Path) -> Path:
     raise FileNotFoundError(
         f"이벤트 파티션을 찾지 못했다: {raw_root} (기대: <root>/events/date=YYYY-MM-DD/part-*)"
     )
-
-
-def _read_part(path: Path) -> pd.DataFrame:
-    if path.suffix == ".parquet":
-        return pd.read_parquet(path)
-    if path.suffix == ".csv":
-        return pd.read_csv(path, dtype=str, keep_default_na=False, na_values=[""])
-    opener = gzip.open if path.suffix == ".gz" else open
-    with opener(path, "rt", encoding="utf-8") as handle:  # type: ignore[operator]
-        rows = [json.loads(line) for line in handle if line.strip()]
-    return pd.DataFrame.from_records(rows)
 
 
 def _coerce(frame: pd.DataFrame) -> pd.DataFrame:
@@ -77,13 +65,15 @@ def _coerce(frame: pd.DataFrame) -> pd.DataFrame:
     return frame
 
 
-def load_events(raw_root) -> pd.DataFrame:
+def load_events(raw_root, *, allow_verified_empty: bool = False) -> pd.DataFrame:
     """Sink 출력 루트를 읽어 `EVENT_FIELDS` 22 컬럼 DataFrame 으로 돌려준다.
 
     반환 frame 은 `(timestamp, event_id)` 로 정렬되고 RangeIndex 를 가진다.
     `attrs` 에 `source_files`(읽은 파트 수)·`duplicate_event_ids`(제거한 중복 수)를 남긴다.
     """
-    events_dir = _events_dir(Path(raw_root))
+    # 호출자가 실행 기록·빈 파일 목록·0행을 검증한 경우만 허용한다. 기본 경로는 부재를 오류로 낸다.
+    events_dir = (Path(raw_root) / "events" if allow_verified_empty and not (Path(raw_root) / "events").exists()
+                  else _events_dir(Path(raw_root)))
     parts = sorted(
         path for path in events_dir.rglob("part-*") if path.suffix in _SUFFIXES
     )

@@ -13,10 +13,52 @@ from __future__ import annotations
 import importlib.util
 import unittest
 
-from tests.test_feature_sprint_table import FIXTURE_T0, HAVE_ML, SKIP_REASON, make_events
+from tests.test_feature_sprint_table import FIXTURE_T0, HAVE_ML, SKIP_REASON, make_events, fixture_observation
 
 HAVE_TORCH = importlib.util.find_spec("torch") is not None
 TORCH_SKIP = "BLOCKED: 선택 의존성 torch 없음 (requirements-ml.txt, CI 비대상)"
+
+
+@unittest.skipUnless(HAVE_ML, SKIP_REASON)
+class Test179PopulationAudit(unittest.TestCase):
+    def test_overlap_missingness_composition_and_hashes_are_explicit(self):
+        import numpy as np
+        import pandas as pd
+        from src.decision.churn import temporal_population_audit
+        train = pd.DataFrame({"x": [1.0, np.nan]}, index=["a", "b"])
+        future = pd.DataFrame({"x": [np.nan, 3.0, 4.0]}, index=["b", "c", "d"])
+        ytrain = pd.Series([0, 1], index=train.index)
+        yfuture = pd.Series([1, 0, np.nan], index=future.index)
+        assignment = pd.Series({"a": "T0", "b": "T0", "c": "T3"})
+        audit = temporal_population_audit(train, ytrain, future, yfuture,
+                                         training_treatment=assignment, evaluation_prior_treatment=assignment)
+        self.assertEqual(1, audit["intersection_n"])
+        self.assertEqual(1, audit["evaluation_not_in_training_n"])
+        self.assertEqual(3, audit["future_evaluation"]["n_input"])
+        self.assertEqual(1, audit["future_evaluation"]["n_label_missing"])
+        self.assertEqual(1, audit["future_evaluation"]["n_rows_with_feature_missing"])
+        self.assertEqual({"T0": 1, "T3": 1}, audit["future_evaluation"]["treatment_counts"])
+        self.assertEqual("not_established_by_this_audit", audit["split_compliance"])
+        reordered = temporal_population_audit(train.iloc[::-1], ytrain, future.iloc[::-1], yfuture)
+        self.assertEqual(audit["future_evaluation"]["ids_sha256"], reordered["future_evaluation"]["ids_sha256"])
+
+    def test_duplicate_ids_do_not_produce_a_clean_audit(self):
+        import pandas as pd
+        from src.decision.churn import temporal_population_audit
+        X = pd.DataFrame({"x": [1, 2]}, index=["same", "same"])
+        with self.assertRaises(ValueError):temporal_population_audit(X, [0, 1], X, [0, 1])
+
+    def test_fixed_risk_model_rejects_forbidden_columns_and_excludes_alias(self):
+        import pandas as pd
+        from src.decision.churn import make_risk_model_factory
+        X = pd.DataFrame({"recency": [1., 2., 3., 4.], "days_since_last_purchase": [1., 2., 3., 4.]})
+        y = pd.Series([0, 1, 0, 1])
+        factory = make_risk_model_factory(7)
+        model = factory().fit(X, y)
+        self.assertEqual(["recency"], model.columns_)
+        self.assertEqual("logistic_regression", factory.specification["name"])
+        for name in ("treatment_id", "persona", "churn", "customer_id", "score_post_t0"):
+            with self.subTest(name=name), self.assertRaises(ValueError):factory().fit(X.assign(**{name: 0}), y)
 
 
 def _fixture(n: int = 160):
@@ -26,7 +68,8 @@ def _fixture(n: int = 160):
     from src.decision.features.sprint_table import build_feature_table, build_outcomes
 
     events = _coerce(pd.DataFrame.from_records(make_events(n_customers=n)))
-    return events, build_feature_table(events, FIXTURE_T0), build_outcomes(events, FIXTURE_T0)
+    return events, build_feature_table(events, FIXTURE_T0), build_outcomes(
+        events, FIXTURE_T0, observation=fixture_observation())
 
 
 @unittest.skipUnless(HAVE_ML, SKIP_REASON)
@@ -107,7 +150,7 @@ class TestChurnEvaluation(unittest.TestCase):
 
         earlier = pd.Timestamp(FIXTURE_T0) - pd.Timedelta(days=42)
         X_tr = build_feature_table(self.events, earlier)
-        y_tr = build_outcomes(self.events, earlier)["churn"]
+        y_tr = build_outcomes(self.events, earlier, observation=fixture_observation())["churn"]
         for factory in ("rule_recency", "hist_gb"):
             out = evaluate_temporal_holdout(factory, X_tr, y_tr, self.X, self.y["churn"], seed=11)
             self.assertEqual("temporal_holdout", out["scheme"])
@@ -125,7 +168,7 @@ class TestChurnEvaluation(unittest.TestCase):
 
         earlier = pd.Timestamp(FIXTURE_T0) - pd.Timedelta(days=42)
         X_tr = build_feature_table(self.events, earlier)
-        y_tr = build_outcomes(self.events, earlier)["churn"]
+        y_tr = build_outcomes(self.events, earlier, observation=fixture_observation())["churn"]
         fitted = fit_best_churn(X_tr, y_tr, seed=11)
 
         def call_by_name(fn, pool):

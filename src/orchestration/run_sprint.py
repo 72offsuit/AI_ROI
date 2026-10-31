@@ -60,6 +60,10 @@ from pathlib import Path
 from typing import Any, Callable, Iterator, Mapping
 
 from src.decision.config import load_experiment_config, load_model_config
+from src.decision.observation_contract import (
+    outcome_observation_status as _contract_observation_status,
+    event_content_hash, event_content_digest, verify_event_run,
+)
 from src.measurement import contracts as mc
 from src.simulator import api as sim
 
@@ -121,10 +125,13 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "load_events": ("src.decision.data", "load_events"),
     "build_feature_table": ("src.decision.features.sprint_table", "build_feature_table"),
     "build_outcomes": ("src.decision.features.sprint_table", "build_outcomes"),
+    "summarize_outcomes": ("src.decision.features.sprint_table", "summarize_outcomes"),
     "evaluate_churn_models": ("src.decision.churn", "evaluate_churn_models"),
     "fit_best_churn": ("src.decision.churn", "fit_best_churn"),
     "predict_churn_proba": ("src.decision.churn", "predict_churn_proba"),
     "evaluate_temporal_holdout": ("src.decision.churn", "evaluate_temporal_holdout"),
+    "temporal_population_audit": ("src.decision.churn", "temporal_population_audit"),
+    "make_risk_model_factory": ("src.decision.churn", "make_risk_model_factory"),
     "fit_clv": ("src.decision.clv", "fit_clv"),
     "predict_clv": ("src.decision.clv", "predict_clv"),
     "evaluate_clv": ("src.decision.clv", "evaluate_clv"),
@@ -421,9 +428,22 @@ def stratified_cap(X: Any, y: Any, max_rows: int | None, seed: int) -> tuple[Any
 
 
 def _pd():
-    import pandas as pd  # 지연 import — 의존성 없는 CI 에서 이 모듈의 정적 검사가 깨지지 않게
+    try:
+        import pandas as pd  # 지연 import — 의존성 없는 CI 에서 정적 검사를 허용한다
+    except ImportError as error:
+        missing = getattr(error, "name", None) or str(error)
+        raise NotRun(f"이벤트 처리의 필수 패키지를 불러올 수 없다: {missing}") from error
 
     return pd
+
+
+def outcome_observation_status(index_time, window_days: int, observation: Mapping | None) -> dict:
+    """계약 판정을 그대로 위임하고 필수 패키지 부재만 실행 상태로 변환한다 (#179 NB2)."""
+    try:
+        return _contract_observation_status(index_time, window_days, observation)
+    except ImportError as error:
+        missing = getattr(error, "name", None) or str(error)
+        raise NotRun(f"관측 판정의 필수 패키지를 불러올 수 없다: {missing}") from error
 
 
 def _timestamps(events: Any) -> Any:
@@ -467,6 +487,9 @@ class EventReader:
     """
 
     def __init__(self) -> None:
+        self._last_read = None
+        self._snapshots: dict[str, dict[str, Any]] = {}
+        self._active_branch = None
         try:
             self._load_events = decision_fn("load_events")
             self.source = "src.decision.data.load_events"
@@ -476,14 +499,170 @@ class EventReader:
             self.source = "src.simulator.api.events"
             self.fallback_reason = str(reason)
 
-    def read(self, root: Path, until: datetime, history: Any = None) -> Any:
-        """`root` 의 이벤트(`timestamp < until`). 분기 루트는 분기 이전 이력을 `history` 로 붙인다."""
-        if self._load_events is None:
-            return frame_from_stream(sim.events(until))
-        frame = self._load_events(root)
-        if history is None:
-            return frame
-        return _pd().concat([history, frame], ignore_index=True)
+    @staticmethod
+    def _frame_signature(frame: Any) -> str:
+        """변환 결과를 재계산하지 않고 이미 받은 history의 변경만 감지한다."""
+        digest = hashlib.sha256()
+        digest.update(repr([(str(c), str(d)) for c, d in zip(frame.columns, frame.dtypes)]).encode())
+        digest.update(_pd().util.hash_pandas_object(frame, index=True).to_numpy().tobytes())
+        digest.update(json.dumps(frame.attrs.get("run_read_evidence"), sort_keys=True).encode())
+        return digest.hexdigest()
+
+    @staticmethod
+    def _unchanged_files(root: Path, proof: Mapping) -> None:
+        for name, signature in proof.get("fingerprints", {}).items():
+            stat = (root / name).stat()
+            if [stat.st_size, stat.st_mtime_ns] != signature:
+                raise NotRun("읽기 도중 이벤트 파일이 바뀌었다")
+
+    def _check_history(self, capture: Mapping, *, verify_files: bool = True) -> None:
+        if self._frame_signature(capture["history"]) != capture["signature"]:
+            raise NotRun("스냅샷에 결속한 history 내용 또는 읽기 근거가 바뀌었다")
+        proof = capture["proof"]
+        if verify_files:
+            current = verify_event_run(Path(proof["root"]), proof["run_id"])
+            if current != proof:
+                raise NotRun("스냅샷 본선의 실행·파일 근거가 바뀌었거나 검증되지 않는다")
+        else:
+            self._unchanged_files(Path(proof["root"]), proof)
+
+    def snapshot(self, history: Any, until: datetime) -> str:
+        """이 리더가 방금 검증한 본선 읽기에 공개 스냅샷을 결속한다."""
+        last = self._last_read
+        if last is None or last["history"] is not history or last["until"] != until:
+            raise NotRun("이 리더의 최근 본선 읽기와 스냅샷 history·시각이 다르다")
+        if last["proof"].get("status") != "ok":
+            raise NotRun("스냅샷에는 검증된 본선 실행이 필요하다")
+        self._check_history(last)
+        self._active_branch = None
+        from src.measurement.sink import read_events
+        hashes = [event_content_hash(row) for row in read_events(Path(last["proof"]["root"]))]
+        expected = event_content_digest(hashes)
+        actual = event_content_digest([event_content_hash(row) for row in sim.events(until)])
+        if expected != actual:
+            raise NotRun("활성 세계의 공개 이력이 검증된 본선 내용과 다르다")
+        self._check_history(last)
+        token = sim.snapshot()
+        if not isinstance(token, str):
+            raise NotRun("공개 snapshot 토큰이 문자열이 아니다")
+        self._snapshots[token] = {**last, "raw_hashes": hashes, "raw_content": expected}
+        return token
+
+    def restore(self, token: str, *, output_root: Path) -> None:
+        """불투명 토큰을 공개 API에 그대로 넘긴다. 실패한 복원은 연결 근거가 아니다."""
+        self._active_branch = None
+        capture = self._snapshots.get(token)
+        if capture is None:
+            raise NotRun("이 리더가 history에 결속하지 않은 스냅샷이다")
+        self._check_history(capture)
+        sim.restore(token, output_root=output_root)
+        self._active_branch = {"capture": capture, "root": Path(output_root).resolve(),
+                               "snapshot_reference": hashlib.sha256(token.encode()).hexdigest(),
+                               "summary": None}
+
+    def advance(self, days: int) -> Any:
+        """성공한 복원 뒤의 실제 RunSummary만 분기 읽기에 사용한다."""
+        context = self._active_branch
+        self._active_branch = None
+        if context is None or context["summary"] is not None:
+            raise NotRun("새로운 restore 뒤에 한 번 advance해야 한다")
+        summary = sim.advance(days)
+        context["summary"] = {k: getattr(summary, k, None) for k in ("run_id", "start", "end")}
+        self._active_branch = context
+        return summary
+
+    def _branch_proof(self, context: Mapping, root: Path, run_id: str | None,
+                      until: datetime, history: Any) -> dict:
+        capture, summary = context["capture"], context["summary"]
+        if (summary is None or root.resolve() != context["root"] or history is not capture["history"]
+                or run_id != summary["run_id"] or until != summary["end"]
+                or summary["start"] != capture["until"] or until <= capture["until"]):
+            raise NotRun("복원·진행 기록과 분기 root·run_id·history·관측 창이 다르다")
+        self._check_history(capture)
+        parent = capture["proof"]
+        # root-local 사슬은 독립 검증. 명시적 외부 부모는 기존 정확한 머리 검사로만 해소한다.
+        proof = verify_event_run(root, run_id)
+        if proof.get("status") != "ok":
+            proof = verify_event_run(root, run_id, history_evidence=parent)
+            if proof.get("status") != "ok":
+                raise NotRun(f"이벤트 원시 읽기 근거 미충족: {proof.get('reason')}")
+            local_ids = set(proof["verified_run_ids"]) - set(parent["verified_run_ids"])
+        else:
+            local_ids = set(proof["verified_run_ids"])
+            if local_ids & set(parent["verified_run_ids"]):
+                raise NotRun("분기와 history가 같은 실행 ID를 중복 주장한다")
+        rejections = {**parent["run_rejections"], **proof["run_rejections"]}
+        proof.update(verified_run_ids=sorted(rejections), run_rejections=rejections,
+                     chain_rejected_total=sum(rejections.values()),
+                     ancestor_rejected_total=sum(v for k, v in rejections.items() if k != run_id),
+                     history_head_run_id=parent["run_id"], history_link_status="pending_public_stream",
+                     history_link_method="controlled-snapshot-restore-advance-events-v1",
+                     snapshot_reference=context["snapshot_reference"], branch_run_ids=sorted(local_ids),
+                     snapshot_until=capture["until"].isoformat(),
+                     summary_start=summary["start"].isoformat(), summary_end=until.isoformat())
+        return proof
+
+    def read(self, root: Path, until: datetime, history: Any = None, *, run_id: str | None = None) -> Any:
+        """일반 파일 경로는 정확한 부모, 통제된 복원 분기는 공개 API 전량 읽기를 함께 요구한다."""
+        root = Path(root)
+        context = self._active_branch
+        self._active_branch = None  # 실패·오입력·중간 오류 뒤 같은 연결을 재사용하지 않는다.
+        proof = {"status": "not_run", "reason": "실행 ID 미제공", "verified_run_ids": []}
+        history_proof = history.attrs.get("run_read_evidence") if history is not None else None
+        if history is not None and (run_id is None or not isinstance(history_proof, Mapping)
+                                    or history_proof.get("status") != "ok"):
+            raise NotRun("분기 실행 ID와 검증된 history 머리 근거가 필요하다")
+        if context is not None:
+            proof = self._branch_proof(context, root, run_id, until, history)
+        elif run_id is not None:
+            proof = verify_event_run(root, run_id, history_evidence=history_proof)
+            if proof.get("status") != "ok":
+                raise NotRun(f"이벤트 원시 읽기 근거 미충족: {proof.get('reason')}")
+        try:
+            observed_hashes = []
+            if context is not None:
+                from src.measurement.sink import read_events
+                raw_hashes = [event_content_hash(row) for row in read_events(root)]
+                expected_content = event_content_digest(context["capture"]["raw_hashes"] + raw_hashes)
+
+            def checked_stream():
+                for record in sim.events(until):
+                    if context is not None:
+                        observed_hashes.append(event_content_hash(record))
+                    yield record
+
+            if self._load_events is None:
+                frame = frame_from_stream(checked_stream())
+            else:
+                if context is not None:
+                    for _ in checked_stream():
+                        pass  # 전량 정상 종료가 필수. 일부만 소비하거나 예외를 삼키지 않는다.
+                if proof.get("status") == "ok" and not proof.get("fingerprints") and proof.get("raw_rows") == 0:
+                    frame = self._load_events(root, allow_verified_empty=True)
+                else:
+                    frame = self._load_events(root)
+            self._unchanged_files(root, proof)
+            if context is not None:
+                actual_content = event_content_digest(observed_hashes)
+                if actual_content != expected_content:
+                    raise NotRun("공개 이벤트 전량이 검증된 history·분기 내용과 다르다")
+                self._check_history(context["capture"])
+                # 읽기 사이 실행 기록도 바뀌지 않았는지 같은 검증으로 확인한다.
+                if self._branch_proof(context, root, run_id, until, history) != proof:
+                    raise NotRun("분기 읽기 도중 실행 근거가 바뀌었다")
+                proof["history_link_status"] = "ok"
+                proof["public_stream_complete"] = True
+                proof["public_stream_content"] = actual_content
+                proof["history_content"] = context["capture"]["raw_content"]
+        except (OSError, ValueError) as error:
+            raise NotRun(f"이벤트 읽기를 완료하지 못했다: {type(error).__name__}: {error}") from error
+        if history is not None and self._load_events is not None:
+            frame = _pd().concat([history, frame], ignore_index=True)
+        frame.attrs.update(run_read_evidence=proof, verified_run_ids=proof.get("verified_run_ids", []))
+        if history is None and proof.get("status") == "ok":
+            self._last_read = {"history": frame, "until": until, "signature": self._frame_signature(frame),
+                               "proof": json.loads(json.dumps(proof))}
+        return frame
 
 
 def observed_values(frame: Any, column: str) -> list[Any]:
@@ -588,19 +767,50 @@ def s1_inputs(events: Any, index_time: datetime, population: Any, eligible: Any)
     }
 
 
-def purchase_generated(metrics: Mapping[str, Any] | None) -> tuple[bool, str]:
-    """이 시뮬레이터 판이 purchase 를 만드는가 — 본선 `sim.metrics` 의 `events.purchase` 상태로 판단한다.
+def purchase_generated(metrics: Mapping[str, Any] | None) -> tuple[bool | None, str]:
+    """해당 세계의 원본 MetricValue로 구매 관측 상태를 판정한다 — JSON 변환 전 호출한다.
 
     `ok` 의 0 은 측정된 0 이고, `not_run` 이면 이 판이 만들지 않는 유형이다.
     """
     if metrics is None:
-        return False, "본선 sim.metrics 를 얻지 못했다"
+        return None, "sim.metrics 를 얻지 못했다"
     metric = metrics.get("events.purchase")
     if metric is None:
-        return False, "sim.metrics 에 events.purchase 가 없다"
-    status = getattr(metric.status, "value", metric.status)
-    reason = getattr(metric.reason_code, "value", metric.reason_code)
-    return status == "ok", f"events.purchase: {status}" + (f" / {reason}" if reason else "")
+        return None, "sim.metrics 에 events.purchase 가 없다"
+    status = getattr(metric, "status", None)
+    reason = getattr(metric, "reason_code", None)
+    status = getattr(status, "value", status)
+    reason = getattr(reason, "value", reason)
+    generated = True if status == "ok" else False if status == "not_run" else None
+    return generated, f"events.purchase: {status}" + (f" / {reason}" if reason else "")
+
+
+def outcome_observation(summary: Any, raw_root: Path, metrics: Mapping[str, Any] | None,
+                        read_evidence: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """공개 RunSummary와 같은 실행의 측정 기록을 읽어 decision에 전달한다 (#179)."""
+    from src.measurement import sink
+
+    run_id = getattr(summary, "run_id", None)
+    rejected, detail = None, "같은 실행의 읽을 수 있는 기록이 정확히 하나 필요하다"
+    try:
+        matches = [r for r in sink.run_records(raw_root)
+                   if isinstance(r, Mapping) and isinstance(run_id, str) and r.get("run_id") == run_id]
+        if len(matches) == 1 and "unreadable" not in matches[0]:
+            value = matches[0].get("rejected")
+            if type(value) is int and value >= 0:
+                rejected, detail = value, None
+    except (OSError, ValueError, TypeError) as error:
+        detail = f"측정 실행 기록 읽기 실패: {type(error).__name__}: {error}"
+    generated, purchase_detail = purchase_generated(metrics)
+    if read_evidence is None:
+        read_evidence = verify_event_run(raw_root, run_id)
+    return {"start": getattr(summary, "start", None), "end": getattr(summary, "end", None),
+            "run_id": run_id, "rejected": rejected, "write_detail": detail,
+            "read_complete": (read_evidence.get("status") == "ok" and read_evidence.get("run_id") == run_id
+                              and read_evidence.get("root") == str(Path(raw_root).resolve())
+                              and type(read_evidence.get("rejected")) is int and read_evidence["rejected"] == rejected),
+            "read_detail": read_evidence.get("reason"), "root": str(Path(raw_root).resolve()),
+            "purchase_generated": generated, "purchase_detail": purchase_detail}
 
 
 def margin_rate_basis(metrics: Mapping[str, Any] | None) -> tuple[float | None, dict[str, Any]]:
@@ -1072,26 +1282,9 @@ def _segment_summary(segments: Any, scores: Mapping[str, Any]) -> dict[str, Any]
 
 
 def _outcome_metrics(outcomes: Any, population: Any) -> dict[str, Any]:
-    """이벤트 기반 결과 집계 — 모집단은 Eligible(t2) 고객이다(DR-234)."""
-    frame = outcomes.reindex(population)
-    observed = frame.dropna(how="all")
-    n = int(len(observed))
-    result: dict[str, Any] = {
-        "population_definition": ELIGIBLE_DEFINITION + " — t2 기준",
-        "n_population": int(len(population)),
-        "n_with_outcome": n,
-        "n_outcome_missing": int(len(population) - n),
-    }
-    if "churn" in observed:
-        churn = float(observed["churn"].mean()) if n else None
-        result["churn_rate"] = churn
-        result["retention_rate"] = None if churn is None else 1.0 - churn
-    if "revenue" in observed:
-        revenue = float(observed["revenue"].sum()) if n else None
-        result["revenue_krw"] = revenue
-        result["revenue_per_customer_krw"] = revenue / n if n else None
-    if "purchases" in observed:
-        result["purchases"] = float(observed["purchases"].sum()) if n else None
+    """Eligible(t2) 모집단을 전달하고 필드 계산은 decision에 위임한다(DR-234·#179)."""
+    result = decision_fn("summarize_outcomes")(outcomes, population)
+    result["population_definition"] = ELIGIBLE_DEFINITION + " — t2 기준"
     return result
 
 
@@ -1129,13 +1322,15 @@ def run(config: SprintConfig) -> Path:
                 raise NotRun(f"프로파일 {config.profile!r} 의 권장 warmup 을 모른다 — --warmup-days 필요")
             sim.init(config.seed, config.num_customers, config.profile, output_root=main_root)
             summary = sim.advance(warmup)
+            ctx["warmup_summary"] = summary
             ctx["t1"] = summary.end
             ctx["timeline"]["start"] = summary.start
             ctx["timeline"]["t1"] = summary.end
 
         with log.stage("read_events_t1", requires=("simulate_warmup",)):
             skip_if_not_run(log, "read_events_t1")
-            ctx["events_t1"] = reader.read(main_root, ctx["t1"])
+            ctx["events_t1"] = reader.read(main_root, ctx["t1"], run_id=ctx["warmup_summary"].run_id)
+            ctx.setdefault("event_read_evidence", {})["t1"] = ctx["events_t1"].attrs.get("run_read_evidence")
             _log(f"  이벤트 {len(ctx['events_t1']):,}건 (< t1)")
 
         # 2. 탐색 RCT -------------------------------------------------------
@@ -1166,6 +1361,7 @@ def run(config: SprintConfig) -> Path:
             skip_if_not_run(log, "features_t1")
             build = decision_fn("build_feature_table")
             ctx["X1"] = build(ctx["events_t1"], ctx["t1"])
+            ctx["X1"].attrs["event_read_evidence"] = ctx["event_read_evidence"]["t1"]
             _log(f"  Feature(t1) {ctx['X1'].shape}")
         ctx["simulator_version"] = observed_values(ctx.get("events_t1"), "simulator_version")
         ctx["random_seed"] = observed_values(ctx.get("events_t1"), "random_seed")
@@ -1179,27 +1375,49 @@ def run(config: SprintConfig) -> Path:
                                   kind="exploration_rct", includes_control=True)
             assignment_files["rct"] = rct_file
             summary = sim.advance(LABEL_WINDOW_DAYS)
+            ctx["rct_summary"] = summary
             ctx["t2"] = summary.end
             ctx["timeline"]["t2"] = summary.end
 
         with log.stage("read_events_t2", requires=("simulate_rct",)):
             skip_if_not_run(log, "read_events_t2")
-            ctx["events_t2"] = reader.read(main_root, ctx["t2"])
+            ctx["events_t2"] = reader.read(main_root, ctx["t2"], run_id=ctx["rct_summary"].run_id)
+            ctx.setdefault("event_read_evidence", {})["t2"] = ctx["events_t2"].attrs.get("run_read_evidence")
             _log(f"  이벤트 {len(ctx['events_t2']):,}건 (< t2)")
             ctx["event_types_t2"] = event_count_by_type(ctx["events_t2"])
             # 본선 세계가 활성인 지금 확인한다 — 분기 뒤에는 이 세계로 돌아오지 않는다.
+            # B1: 계획 이익률·S1의 과거 구매 입력은 기존 전체 이력 창을 보존한다.
             try:
                 main_metrics = sim.metrics(ctx["timeline"]["start"], ctx["t2"])
-            except Exception as error:  # noqa: BLE001 — 사유를 남기고 '구매 미생성'으로 다룬다
+            except Exception as error:  # noqa: BLE001 — 사유를 남기고 구매 관측 불명으로 다룬다
                 main_metrics = None
-                _log(f"  본선 sim.metrics 실패: {type(error).__name__}: {error}")
+                _log(f"  본선 이력 sim.metrics 실패: {type(error).__name__}: {error}")
             ctx["purchase_generated"], ctx["purchase_detail"] = purchase_generated(main_metrics)
             ctx["margin_rate"], ctx["margin_basis"] = margin_rate_basis(main_metrics)
+            # 라벨 구매 상태는 해당 42일 창의 별도 원본으로 확인한다. 이력 창에 덮어쓰지 않는다.
+            try:
+                label_metrics = sim.metrics(ctx["t1"], ctx["t2"])
+            except Exception as error:  # noqa: BLE001 — 라벨만 미확정으로 남긴다
+                label_metrics = None
+                _log(f"  본선 라벨 sim.metrics 실패: {type(error).__name__}: {error}")
+            ctx["main_metric_windows"] = {
+                "history": {"start": ctx["timeline"]["start"], "end": ctx["t2"],
+                            "uses": ["margin_rate", "s1_purchase_gate"],
+                            "purchase_generated": ctx["purchase_generated"]},
+                "label": {"start": ctx["t1"], "end": ctx["t2"], "uses": ["Y1_purchase_observation"],
+                          "purchase_generated": purchase_generated(label_metrics)[0]},
+            }
+            ctx["outcome_observation"] = outcome_observation(
+                ctx["rct_summary"], main_root, label_metrics, ctx["events_t2"].attrs.get("run_read_evidence"))
 
         with log.stage("outcomes_t1", requires=("read_events_t2",)):
             skip_if_not_run(log, "outcomes_t1")
             build_outcomes = decision_fn("build_outcomes")
-            ctx["Y1"] = build_outcomes(ctx["events_t2"], ctx["t1"], window_days=LABEL_WINDOW_DAYS)
+            ctx["Y1"] = build_outcomes(ctx["events_t2"], ctx["t1"], window_days=LABEL_WINDOW_DAYS,
+                                       observation=ctx["outcome_observation"], allow_incomplete=True)
+            ctx["label_observation"] = ctx["Y1"].attrs.get("outcome_observation", {})
+            if ctx["label_observation"].get("status") != "ok":
+                raise NotRun(f"본선 라벨 관측 근거 미충족: {ctx['label_observation']}")
 
         with log.stage("training_set", requires=("rct_assign", "features_t1", "outcomes_t1")):
             skip_if_not_run(log, "training_set")
@@ -1250,9 +1468,14 @@ def run(config: SprintConfig) -> Path:
                                 "arm_counts": dict(sorted(Counter(ctx["treatment"].tolist()).items()))})
             if not two_classes(retention):
                 raise NotRun("retention 라벨이 한 값뿐이다 — CATE 추정 불가 (구매 이벤트 유무 확인)")
-            evaluation = decision_fn("evaluate_uplift_models")(
-                ctx["X_rct"], ctx["treatment"], retention, config.seed
-            )
+            try:
+                risk_factory = decision_fn("make_risk_model_factory")(config.seed)
+            except NotRun:
+                risk_factory = None  # 위험도 기준선만 not_run, 정상 S/T/X는 유지한다.
+            evaluation = call_by_name(decision_fn("evaluate_uplift_models"), {
+                "X": ctx["X_rct"], "treatment": ctx["treatment"], "y": retention,
+                "seed": config.seed, "risk_model_factory": risk_factory,
+            })
             uplift_eval.update(evaluation)  # n · arms · ate · models … (대시보드 UpliftEval)
             fit = decision_fn("fit_uplift")
             params = inspect.signature(fit).parameters
@@ -1316,6 +1539,7 @@ def run(config: SprintConfig) -> Path:
         with log.stage("features_t2", requires=("read_events_t2",)):
             skip_if_not_run(log, "features_t2")
             ctx["X2"] = decision_fn("build_feature_table")(ctx["events_t2"], ctx["t2"])
+            ctx["X2"].attrs["event_read_evidence"] = ctx["event_read_evidence"]["t2"]
             _log(f"  Feature(t2) {ctx['X2'].shape}")
 
         scores: dict[str, Any] = {}
@@ -1384,9 +1608,9 @@ def run(config: SprintConfig) -> Path:
                 segments_out["segments_summary"] = _segment_summary(seg, scores)
                 segments_out["segment_stats_status"] = {"status": "not_run", "reason": str(reason)}
 
-        with log.stage("snapshot_t2", requires=("simulate_rct",)):
+        with log.stage("snapshot_t2", requires=("simulate_rct", "read_events_t2")):
             skip_if_not_run(log, "snapshot_t2")
-            ctx["snapshot"] = sim.snapshot()
+            ctx["snapshot"] = reader.snapshot(ctx["events_t2"], ctx["t2"])
 
         # 분기 결과 집계의 모집단 = Eligible(t2) — 전략이 배정할 수 있는 고객과 같다(DR-234).
         population = ctx.get("eligible_t2")
@@ -1419,7 +1643,7 @@ def run(config: SprintConfig) -> Path:
                     entry["budget_krw"] = budget
                     assignments = dict(call_plan(strategy, scores, budget, costs))
                 branch_root = branch_raw_root(out, strategy)
-                sim.restore(ctx["snapshot"], output_root=branch_root)
+                reader.restore(ctx["snapshot"], output_root=branch_root)
                 if assignments:
                     sim.apply_treatment(assignments)
                 strategy_file = write_assignment_file(
@@ -1428,7 +1652,7 @@ def run(config: SprintConfig) -> Path:
                     note="plan 이 고른 처치 대상만(T0 미포함). 같은 t2 스냅샷의 분기 — RCT 배정표와 섞지 않는다",
                 )
                 assignment_files["strategies"][strategy] = strategy_file
-                summary = sim.advance(LABEL_WINDOW_DAYS)
+                summary = reader.advance(LABEL_WINDOW_DAYS)
                 ctx["timeline"]["end"] = summary.end
                 counts = Counter(assignments.values())
                 entry["n_assigned"] = len(assignments)
@@ -1440,11 +1664,35 @@ def run(config: SprintConfig) -> Path:
                         "고객당 계획 비용 × 배정 수 — 쿠폰 전량 사용 가정의 상한, 캠페인 고정비 제외. 실집행 비용이 아니다"
                     )
                 entry["event_count"] = summary.event_count
-                entry["sim_metrics"] = {
-                    k: mc.metric_to_json(v) for k, v in sim.metrics(ctx["t2"], summary.end).items()
+                try:
+                    raw_metrics = sim.metrics(ctx["t2"], summary.end)
+                except Exception as error:  # noqa: BLE001 — 독립 측정값은 이어서 계산한다
+                    raw_metrics = None
+                    entry["sim_metrics_error"] = f"{type(error).__name__}: {error}"
+                generated, detail = purchase_generated(raw_metrics)
+                entry["purchase_generated"] = {"value": generated, "detail": detail}
+                try:
+                    events = reader.read(branch_root, summary.end, history=ctx["events_t2"], run_id=summary.run_id)
+                    read_evidence = events.attrs.get("run_read_evidence")
+                except NotRun as reason:
+                    events = ctx["events_t2"]  # 과거 이력으로 진단 행만 보존한다. 관측 불명 라벨은 만들지 않는다.
+                    read_evidence = {"status": "not_run", "run_id": summary.run_id, "reason": str(reason)}
+                observation = outcome_observation(summary, branch_root, raw_metrics, read_evidence)
+                entry["event_read_evidence"] = read_evidence
+                observation_status = outcome_observation_status(
+                    ctx["t2"], LABEL_WINDOW_DAYS, observation)
+                # 측정 계산은 그대로 보존하되 같은 저장 자료를 쓰는 정식 입력은 창·쓰기 성공이 필요하다.
+                economics_observed = (observation_status["label_window_complete"]
+                                      and observation_status["writing_complete"] and observation_status["read_complete"])
+                entry["economics_input_observation"] = {
+                    "status": "ok" if economics_observed else "not_run",
+                    "reason": None if economics_observed else "라벨 창 또는 같은 실행의 쓰기 근거 미충족",
+                    "observation": observation_status,
                 }
+                entry["sim_metrics"] = {k: mc.metric_to_json(v) for k, v in (raw_metrics or {}).items()}
                 # 실측 기여이익 — 이 분기 세계가 활성인 지금 묶음을 받는다(다음 restore 전에, DR-169).
-                entry["measured_economics"] = branch_economics(branch_root, summary.end)
+                entry["measured_economics"] = (branch_economics(branch_root, summary.end)
+                    if observation_status["read_complete"] else {"status": "not_run", "reason": "원시 이벤트 읽기 근거 미충족"})
 
                 def sim_value(key: str) -> Any:
                     metric = entry["sim_metrics"].get(key, {})
@@ -1461,13 +1709,14 @@ def run(config: SprintConfig) -> Path:
                     "planned_treatment_cost_krw": entry.get("planned_cost_krw"),
                 }
                 for key in ("revenue", "marketing_cost", "contribution_profit", "churn_rate"):
-                    metrics[f"sim_{key}"] = sim_value(key)
+                    metrics[f"sim_{key}"] = sim_value(key) if economics_observed else None
                 for key in MEASURED_KEYS:
-                    metrics[f"measured_{key}"] = measured_value(entry["measured_economics"], key)
+                    metrics[f"measured_{key}"] = (measured_value(entry["measured_economics"], key)
+                                                if economics_observed else None)
                 try:
                     build_outcomes = decision_fn("build_outcomes")
-                    events = reader.read(branch_root, summary.end, history=ctx["events_t2"])
-                    outcomes = build_outcomes(events, ctx["t2"], window_days=LABEL_WINDOW_DAYS)
+                    outcomes = build_outcomes(events, ctx["t2"], window_days=LABEL_WINDOW_DAYS,
+                                              observation=observation, allow_incomplete=True)
                     if strategy == "S0":
                         # temporal holdout 은 Feature(t2) 고객으로 평가한다 — 집계 모집단과 따로다(#179 범위)
                         ctx["S0_outcomes"] = outcomes
@@ -1522,7 +1771,16 @@ def run(config: SprintConfig) -> Path:
             skip_if_not_run(log, "churn_temporal_holdout")
             if "S0_outcomes" not in ctx:
                 raise NotRun("S0 분기의 이벤트 결과가 없다")
+            if ctx["S0_outcomes"].attrs.get("outcome_observation", {}).get("status") != "ok":
+                raise NotRun("S0 분기의 구매 라벨 관측 근거가 미충족이다")
+            audit = decision_fn("temporal_population_audit")(
+                *ctx["churn_train"], ctx["X2"], ctx["S0_outcomes"]["churn"],
+                training_treatment=ctx["treatment"], evaluation_prior_treatment=ctx["treatment"],
+            )
+            churn_eval["temporal_population_audit"] = audit
             holdout_y = ctx["S0_outcomes"]["churn"].reindex(ctx["X2"].index).dropna()
+            if holdout_y.empty:
+                raise NotRun("S0 분기의 유효한 churn 라벨이 없다")
             holdout_X = ctx["X2"].loc[holdout_y.index]
             X_train, y_train = ctx["churn_train"]
             pool = {"model": ctx["churn_model"], "X_train": X_train, "y_train": y_train,
@@ -1530,6 +1788,7 @@ def run(config: SprintConfig) -> Path:
             if "churn_best_name" in ctx:
                 pool["model_factory"] = ctx["churn_best_name"]
             holdout = call_by_name(decision_fn("evaluate_temporal_holdout"), pool)
+            holdout = {**holdout, "population_audit": audit}
             churn_eval["temporal_holdout"] = holdout
             # 대시보드 ChurnModel.temporal_holdout — 같은 이름의 모델 행에 지표만 붙인다
             meta_keys = {"name", "scheme", "n_train", "n_test", "pos_rate_train", "pos_rate_test", "threshold"}
@@ -1599,6 +1858,9 @@ def run(config: SprintConfig) -> Path:
             "planning_costs_krw": costs,
             "planning_costs_source": costs_source,
             "purchase_generated": {"value": ctx.get("purchase_generated"), "detail": ctx.get("purchase_detail")},
+            "label_observation": ctx.get("label_observation"),
+            "main_metric_windows": ctx.get("main_metric_windows"),
+            "event_read_evidence": ctx.get("event_read_evidence", {}),
             "margin_rate": ctx.get("margin_basis") or {"status": "not_run", "reason": "본선 단계에 도달하지 않았다"},
             "feature_attrs": {
                 key: {k: ctx[key].attrs.get(k) for k in ("index_time", "population_scope", "incomplete_windows")}
