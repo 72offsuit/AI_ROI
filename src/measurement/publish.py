@@ -731,7 +731,7 @@ _KPI_META: Mapping[str, dict[str, object]] = {
         "formula": "|{c : (days_since_last_purchase(c,D) ≥ no_purchase_days) "
                    "rule_operator (days_since_last_access(c,D) ≥ no_login_days)}| / |P_buyer(D)|",
         "definition_ref": "kpi-definition-v1.md §4",
-        "source_events": ["purchase", "session_start"],
+        "source_events": ["purchase", "session_start", "return_visit"],
     },
     "retention_rate": {
         "layer": "customer_kpi", "population": "P_buyer",
@@ -739,7 +739,7 @@ _KPI_META: Mapping[str, dict[str, object]] = {
         "denominator_definition": "구매 이력 보유 고객 수 (churn_rate 와 동일 모집단)",
         "formula": "1 − churn_rate",
         "definition_ref": "kpi-definition-v1.md §4",
-        "source_events": ["purchase", "session_start"],
+        "source_events": ["purchase", "session_start", "return_visit"],
     },
     "cohort_retention_rate": {
         "layer": "customer_kpi", "population": "cohort",
@@ -764,7 +764,7 @@ _KPI_META: Mapping[str, dict[str, object]] = {
         "denominator_definition": "D−L 시점 이탈 고객 수",
         "formula": "|{c : state(c,D−L)=churn ∧ purchase ∈ (D−L,D]}| / |{c : state(c,D−L)=churn}|",
         "definition_ref": "kpi-definition-v1.md §4",
-        "source_events": ["purchase", "session_start"],
+        "source_events": ["purchase", "session_start", "return_visit"],
     },
     "purchase_frequency": {
         "layer": "customer_kpi", "population": "P_buyer",
@@ -910,7 +910,7 @@ _DERIVED_META: dict[str, object] = {
     "window": {"direction": "point_in_time", "label": "index_date 시점 상태"},
     "denominator_definition": "분모 없음 (합계)",
     "definition_ref": "kpi-definition-v1.md §6.1 · 리드 판정 G-8",
-    "source_events": ["purchase", "session_start"],
+    "source_events": ["purchase", "session_start", "return_visit"],
 }
 
 

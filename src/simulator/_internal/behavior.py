@@ -14,6 +14,11 @@ PRODUCED_EVENT_TYPES = (
     "coupon_exposed",
     "coupon_clicked",
     "coupon_use",
+    # #198: 부수 이벤트 4종. 규칙은 config behavior.aux_events 와 engine(_search·_due_reviews·_schedule_cs).
+    "search",
+    "return_visit",
+    "review",
+    "cs_contact",
 )
 
 ACTIONS = ("page_view", "product_view", "add_to_cart", "remove_from_cart")

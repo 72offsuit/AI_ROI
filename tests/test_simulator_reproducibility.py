@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import unittest
 from collections import defaultdict
 from unittest import mock
@@ -9,7 +10,7 @@ from src.measurement import sink as sk
 from src.simulator import api
 from src.simulator._internal import behavior, rng
 from src.simulator._internal import world as world_state
-from tests.test_simulator_support import SimulatorCase, event_digest, root_digest
+from tests.test_simulator_support import REPO_ROOT, SimulatorCase, event_digest, root_digest
 
 GOLDEN_SEED = 42
 GOLDEN_CUSTOMERS = 50
@@ -63,6 +64,13 @@ GOLDEN: dict[str, tuple[str, str, int]] = {
         "b8199d8a01c7c5bd1b47a93a1b77808d2cd5c3631f08f3a7d155690c0940fe15",
         "27e4c11d8b7885275c9c24fa1b106e472f3809f939cab9e5fd4c858896a87f13",
         1213,
+    ),
+    # #198(sim-gen-v6): 부수 이벤트 4종이 더해진다. 배율을 0 으로 두면 sim-0.7 과 같다
+    # (TestAuxEventsLeaveEarlierBehaviorUnchanged).
+    "sim-0.8": (
+        "2ec052af891d27d975aa5b76203299673ff4348d3d0eadc9842d668a86662c3f",
+        "a85b1319ed11ad0e02c63a4d6441c15c6cacf8e3a97059dd48051786789cd9cf",
+        1342,
     ),
 }
 # 행동은 그대로이고 판 라벨만 바뀐 판 → 행동 기준 판. S2 는 생성(페르소나·Trait)만 더하고 이벤트 규칙을
@@ -247,6 +255,84 @@ class TestBehaviorUnchangedSinceBaseline(SimulatorCase):
         event_sha, _, count = GOLDEN[baseline]
         self.assertEqual(count, len(relabeled))
         self.assertEqual(event_sha, event_digest(relabeled))
+
+
+class TestAuxEventsLeaveEarlierBehaviorUnchanged(SimulatorCase):
+    """#198 은 기존 12종의 추첨 자리를 밀지 않는다 — 부수 이벤트는 전용 스트림에서만 뽑는다.
+
+    부수 이벤트 배율을 0 으로 둔 실험 config 로 돌리고 return_visit 을 session_start 로, 판 라벨을 sim-0.7 로
+    되돌리면 sim-0.7 골든 이벤트와 바이트까지 같아야 한다. 새 이벤트가 하나도 나지 않아 고객별 seq·event_id 도
+    그대로다. 판을 올릴 때 이 시험의 기준 판은 #198 직전 판으로 둔다.
+    """
+
+    BASELINE = "sim-0.7"
+
+    def test_zero_scales_and_relabeled_openers_match_the_previous_golden(self) -> None:
+        document = json.loads((REPO_ROOT / "config" / "simulator_config.yaml").read_text(encoding="utf-8"))
+        aux = document["behavior"]["aux_events"]
+        for key in ("search_scale_pct", "review_scale_pct", "cs_scale_pct"):
+            aux[key] = 0
+        config = self.fresh_root("config") / "aux-off.yaml"
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_text(json.dumps(document), encoding="utf-8")
+        root = self.fresh_root("out")
+        api.init(GOLDEN_SEED, GOLDEN_CUSTOMERS, "smoke", root, hidden_root=self.hidden, config_path=config)
+        api.advance(GOLDEN_DAYS)
+        records = list(sk.read_events(root))
+        self.assertTrue(any(r["event_type"] == "return_visit" for r in records), "되돌릴 return_visit 이 없다")
+        relabeled = [
+            {
+                **r,
+                "event_type": "session_start" if r["event_type"] == "return_visit" else r["event_type"],
+                "simulator_version": self.BASELINE,
+            }
+            for r in records
+        ]
+        event_sha, _, count = GOLDEN[self.BASELINE]
+        self.assertEqual(count, len(relabeled))
+        self.assertEqual(event_sha, event_digest(relabeled))
+
+
+class TestAuxEventsDoNotShiftExistingEventsAtFullScale(SimulatorCase):
+    """배율 0 비교(위)는 "배율이 0 보다 클 때만 공유 스트림에서 뽑는" 회귀를 잡지 못한다.
+
+    기본 배율(100)과 배율 0 으로 처치까지 건 같은 세계를 돌려, 부수 이벤트를 걷어낸 투영이 같은지 본다. 걷어낼 때
+    `return_visit` 은 `session_start` 로 되돌리고, 새 이벤트 때문에 달라지는 `event_id`(고객별 seq)와
+    `session_duration`(세션의 마지막 이벤트에 실린다)은 비교에서 뺀다.
+    """
+
+    AUX = frozenset({"search", "review", "cs_contact"})
+    CUSTOMERS = 60
+
+    def run_projection(self, config) -> list[dict[str, object]]:
+        root = self.fresh_root("out")
+        api.init(11, self.CUSTOMERS, "small", root, hidden_root=self.fresh_root("hidden"), config_path=config)
+        api.advance(60)
+        arms = ("T0", "T1", "T2", "T3", "T4")
+        api.apply_treatment({f"C{i:08d}": arms[i % 5] for i in range(1, self.CUSTOMERS + 1)})
+        api.advance(42)
+        projected = []
+        for record in sk.read_events(root):
+            if record["event_type"] in self.AUX:
+                continue
+            row = {k: v for k, v in record.items() if k not in ("event_id", "session_duration")}
+            if row["event_type"] == "return_visit":
+                row["event_type"] = "session_start"
+            projected.append(row)
+        return projected
+
+    def test_existing_events_are_identical_with_and_without_aux_events(self) -> None:
+        document = json.loads((REPO_ROOT / "config" / "simulator_config.yaml").read_text(encoding="utf-8"))
+        full = self.fresh_root("config") / "aux-full.yaml"
+        full.parent.mkdir(parents=True, exist_ok=True)
+        full.write_text(json.dumps(document), encoding="utf-8")
+        for key in ("search_scale_pct", "review_scale_pct", "cs_scale_pct"):
+            document["behavior"]["aux_events"][key] = 0
+        off = full.parent / "aux-off.yaml"
+        off.write_text(json.dumps(document), encoding="utf-8")
+        with_aux = self.run_projection(full)
+        self.assertTrue(any(r["event_type"] == "coupon_use" for r in with_aux), "처치 반응이 이 창에 없다")
+        self.assertEqual(self.run_projection(off), with_aux)
 
 
 class TestGenerationGolden(unittest.TestCase):

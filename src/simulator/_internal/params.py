@@ -73,6 +73,17 @@ class RepeatExposure:
 
 
 @dataclass(frozen=True)
+class AuxEvents:
+    """부수 이벤트 4종의 배율(`behavior.aux_events`, #198). 규칙은 config 의 note 와 DR-198-aux-events."""
+
+    search_scale_pct: int
+    search_intent_weight_pct: int
+    review_scale_pct: int
+    review_window_days: tuple[int, int]
+    cs_scale_pct: int
+
+
+@dataclass(frozen=True)
 class Product:
     product_id: str
     category: str
@@ -85,7 +96,7 @@ class Params:
 
     def __init__(self, config) -> None:  # GenerationConfig — 순환 import 를 피해 타입을 적지 않는다
         behavior = _block("behavior", dict(config.behavior), frozenset(
-            {"visit", "session", "purchase", "churn", "treatment"}
+            {"visit", "session", "purchase", "churn", "aux_events", "treatment"}
         ))
         visit = _block("behavior.visit", behavior["visit"], frozenset({"scale_pct", "max_daily_ppm"}))
         self.visit_scale_pct = _int("visit.scale_pct", visit["scale_pct"], 1, 1000)
@@ -151,6 +162,23 @@ class Params:
         # 재구매 게이트 탈락으로 시작한 이탈의 회복 hazard 배율(engine._day_start). 100 이면 일반 이탈과 같다.
         self.gate_recovery_scale_pct = _int(
             "churn.gate_recovery_scale_pct", churn["gate_recovery_scale_pct"], 0, 100
+        )
+
+        aux = _block("behavior.aux_events", behavior["aux_events"], frozenset({
+            "note", "search_scale_pct", "search_intent_weight_pct", "review_scale_pct", "review_window_days",
+            "cs_scale_pct",
+        }))
+        if not isinstance(aux["note"], str) or not aux["note"]:
+            raise TypeError("aux_events.note: 비지 않은 문자열이 아니다")
+        window = _pair("aux_events.review_window_days", aux["review_window_days"], 0)
+        # 상한이 없으면 대기 리뷰의 끝 시각이 상태 검증 범위(world.MAX_TIME_MS)를 넘어 저장한 상태를 다시 못 읽는다.
+        _int("aux_events.review_window_days[1]", window[1], window[0] + 1, 365)
+        self.aux_events = AuxEvents(
+            _int("aux_events.search_scale_pct", aux["search_scale_pct"], 0, 1000),
+            _int("aux_events.search_intent_weight_pct", aux["search_intent_weight_pct"], 0, 1000),
+            _int("aux_events.review_scale_pct", aux["review_scale_pct"], 0, 1000),
+            window,
+            _int("aux_events.cs_scale_pct", aux["cs_scale_pct"], 0, 1000),
         )
 
         treatment = _block("behavior.treatment", behavior["treatment"], frozenset({

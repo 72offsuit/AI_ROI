@@ -288,7 +288,20 @@ cart_abandon   ~ Bernoulli(cart_abandonment_propensity_i)   # 담고 미구매
 
 # ④ 부수 행동
 review     ~ Bernoulli(review_propensity_i)      구매 후 1~5일 내
-cs_contact ~ Bernoulli(cs_contact_propensity_i / 30)  일 단위</pre>
+cs_contact ~ Bernoulli(cs_contact_propensity_i / 30)  일 단위
+
+# ④ 구현 규칙 (#198, 리드 합의 2026-10-26 · 근거 docs/decisions/DR-198-aux-events.md)
+search       세션 시작 때 한 번 ~ Bernoulli(search_propensity_i × s_search × w_intent)
+             w_intent = 구매 의도 세션이면 w_search_intent, 아니면 1   (상한 1)
+             검색 세션의 전환 배수는 생성 모수가 아니라 실현 검증 항목이다
+return_visit 구매 뒤 첫 방문 세션을 session_start 대신 이 이벤트로 연다 (visit_count 이중 계산 방지)
+review       주문당 최대 1건 ~ Bernoulli(review_propensity_i × s_review), 당첨 주문의 한 상품
+             구매 시각부터 24시간 이상 144시간 미만(경과 1~5일, 날짜 차수가 아니다) 안의 첫 방문 세션을
+             여는 시각에 기록 — 그 안에 방문이 없으면 발생하지 않는다
+cs_contact   가입 이후 매일 ~ Bernoulli(cs_contact_propensity_i / 30 × s_cs), 세션 밖
+             s_search · w_search_intent · s_review · s_cs = config/simulator_config.yaml behavior.aux_events
+             (s_* 100% = 위 원문. #198 실측으로 s_review 40% · w_search_intent 175% 로 정했다 — 실효 확률이
+              원문과 다르다. 원문 문구는 리드 확인 뒤 고친다. 근거·실측: DR-198)</pre>
 
 <h3>3.5 시간에 따른 행동 변화 (PRD §26 필수)</h3>
 <p>감쇠 <code>decay_i(t)</code>가 걸린 고객은 다음 5개 지표가 <b>동시에</b> 움직인다. 이 변화가 곧 Behavioral Change Feature(§8)가 잡아내야 할 신호다.</p>

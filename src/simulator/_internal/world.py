@@ -16,9 +16,11 @@ from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 # #183(F11 보정): 관측 중 가입 고객의 생애 첫 구매 뒤 재구매 게이트가 생겨 이벤트가 바뀐다. 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
 # #183(sim-0.6): 구매 의향·이탈 onset·쿠폰 받기 보정, 반복 노출 감쇠, 게이트 탈락자 회복 분리로 이벤트가 바뀐다.
 # 고객 항목에 gate_churning(재구매 게이트 탈락으로 시작한 이탈 표시)이 생겨 상태 형식도 바뀐다.
-FORMAT_VERSION = "sim-state-v4"
 # #196(sim-0.7): Sleeping Dog 직접 경로(Negative 노출 즉시 onset)와 Negative 비율 배율 상향으로 처치 이후 이벤트가 바뀐다.
-SIMULATOR_VERSION = "sim-0.7"
+# #198(sim-0.8): 부수 이벤트 4종(search·return_visit·review·cs_contact)이 생겨 이벤트가 바뀐다. 고객 항목에
+# pending_reviews(구매 후 기록 대기 중인 리뷰)와 큐 종류 cs 가 생겨 상태 형식도 바뀐다.
+FORMAT_VERSION = "sim-state-v5"
+SIMULATOR_VERSION = "sim-0.8"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999
@@ -39,12 +41,13 @@ _TOP_KEYS = frozenset({
 _CUSTOMER_KEYS = frozenset({
     "customer_id", "signup_ms", "lifecycle", "persona", "hidden_traits", "cart", "recent_views",
     "session", "rfm", "assignments", "next_seq", "engagement", "churning", "checkout_seq", "promo",
-    "purchased", "gate_churning",
+    "purchased", "gate_churning", "pending_reviews",
 })
 # 공개 오류 메시지 정책: 숨은 필드의 이름·페르소나 id·Trait 값을 싣지 않는다(docs/persona_spec.md 5.3).
 # 메시지는 load_state 의 StateFormatError 로 시스템 팀까지 간다. 키 목록에서는 이 키들을 가린다.
-# gate_churning 은 재구매 성향 Trait 에서 정해진 결과라 같은 취급을 한다.
-_HIDDEN_KEYS = frozenset({"persona", "hidden_traits", "gate_churning"})
+# gate_churning 은 재구매 성향 Trait 에서 정해진 결과라 같은 취급을 한다. pending_reviews 도 리뷰 성향 Trait 의
+# 추첨 결과(앞으로 낼 리뷰)라 같다.
+_HIDDEN_KEYS = frozenset({"persona", "hidden_traits", "gate_churning", "pending_reviews"})
 _CART_KEYS = frozenset({"quantity", "last_change_ms", "unit_price"})
 _SESSION_KEYS = frozenset({
     "session_id", "start_ms", "last_activity_ms", "actions", "open", "intent", "stage", "order",
@@ -52,7 +55,7 @@ _SESSION_KEYS = frozenset({
 _SESSION_STAGES = frozenset({"browse", "checkout", "done"})
 _PROMO_KEYS = frozenset({"treatment_id", "at_ms", "campaign_id", "coupon_id", "claim", "clicked", "used"})
 _RFM_KEYS = frozenset({"order_count", "monetary", "last_purchase_ms", "last_visit_ms"})
-_QUEUE_KINDS = frozenset({"visit", "action", "treat"})
+_QUEUE_KINDS = frozenset({"visit", "action", "treat", "cs"})
 _TREATMENT_ID = re.compile(r"T[0-4]")
 _SESSION_ID = re.compile(r"S-(C\d{8})-\d{13}")
 
@@ -72,6 +75,9 @@ _BEHAVIOR_ALIASES = (
     ("abandon", "cart_abandonment_propensity"),
     ("loyalty", "brand_loyalty"),
     ("repurchase", "repurchase_propensity"),
+    ("search", "search_propensity"),
+    ("review", "review_propensity"),
+    ("cs", "cs_contact_propensity"),
 )
 
 
@@ -160,6 +166,7 @@ def _new_customer(
         "checkout_seq": 0,
         "promo": None,
         "purchased": [],
+        "pending_reviews": [],
     }
 
 
@@ -448,6 +455,16 @@ def _validate_customer(index: int, value: object, now: int, identity: _Identity)
     purchased = _list(f"{where}.purchased", customer["purchased"])
     if len(purchased) > params.active().recent_purchases_cap or any(p not in product_ids for p in purchased):
         raise _fail(f"{where}.purchased", "상한을 넘거나 카탈로그에 없는 상품이 있다")
+    # 숨은 필드라 이름을 싣지 않는다. 항목은 [주문 ID, 상품 ID, 기록 가능 시작 ms, 기록 가능 끝 ms(미포함)] 이다.
+    reviews = customer["pending_reviews"]
+    if not isinstance(reviews, list) or any(
+        not isinstance(entry, list) or len(entry) != 4 or not isinstance(entry[0], str)
+        or entry[1] not in product_ids
+        or any(isinstance(ms, bool) or not isinstance(ms, int) for ms in entry[2:])
+        or not 0 <= entry[2] < entry[3] <= MAX_TIME_MS
+        for entry in reviews
+    ):
+        raise _fail(where, "숨은 필드의 형식이 어긋난다")
     promo = customer["promo"]
     if promo is not None:
         promo = _keys(f"{where}.promo", promo, _PROMO_KEYS)

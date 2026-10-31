@@ -24,6 +24,8 @@
 
 `rule_operator` 의미: OR/AND 두 값만 둔다. "미접속" 은 스키마에 로그인 이벤트가 없으므로 마지막 `session_start`·`purchase` 중 늦은 날부터 센다.
 
+> 후속(#198, 2026-10-30): 시뮬레이터가 구매 뒤 첫 방문 세션을 `session_start` 대신 `return_visit` 으로 열게 되어, "미접속" 의 접속에 `return_visit` 을 더했다(`kpi._churn_elapsed`, 지표 `source_events`). 근거: `DR-198-aux-events.md`.
+
 ## 조사한 것
 
 | 출처 | 무엇을 말하나 | 우리 맥락에 얼마나 맞나 |
