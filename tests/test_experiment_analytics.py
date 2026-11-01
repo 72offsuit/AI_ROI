@@ -64,6 +64,71 @@ class TestFunnel(unittest.TestCase):
         self.assertTrue(all(s["step_conversion"] is None for s in r["steps"]))
 
 
+def _repurchase_journey(cid: str, opener: tuple[str, ...]) -> list[tuple[str, str, str]]:
+    """1일차 세션에서 첫 구매, 10일차 세션에서 재구매. 10일차 세션을 여는 이벤트만 `opener` 로 바꾼다."""
+    rows = [(cid, "2026-01-01 10:00", "session_start"), (cid, "2026-01-01 10:01", "product_view"),
+            (cid, "2026-01-01 10:02", "add_to_cart"), (cid, "2026-01-01 10:03", "checkout_start"),
+            (cid, "2026-01-01 10:04", "purchase")]
+    rows += [(cid, "2026-01-10 10:00", event_type) for event_type in opener]
+    rows += [(cid, "2026-01-10 10:01", "product_view"), (cid, "2026-01-10 10:02", "add_to_cart"),
+             (cid, "2026-01-10 10:03", "checkout_start"), (cid, "2026-01-10 10:04", "purchase")]
+    return rows
+
+
+@unittest.skipUnless(DEPS, REASON)
+class TestFunnelReturnVisit(unittest.TestCase):
+    """#255 — 방문 단계는 `session_start ∪ return_visit` 이다.
+
+    출처마다 `return_visit` 의 뜻이 다르다(#256). 시뮬레이터(#252)는 구매 뒤 첫 방문 세션을 `session_start`
+    **대신** `return_visit` 으로 열고, 커머스는 이전 세션이 있는 고객의 새 세션마다 둘을 **함께** 남긴다.
+    어느 쪽이든 창 안의 재구매 여정이 빠지지 않고, 함께 남긴 쪽도 방문을 두 번 세지 않아야 한다.
+    """
+
+    WINDOW = ("2026-01-05", "2026-01-20")  # 10일차 재구매 세션만 들어가는 창
+
+    def setUp(self) -> None:
+        self.sim = ev(_repurchase_journey("sim", ("return_visit",)))
+        self.commerce = ev(_repurchase_journey("commerce", ("session_start", "return_visit")))
+        self.both = pd.concat([self.sim, self.commerce], ignore_index=True)
+
+    def test_session_opened_by_return_visit_is_counted(self) -> None:
+        """#255 재현 — 고치기 전에는 시뮬레이터 방식 고객이 방문 단계부터 0 이었다."""
+        r = funnel(self.sim, *self.WINDOW)
+        self.assertEqual([1, 1, 1, 1, 1], [s["n"] for s in r["steps"]])
+
+    def test_both_sources_are_counted_in_window(self) -> None:
+        r = funnel(self.both, *self.WINDOW)
+        self.assertEqual([2, 2, 2, 2, 2], [s["n"] for s in r["steps"]])
+        self.assertEqual([2, 2, 2, 2, 2], [s["n_any"] for s in r["steps"]])
+        self.assertAlmostEqual(1.0, r["steps"][-1]["overall_conversion"])
+
+    def test_session_start_with_return_visit_is_one_visit(self) -> None:
+        """커머스 방식 — 한 세션에 두 이벤트가 있어도 방문 단계는 고객별 첫 시각 하나다."""
+        r = funnel(self.commerce, *self.WINDOW)
+        visit = r["steps"][0]
+        self.assertEqual((1, 1), (visit["n"], visit["n_any"]))
+        self.assertEqual([1, 1, 1, 1, 1], [s["n"] for s in r["steps"]])
+        self.assertAlmostEqual(1.0, r["steps"][1]["step_conversion"])
+
+    def test_whole_range_is_unchanged(self) -> None:
+        """관측 전 구간은 두 고객 모두 첫 세션이 `session_start` 라 고치기 전과 같다."""
+        r = funnel(self.both)
+        self.assertEqual([2, 2, 2, 2, 2], [s["n"] for s in r["steps"]])
+
+    def test_step_rows_list_their_event_types(self) -> None:
+        """`funnel.json` 단계 행은 그 단계로 세는 이벤트 유형을 목록으로 싣는다 — 단일 유형도 목록이다."""
+        r = funnel(self.both, *self.WINDOW)
+        self.assertEqual(["session_start", "return_visit"], r["steps"][0]["event_types"])
+        self.assertEqual([["product_view"], ["add_to_cart"], ["checkout_start"], ["purchase"]],
+                         [s["event_types"] for s in r["steps"][1:]])
+        json.dumps(r)  # 직렬화 가능해야 한다(analytics_report 가 그대로 쓴다)
+
+    def test_string_event_type_is_rejected(self) -> None:
+        """예전 형식(문자열 하나)을 넘기면 글자 단위로 쪼개져 조용히 0 이 된다 — 그 대신 거부한다."""
+        with self.assertRaises(TypeError):
+            funnel(self.both, steps=(("visit", "session_start"),))
+
+
 @unittest.skipUnless(DEPS, REASON)
 class TestCohort(unittest.TestCase):
     def test_retention_and_right_censoring(self) -> None:

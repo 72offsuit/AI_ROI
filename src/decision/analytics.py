@@ -27,14 +27,17 @@ import pandas as pd
 
 from src.measurement.schema import TIMEZONE
 
-#: 퍼널 단계. 순서가 곧 단계 순서다. 방문은 `session_start` 만 센다(`return_visit` 은
-#: 같은 방문의 재진입 표지라 단계 시작점으로 쓰면 이중 계산된다).
-FUNNEL_STEPS: tuple[tuple[str, str], ...] = (
-    ("visit", "session_start"),
-    ("product_view", "product_view"),
-    ("add_to_cart", "add_to_cart"),
-    ("checkout_start", "checkout_start"),
-    ("purchase", "purchase"),
+#: 퍼널 단계. 순서가 곧 단계 순서이고, 단계마다 그 단계로 세는 이벤트 유형의 목록을 둔다.
+#: 방문 = `session_start` ∪ `return_visit` (#255). 출처마다 `return_visit` 의 뜻이 다르다 —
+#: 커머스는 이전 세션이 있는 고객의 새 세션마다 `session_start` 와 **함께**, 시뮬레이터(#252)는 구매 뒤
+#: 첫 방문 세션을 `session_start` **대신** 연다. `session_start` 만 세면 후자의 세션(재구매 여정)이 빠진다.
+#: 퍼널은 고객별 첫 도달 시각만 쓰므로 둘을 함께 남기는 출처도 이중 계산되지 않는다. 정의 통일은 #256.
+FUNNEL_STEPS: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("visit", ("session_start", "return_visit")),
+    ("product_view", ("product_view",)),
+    ("add_to_cart", ("add_to_cart",)),
+    ("checkout_start", ("checkout_start",)),
+    ("purchase", ("purchase",)),
 )
 #: ANA-001 이 요구하는 경과 기간(월).
 ANA001_OFFSETS = (1, 3, 6, 12)
@@ -73,24 +76,29 @@ def _rate(num: int, den: int) -> float | None:
 
 
 def funnel(events: pd.DataFrame, start=None, end=None, *,
-           steps: Sequence[tuple[str, str]] = FUNNEL_STEPS) -> dict[str, Any]:
+           steps: Sequence[tuple[str, Sequence[str]]] = FUNNEL_STEPS) -> dict[str, Any]:
     """`[start, end)` 창의 구매 퍼널 — 단계별 고객 수와 전환율.
 
     **순서 퍼널**이다: 고객이 k 단계에 도달한 시각은 (k−1) 단계 도달 시각 **이후(같은 시각 포함)**
-    첫 k 단계 이벤트 시각이다. 장바구니 없이 구매만 있는 고객은 구매 단계에 들어가지 않는다.
+    첫 k 단계 이벤트 시각이다. 한 단계가 이벤트 유형 여럿을 받으면 그중 가장 이른 것이 도달 시각이다.
+    장바구니 없이 구매만 있는 고객은 구매 단계에 들어가지 않는다.
     순서를 따지지 않은 도달 수(`n_any`)도 함께 싣는다 — 둘의 차이가 크면 이벤트 순서나
     누락을 의심한다.
 
-    반환: ``{"window", "n_customers_in_window", "steps": [{step, event_type, n, n_any,
-    step_conversion, overall_conversion, drop_off}]}``. 분모가 0 이면 비율은 ``None`` 이다.
+    반환: ``{"window", "n_customers_in_window", "steps": [{step, event_types, n, n_any,
+    step_conversion, overall_conversion, drop_off}]}``. ``event_types`` 는 단일 유형이어도 목록이다.
+    분모가 0 이면 비율은 ``None`` 이다.
     """
     frame = _window(events, start, end)
     reached: pd.Series | None = None  # customer_id → 직전 단계 도달 시각
     rows: list[dict[str, Any]] = []
     first_n: int | None = None
     prev_n: int | None = None
-    for name, event_type in steps:
-        hits = frame.loc[frame["event_type"] == event_type, ["customer_id", "timestamp"]]
+    for name, event_types in steps:
+        if isinstance(event_types, str):
+            raise TypeError(f"퍼널 단계 {name!r} 의 이벤트 유형은 목록이어야 한다 — 문자열 {event_types!r}")
+        types = list(event_types)
+        hits = frame.loc[frame["event_type"].isin(types), ["customer_id", "timestamp"]]
         n_any = int(hits["customer_id"].nunique())
         if reached is None:
             reached = hits.groupby("customer_id")["timestamp"].min()
@@ -104,7 +112,7 @@ def funnel(events: pd.DataFrame, start=None, end=None, *,
             first_n = n
         step_conv = _rate(n, prev_n) if prev_n is not None else None
         rows.append({
-            "step": name, "event_type": event_type, "n": n, "n_any": n_any,
+            "step": name, "event_types": types, "n": n, "n_any": n_any,
             "step_conversion": step_conv,
             "overall_conversion": _rate(n, first_n),
             "drop_off": None if step_conv is None else 1.0 - step_conv,
@@ -113,7 +121,8 @@ def funnel(events: pd.DataFrame, start=None, end=None, *,
     return {
         "window": {"start": None if start is None else _ts(start).isoformat(),
                    "end": None if end is None else _ts(end).isoformat()},
-        "definition": "순서 퍼널 — k 단계 도달 = (k−1) 단계 도달 시각 이후 첫 k 단계 이벤트",
+        "definition": "순서 퍼널 — k 단계 도달 = (k−1) 단계 도달 시각 이후 첫 k 단계 이벤트 "
+                      "(단계의 event_types 중 가장 이른 것)",
         "n_customers_in_window": int(frame["customer_id"].nunique()),
         "steps": rows,
     }
