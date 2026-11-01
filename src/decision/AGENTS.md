@@ -37,7 +37,7 @@ Feature 이름이 `*_post_t0`로 끝나면 학습 로더가 차단한다.
 
 ## 봉인 (GATE 2)
 
-`strategies/rule_based.py`의 선정 규칙과 실집행 비용 `C_rule`은 GATE 2에서 확정한다. **AI 결과를 본 뒤 Baseline을 바꾸지 않는다** (SRS BASE-003). 기준선을 낮추면 Incremental Profit이 올라가지만 아무 의미가 없다.
+`strategies.py`의 S1 선정 규칙(`S1_RULE` · `plan_S1`, AI 결과 이전 커밋 `ce05a66` · 태그 `gate2-s1-rule`)과 `C_rule`(S1 계획 비용 합 — 쿠폰 전량 사용 상한, 캠페인 고정비 제외)은 GATE 2에서 확정한다(#170 · `docs/decisions/DR-170-c-rule-budget.md`). **AI 결과를 본 뒤 Baseline을 바꾸지 않는다** (SRS BASE-003). 기준선을 낮추면 Incremental Profit이 올라가지만 아무 의미가 없다.
 
 ## 하위 구조
 

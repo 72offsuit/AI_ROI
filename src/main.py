@@ -153,7 +153,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--mode", required=True, choices=list(MODES), help="실행할 범위 (아래 표)")
     parser.add_argument("--budget", type=int, default=None, metavar="KRW",
-                        help="S5 · What-if 예산(원) — optimize 필수, full 선택(S2~S5 예산. 없으면 C_rule = S1 계획 비용)")
+                        help="S5 · What-if 예산(원, 변동비 — 캠페인 고정비 제외) — optimize 필수, full 선택"
+                             "(S2~S5 예산. 없으면 C_rule = S1 계획 비용, S1 이 없으면 S2~S5 not_run)")
     parser.add_argument("--seed", type=int, default=None,
                         help="기본: config/experiment_config.yaml holdout.development_seed")
     parser.add_argument("--customers", type=int, default=None, help="기본: config/experiment_config.yaml run.num_customers")

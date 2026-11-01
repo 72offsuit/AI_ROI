@@ -94,10 +94,8 @@ RCT_CONTROL_SHARE = EXPERIMENT.rct.control_share  # T0 비율 · 나머지를 T1
 # 탐색 RCT 모집단 = t1 의 Eligible(아래 ELIGIBLE_*). 예전의 "t1 직전 90일 활동 고객"(active_days)은
 # 정본 모집단(#194)과 달라 없앴다 — DR-234.
 
-# 예산 기본값 — data_spec §12.2 설계 추정치 C_rule ≈ 8,833,000원(26,000명 기준)을 고객 수에
-# 비례해 환산한다. 정확한 C_rule 은 GATE 2 에서 S1 을 실측해 Lock 한다 — 이 값은 그 전의 추정이다.
-C_RULE_ESTIMATE_KRW = 8_833_000
-C_RULE_REFERENCE_CUSTOMERS = 26_000
+# 예산 — C_rule = S1(상한 없음) 배정의 계획 비용 합(쿠폰 전량 사용 상한 · 캠페인 고정비 제외)이다
+# (#170 · DR-170). S1 이 없으면 S2~S5 는 not_run 이다 — 설계 추정치로 메우지 않는다(같은 예산이 아니다).
 
 ECONOMIC_CONFIG = REPO_ROOT / "config" / "economic_config.yaml"
 # 대시보드가 docs/ 를 읽지 못하므로 있으면 결과 폴더로 사본을 둔다(없으면 not_run).
@@ -288,8 +286,11 @@ def call_by_name(fn: Callable[..., Any], pool: Mapping[str, Any]) -> Any:
 # ── 예산 · 비용 ─────────────────────────────────────────────────────────────
 
 
-def default_budget_krw(num_customers: int) -> int:
-    return round(C_RULE_ESTIMATE_KRW * num_customers / C_RULE_REFERENCE_CUSTOMERS)
+#: C_rule 의 정의(#170 · DR-170) — 산출물에 그대로 싣는다.
+C_RULE_DEFINITION = (
+    "C_rule = S1(상한 없음) 배정의 계획 비용 합 = Σ planning_costs(처치 단가 + 메시지) × 배정 수. "
+    "쿠폰 전량 사용 가정의 상한이고 캠페인 고정비는 넣지 않는다. S2~S5 도 같은 계획 비용으로 차감한다"
+)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -330,34 +331,91 @@ def plan_costs(basis: CostBasis | None) -> tuple[dict[str, float] | None, str]:
 
 
 def resolve_budget(explicit_krw: int | None, s1_entry: Mapping[str, Any] | None,
-                   basis: CostBasis | None, num_customers: int) -> dict[str, Any]:
-    """S2~S5 의 `plan` 예산. 기본은 **C_rule = S1(상한 없음) 배정의 계획 비용 합**이다(DR-145 · 리드 지시).
+                   basis: CostBasis | None) -> dict[str, Any]:
+    """S2~S5 의 `plan` 예산. 기본은 **C_rule**(``C_RULE_DEFINITION`` — #170 · DR-170)이다.
 
-    우선순위: `--budget-krw`(그대로 `plan` 예산) → C_rule(S1 계획 비용 = Σ planning_costs) →
-    설계 추정 C_rule(data_spec §12.2, 고정비 포함 추정)을 고객 수에 비례 환산하고 고정비를 뺀 값.
-    S1 의 실측 marketing_cost 는 참고로만 적는다 — 계획 비용과 단위가 다르다(쿠폰은 사용 시 발생).
+    우선순위: `--budget-krw`(변동비 plan 예산 — 캠페인 고정비 제외, 그대로 쓴다. 탐색용) → C_rule.
+    **S1 계획 비용이 없으면 예산을 정하지 않는다** — ``planning_budget_krw`` 가 ``None`` 이고
+    ``status: not_run`` 이다. 설계 추정치(data_spec §12.2)로 메우면 예산 단위(기대 비용)와 배정 차감
+    단위(전량 사용 상한)가 섞이고 S1 과 같은 예산도 아니다(#170 D2 · #204).
+    S1 의 실측 marketing_cost 는 참고로만 적는다 — C_rule 대조는 ``budget_guardrail`` 이 한다.
     """
     fixed = basis.campaign_fixed_cost_krw if basis is not None else None
     s1_metrics = (s1_entry or {}).get("metrics") or {}
     planned = (s1_entry or {}).get("planned_cost_krw")
+    status, reason = "ok", None
+    planning: float | None
     if explicit_krw is not None:
-        planning, source = float(explicit_krw), "--budget-krw 인자 (plan 예산으로 그대로 쓴다)"
+        planning = float(explicit_krw)
+        source = ("--budget-krw 인자 — 변동비 plan 예산(캠페인 고정비 제외)으로 그대로 쓴다. "
+                  "탐색용이며 정식 비교(GATE 2)의 예산은 C_rule 이다")
     elif planned is not None:
         planning = float(planned)
         source = "C_rule = S1(상한 없음) 배정의 계획 비용 합 (planning_costs: 처치 단가 + 메시지, 쿠폰 전량 사용 가정 상한)"
     else:
-        estimate = float(default_budget_krw(num_customers))
-        planning = estimate - fixed if fixed is not None else estimate
-        source = (f"data_spec §12.2 설계 추정 C_rule ≈ {C_RULE_ESTIMATE_KRW:,}원({C_RULE_REFERENCE_CUSTOMERS:,}명 기준)을 "
-                  f"고객 수 {num_customers:,}명에 비례 환산하고 캠페인 고정비를 뺐다 — S1 을 실행하지 못했다. "
-                  "GATE 2 실측 전 추정치")
+        planning, source, status = None, None, "not_run"
+        reason = ("S1 계획 비용(C_rule)이 없다 — S1 단계가 성공하지 못했거나 처치 비용 근거가 없다. "
+                  "S2~S5 를 S1 과 같은 예산으로 비교할 수 없어 실행하지 않는다(설계 추정치로 메우지 않는다, #170)")
     return {
-        "planning_budget_krw": max(planning, 0.0),
+        "status": status,
+        "reason": reason,
+        "planning_budget_krw": max(planning, 0.0) if planning is not None else None,
         "c_rule_planned_krw": float(planned) if planned is not None else None,
+        "c_rule_definition": C_RULE_DEFINITION,
         "s1_realized_marketing_cost_krw": s1_metrics.get("sim_marketing_cost"),
         "campaign_fixed_cost_krw": fixed,
         "note": "S1 은 상한 없이(None) 실행한다. 캠페인 고정비는 고객 단위가 아니어서 plan 예산에 넣지 않는다",
         "source": source,
+    }
+
+
+#: data_spec §14.1 가드레일 `Marketing Cost ≤ C_rule` 의 비교 범위(#170 D4 · DR-170).
+BUDGET_GUARDRAIL_SCOPE = (
+    "변동 마케팅비(메시지 + 쿠폰) ≤ C_rule — 양쪽 모두 캠페인 고정비 제외. 계획 = 이 분기 배정의 계획 비용 합, "
+    "실현 = 측정 계층 message_cost + coupon_cost(시뮬레이터 출처, 분기 창)"
+)
+#: 계획 비용 합은 원 단위 정수의 합이지만 float 로 더한다 — 비교 허용 오차.
+_BUDGET_TOLERANCE_KRW = 1e-6
+
+
+def budget_guardrail(entry: Mapping[str, Any], c_rule_krw: float | None) -> dict[str, Any]:
+    """data_spec §14.1 가드레일 `Marketing Cost ≤ C_rule` — 전략 분기 하나(#170 D4).
+
+    C_rule 과 같은 단위(``BUDGET_GUARDRAIL_SCOPE``)로 계획 · 실현 둘 다 대조한다.
+    ``triggered`` 는 ``True``(어느 쪽이든 초과) · ``False``(둘 다 대조했고 초과 없음) · ``None``(판정 못 함).
+    한쪽만 대조했고 초과가 없으면 ``None`` 이다 — 대조하지 않은 쪽을 안전하다고 보고하지 않는다.
+    """
+    def judged(value: Any, reason: str | None) -> dict[str, Any]:
+        if value is None or c_rule_krw is None:
+            why = reason if value is None else "C_rule 이 없다"
+            return {"value_krw": value, "exceeded": None, "reason": why}
+        return {"value_krw": float(value), "exceeded": float(value) > float(c_rule_krw) + _BUDGET_TOLERANCE_KRW,
+                "reason": None}
+
+    planned = entry.get("planned_cost_krw")
+    planned_check = judged(planned, None if planned is not None else "계획 비용이 없다(배정 또는 비용 근거 없음)")
+
+    observation = (entry.get("economics_input_observation") or {}).get("status")
+    record = entry.get("measured_economics")
+    parts = {key: measured_value(record, key) for key in ("message_cost", "coupon_cost")}
+    if observation != "ok":
+        realized, why = None, "경제 지표 정식 입력의 관측 근거 미충족(economics_input_observation)"
+    elif any(value is None for value in parts.values()):
+        missing = sorted(key for key, value in parts.items() if value is None)
+        realized, why = None, f"측정 계층 {missing} 계산 불가 — {(record or {}).get('status', '기록 없음')}"
+    else:
+        realized, why = float(parts["message_cost"]) + float(parts["coupon_cost"]), None
+    realized_check = judged(realized, why)
+
+    flags = [planned_check["exceeded"], realized_check["exceeded"]]
+    triggered = True if True in flags else (False if all(f is False for f in flags) else None)
+    return {
+        "status": "ok" if triggered is not None else "not_run",
+        "triggered": triggered,
+        "c_rule_krw": float(c_rule_krw) if c_rule_krw is not None else None,
+        "planned": planned_check,
+        "realized_variable": realized_check,
+        "scope": BUDGET_GUARDRAIL_SCOPE,
     }
 
 
@@ -1639,7 +1697,11 @@ def run(config: SprintConfig) -> Path:
                 else:
                     if costs is None:
                         raise NotRun(basis_reason or "처치 비용을 읽을 수 없다")
-                    budget = ctx["budget"]["planning_budget_krw"]
+                    budget_record = ctx.get("budget") or {}
+                    budget = budget_record.get("planning_budget_krw")
+                    if budget is None:
+                        # 같은 예산이 아니면 S1 대비 비교가 성립하지 않는다 — 추정치로 메우지 않는다(#170 D2).
+                        raise NotRun(budget_record.get("reason") or "S2~S5 예산(C_rule)을 정하지 않았다")
                     entry["budget_krw"] = budget
                     assignments = dict(call_plan(strategy, scores, budget, costs))
                 branch_root = branch_raw_root(out, strategy)
@@ -1730,10 +1792,18 @@ def run(config: SprintConfig) -> Path:
                 entry["metrics"] = metrics
             if strategy == BASELINE_STRATEGY:
                 # S1 이 끝난 직후 — 성공했든 아니든 S2~S5 의 예산을 정하고 근거를 남긴다.
-                ctx["budget"] = resolve_budget(config.budget_krw, entry if log.ok(name) else None,
-                                               basis, config.num_customers)
+                ctx["budget"] = resolve_budget(config.budget_krw, entry if log.ok(name) else None, basis)
                 comparison["budget"] = ctx["budget"]
-                _log(f"  S2~S5 예산 {ctx['budget']['planning_budget_krw']:,.0f}원 — {ctx['budget']['source']}")
+                if ctx["budget"]["planning_budget_krw"] is None:
+                    _log(f"  S2~S5 예산 없음 — {ctx['budget']['reason']}")
+                else:
+                    _log(f"  S2~S5 예산 {ctx['budget']['planning_budget_krw']:,.0f}원 — {ctx['budget']['source']}")
+
+        # data_spec §14.1 가드레일 `Marketing Cost ≤ C_rule` — 분기마다 계획 · 실현 변동비를 대조한다(#170 D4).
+        c_rule_krw = (ctx.get("budget") or {}).get("c_rule_planned_krw")
+        for strategy, entry in strategy_results.items():
+            if strategy != "S0":
+                entry["budget_guardrail"] = budget_guardrail(entry, c_rule_krw)
 
         if "snapshot" in ctx:
             sim.discard_snapshot(ctx["snapshot"])
@@ -1745,7 +1815,10 @@ def run(config: SprintConfig) -> Path:
             if missing or costs is None:
                 raise NotRun(f"점수·비용이 없다: {missing or '비용'}"
                              + (f" — {ctx['score_missing']['eligible']}" if "eligible" in ctx.get("score_missing", {}) else ""))
-            budgets = decision_fn("what_if_budgets")(ctx["budget"]["planning_budget_krw"])
+            base_budget = (ctx.get("budget") or {}).get("planning_budget_krw")
+            if base_budget is None:
+                raise NotRun((ctx.get("budget") or {}).get("reason") or "기준 예산(C_rule)을 정하지 않았다")
+            budgets = decision_fn("what_if_budgets")(base_budget)
             # S5 와 같은 모집단 — Eligible(t2) 안에서만(DR-234). 거르기 규칙은 의사결정의 것을 그대로 쓴다.
             pool = decision_fn("within_eligible")(scores)
             cate = pool["cate"][[t for t in RCT_ARMS[1:] if t in pool["cate"].columns]].astype(float)
@@ -1924,7 +1997,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
     parser.add_argument("--warmup-days", type=int, default=None, help="기본: 프로파일 권장값(data_spec §2.2)")
     parser.add_argument("--budget-krw", type=int, default=None,
-                        help="S2~S5 의 plan 예산(원). 기본: C_rule = S1(상한 없음) 배정의 계획 비용 합")
+                        help="S2~S5 의 plan 예산(원) — 변동비(캠페인 고정비 제외), 탐색용. "
+                             "기본: C_rule = S1(상한 없음) 배정의 계획 비용 합. S1 이 없으면 S2~S5 는 not_run")
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--cv-folds", type=int, default=None,
                         help="churn 교차검증 fold 수 (기본: config/model_config.yaml churn.cv_folds)")

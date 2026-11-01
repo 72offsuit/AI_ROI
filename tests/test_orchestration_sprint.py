@@ -413,6 +413,17 @@ class TestSprintWithFakeDecision(unittest.TestCase):
             self.assertEqual(budget["planning_budget_krw"], plans[strategy]["budget"], strategy)
         self.assertEqual({"lifetime_order_count": "applied", "eligible": "applied"},
                          s1["s1_eligibility"]["conditions"])
+        # C_rule 과 가드레일 `Marketing Cost ≤ C_rule` (#170 D1 · D4) — 계획 비용은 배정 때 이미 예산 안이다
+        self.assertEqual("ok", budget["status"])
+        self.assertEqual(s1["planned_cost_krw"], budget["c_rule_planned_krw"])
+        self.assertNotIn("budget_guardrail", comparison["strategy_details"]["S0"])
+        for strategy in ("S1", "S2", "S3", "S4", "S5"):
+            guard = comparison["strategy_details"][strategy]["budget_guardrail"]
+            self.assertEqual(budget["c_rule_planned_krw"], guard["c_rule_krw"], strategy)
+            self.assertIs(False, guard["planned"]["exceeded"], strategy)
+            self.assertIn(guard["triggered"], (False, None), strategy)  # 실현 대조는 측정 근거가 있을 때만
+            if guard["realized_variable"]["exceeded"] is None:
+                self.assertTrue(guard["realized_variable"]["reason"], strategy)
 
     def test_roi_metrics_use_candidate_keys_without_filling(self) -> None:
         s0 = _read(self.run_dir, "strategy_comparison")["strategy_details"]["S0"]["metrics"]
@@ -792,7 +803,24 @@ class TestSprintWithoutDecision(unittest.TestCase):
             self.assertIn("events.purchase", meta["purchase_generated"]["detail"])
             self.assertEqual("not_run", meta["realism_report"]["status"])
             self.assertFalse((run_dir / "realism_report.json").exists())
-            self.assertIn("설계 추정", _read(run_dir, "strategy_comparison")["budget"]["source"])
+            # S1 이 없으면 S2~S5 예산을 정하지 않는다 — 설계 추정치로 메우지 않는다(#170 D2)
+            comparison = _read(run_dir, "strategy_comparison")
+            budget = comparison["budget"]
+            self.assertEqual("not_run", budget["status"])
+            self.assertIsNone(budget["planning_budget_krw"])
+            self.assertIsNone(budget["c_rule_planned_krw"])
+            self.assertIn("C_rule", budget["reason"])
+            self.assertIsNone(comparison["budget_krw"])
+            for strategy in ("S2", "S3", "S4", "S5"):
+                self.assertEqual("not_run", status[f"strategy_{strategy}"]["status"], strategy)
+                self.assertIn("C_rule", status[f"strategy_{strategy}"]["reason"], strategy)
+            # 가드레일은 C_rule 이 없어 판정하지 않는다 — 통과(False)로 적지 않는다(#170 D4)
+            details = comparison["strategy_details"]
+            self.assertNotIn("budget_guardrail", details["S0"])
+            for strategy in ("S1", "S2", "S3", "S4", "S5"):
+                guard = details[strategy]["budget_guardrail"]
+                self.assertEqual("not_run", guard["status"], strategy)
+                self.assertIsNone(guard["triggered"], strategy)
 
 
 @unittest.skipUnless(_DEPS, _SKIP_REASON)
@@ -962,14 +990,84 @@ class TestHelpers(unittest.TestCase):
     def test_budget_priority(self) -> None:
         basis = rs.CostBasis({"T0": 0, "T3": 7000}, 30, 100_000)
         s1 = {"planned_cost_krw": 70_300.0, "metrics": {"sim_marketing_cost": 150_000.0}}
-        explicit = rs.resolve_budget(500_000, s1, basis, 2000)
-        self.assertEqual(500_000, explicit["planning_budget_krw"])  # --budget-krw 는 plan 예산 그대로
-        planned = rs.resolve_budget(None, s1, basis, 2000)
+        explicit = rs.resolve_budget(500_000, s1, basis)
+        self.assertEqual(500_000, explicit["planning_budget_krw"])  # --budget-krw 는 변동비 plan 예산 그대로
+        self.assertIn("--budget-krw", explicit["source"])
+        self.assertEqual(70_300, explicit["c_rule_planned_krw"])  # C_rule 은 인자와 별개로 남는다(가드레일 기준)
+        planned = rs.resolve_budget(None, s1, basis)
+        self.assertEqual("ok", planned["status"])
         self.assertEqual(70_300, planned["planning_budget_krw"])  # C_rule = S1 계획 비용 합
+        self.assertEqual(70_300, planned["c_rule_planned_krw"])
         self.assertEqual(150_000, planned["s1_realized_marketing_cost_krw"])  # 실측은 참고로만
-        fallback = rs.resolve_budget(None, None, basis, 26_000)
-        self.assertEqual(8_833_000 - 100_000, fallback["planning_budget_krw"])
-        self.assertIn("설계 추정", fallback["source"])
+        self.assertIn("C_rule", planned["c_rule_definition"])
+
+    def test_budget_without_s1_is_not_estimated(self) -> None:
+        """#170 D2 — S1 계획 비용이 없으면 예산을 정하지 않는다. 설계 추정치(기대 비용 단위)로 메우면
+        배정 차감 단위(전량 사용 상한)와 섞이고 S1 과 같은 예산도 아니다(#204: 26,000명이면 1,242명만 배정)."""
+        basis = rs.CostBasis({"T0": 0, "T3": 7000}, 30, 100_000)
+        for s1 in (None, {"metrics": {}}):  # S1 실패 · S1 은 돌았지만 비용 근거가 없어 계획 비용이 없음
+            with self.subTest(s1=s1):
+                budget = rs.resolve_budget(None, s1, basis)
+                self.assertEqual("not_run", budget["status"])
+                self.assertIsNone(budget["planning_budget_krw"])
+                self.assertIsNone(budget["c_rule_planned_krw"])
+                self.assertIsNone(budget["source"])
+                self.assertIn("C_rule", budget["reason"])
+        self.assertFalse(hasattr(rs, "default_budget_krw"))  # 추정 경로를 되살리지 않는다
+        self.assertFalse(hasattr(rs, "C_RULE_ESTIMATE_KRW"))
+        zero = rs.resolve_budget(None, {"planned_cost_krw": 0.0}, basis)  # S1 대상 0명 — C_rule 0 은 유효한 값이다
+        self.assertEqual(("ok", 0.0), (zero["status"], zero["planning_budget_krw"]))
+
+    def test_budget_guardrail_compares_variable_cost_with_c_rule(self) -> None:
+        """#170 D4 — data_spec §14.1 `Marketing Cost ≤ C_rule`. 계획 · 실현 변동비(메시지 + 쿠폰)를
+        C_rule 과 같은 단위로 대조하고, 캠페인 고정비는 양쪽 모두 넣지 않는다."""
+        def money(value):
+            return {"status": "ok", "value": value}
+
+        def entry(planned, message=None, coupon=None, fixed=100_000.0, observed="ok", record="ok"):
+            metrics = {"campaign_fixed_cost": money(fixed)}
+            if message is not None:
+                metrics["message_cost"] = money(message)
+            if coupon is not None:
+                metrics["coupon_cost"] = money(coupon)
+            return {"planned_cost_krw": planned, "economics_input_observation": {"status": observed},
+                    "measured_economics": {"status": record, "metrics": metrics}}
+
+        c_rule = 70_300.0
+        ok = rs.budget_guardrail(entry(70_300.0, message=300.0, coupon=21_000.0), c_rule)
+        self.assertEqual(("ok", False), (ok["status"], ok["triggered"]))
+        self.assertEqual(21_300.0, ok["realized_variable"]["value_krw"])  # 고정비 100,000 은 넣지 않는다
+        self.assertEqual(c_rule, ok["c_rule_krw"])
+        self.assertIn("고정비 제외", ok["scope"])
+
+        over_plan = rs.budget_guardrail(entry(77_330.0, message=330.0, coupon=0.0), c_rule)  # 예산 인자가 C_rule 초과
+        self.assertTrue(over_plan["triggered"])
+        self.assertTrue(over_plan["planned"]["exceeded"])
+        self.assertFalse(over_plan["realized_variable"]["exceeded"])
+
+        over_real = rs.budget_guardrail(entry(70_300.0, message=300.0, coupon=77_000.0), c_rule)  # 쿠폰 반복 사용 등
+        self.assertTrue(over_real["triggered"])
+        self.assertTrue(over_real["realized_variable"]["exceeded"])
+
+        # 한쪽만 대조했고 초과가 없으면 판정하지 않는다 — 확인하지 않은 쪽을 안전하다고 보고하지 않는다
+        for case in (entry(70_300.0, message=300.0, coupon=None),        # 쿠폰 비용 계산 불가
+                     entry(70_300.0, message=300.0, coupon=0.0, observed="not_run"),
+                     entry(70_300.0, message=300.0, coupon=0.0, record="quality_failed")):
+            half = rs.budget_guardrail(case, c_rule)
+            self.assertEqual(("not_run", None), (half["status"], half["triggered"]))
+            self.assertFalse(half["planned"]["exceeded"])
+            self.assertIsNone(half["realized_variable"]["exceeded"])
+            self.assertTrue(half["realized_variable"]["reason"])
+        # 반면 한쪽이 초과면 다른 쪽을 몰라도 발동이다
+        partial = rs.budget_guardrail(entry(80_000.0, message=300.0, coupon=None), c_rule)
+        self.assertEqual(("ok", True), (partial["status"], partial["triggered"]))
+
+        no_rule = rs.budget_guardrail(entry(70_300.0, message=300.0, coupon=0.0), None)
+        self.assertEqual(("not_run", None), (no_rule["status"], no_rule["triggered"]))
+        self.assertEqual("C_rule 이 없다", no_rule["planned"]["reason"])
+        missing_plan = rs.budget_guardrail({"economics_input_observation": {"status": "ok"}}, c_rule)
+        self.assertIsNone(missing_plan["triggered"])
+        self.assertTrue(missing_plan["planned"]["reason"])
 
     def test_s1_inputs_from_events(self) -> None:
         t2 = datetime(2025, 4, 1, tzinfo=KST)
@@ -1034,10 +1132,6 @@ class TestHelpers(unittest.TestCase):
         judged = rs.eligibility(events, t0, pd.Index(["U"]), {"U": datetime(2024, 1, 1).date()})
         self.assertEqual([False], judged["flags"].tolist())
         self.assertEqual(1, judged["counts"]["n_excluded_recent_purchase"])
-
-    def test_default_budget_scales_design_estimate(self) -> None:
-        self.assertEqual(8_833_000, rs.default_budget_krw(26_000))
-        self.assertEqual(round(8_833_000 * 20_000 / 26_000), rs.default_budget_krw(20_000))
 
     def test_profile_warmup_table(self) -> None:
         self.assertEqual(273, rs.PROFILE_WARMUP_DAYS["reference"])
