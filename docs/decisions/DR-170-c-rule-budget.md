@@ -44,8 +44,10 @@ GATE 2(11/04)가 봉인하는 것이 S1 규칙 · `C_rule` · 예산 상한 B �
 ## 결정
 
 - **D1 = 안 A.** `C_rule = Σ planning_costs × 배정 수`(S1 상한 없음 실행, T3 7,000원 + 메시지 30원 = 고객당 7,030원, 캠페인 고정비 제외). 코드(`run_sprint.resolve_budget` · `C_RULE_DEFINITION`)는 그대로이고 명세(data_spec §12.2 · §13 · §14.1 · §16 · 설정 예시)와 지침(`src/AGENTS.md` · `src/decision/AGENTS.md` · `docs/TEAM_SETUP.md`)을 고쳤다. 설계 추정치로는 4,100명 × 7,030원 ≈ 28,823,000원.
-- **D2** S1 계획 비용이 없으면 `budget.status = not_run`, `planning_budget_krw = null` 이고 S2~S5 · What-if 는 `not_run`(사유: C_rule 없음). 설계 추정 경로(`default_budget_krw` · `C_RULE_ESTIMATE_KRW`)는 지웠다. S1 대상이 0명이면 C_rule = 0 은 유효한 값이다.
-- **D3** `--budget-krw`(및 `main.py --budget`)는 **변동비 plan 예산**(캠페인 고정비 제외)이고 탐색용이다. 정식 비교의 예산은 C_rule 이다. 도움말과 `budget.source` 에 적었다.
+- **D2** 기본 실행(`--budget-krw` 없음)에서 S1 계획 비용이 없으면 `budget.status = not_run`, `planning_budget_krw = null` 이고 S2~S5 · What-if 는 `not_run`(사유: C_rule 없음). 설계 추정 경로(`default_budget_krw` · `C_RULE_ESTIMATE_KRW`)는 지웠다. S1 대상이 0명이면 C_rule = 0 은 유효한 값이다.
+  - **명시 예산은 예외다(D3 의 탐색 경로).** `--budget-krw` 를 주면 S1 단계가 실패해도 `budget.status = ok` · `planning_budget_krw` = 인자 값 · `c_rule_planned_krw = null` 이고, 처치 비용 근거가 있으면 S2~S5 · What-if 가 그 예산으로 돈다. 인자 값을 그대로 쓸 뿐 추정 예산을 되살린 것은 아니다.
+  - 이 실행은 S1 대비 정식 비교가 아니다. C_rule 이 없어 가드레일은 `not_run`(`triggered = null`)이고, S1 기준 ROI 요약(`roi_summary`)은 선행 단계(S1) 미충족으로 `not_run` 이다. 처치 비용 근거가 없으면 인자가 있어도 S2~S5 는 `not_run` 이다.
+- **D3** `--budget-krw`(및 `main.py --budget`)는 **변동비 plan 예산**(캠페인 고정비 제외)이고 탐색용이다. 정식 비교의 예산은 C_rule 이다. 도움말과 `budget.source` 에 적었다. 기본 동일 예산 비교(C_rule)와 명시 예산 독립 탐색(`--budget-krw`)은 `strategy_comparison.budget.source` 로 구분된다.
 - **D4** 가드레일 대조 범위 = **변동 마케팅비(메시지 + 쿠폰) ≤ C_rule, 양쪽 모두 고정비 제외.** 분기마다 계획(배정의 계획 비용 합)과 실현(측정 계층 `message_cost` + `coupon_cost`, 시뮬레이터 출처)을 둘 다 대조해 S1~S5 의 `strategy_details.*.budget_guardrail` 에 남긴다. `triggered` 는 True · False · None 셋이고, 한쪽만 대조했고 초과가 없으면 None 이다. 계획 쪽은 배정이 이미 차단하므로 `--budget-krw` 로 C_rule 을 넘긴 실행에서만 발동한다.
 - **D5** 경로 = `src/decision/strategies.py`(`S1_RULE` · `plan_S1`). 증거는 태그 `gate2-s1-rule` → `ce05a66`.
 
@@ -66,7 +68,7 @@ GATE 2(11/04)가 봉인하는 것이 S1 규칙 · `C_rule` · 예산 상한 B �
 
 - `budget_guardrail.realized_variable.exceeded = true` 가 기본 실행(`--budget-krw` 없음)에서 나오면 "실현 변동비 ≤ 계획 상한"이라는 전제(고객당 쿠폰 1회 · 할인 ≤ 단가 · 메시지 1회)가 깨진 것이다. 그때 C_rule 은 상한이 아니다.
 - 실현 변동비가 C_rule 의 아주 작은 비율에 계속 머물러 AI 예산이 사실상 무제한처럼 작동하면(예: S2~S5 가 Eligible 거의 전원을 배정), 상한 단가 예산이 너무 느슨한 것이다 — 그때는 안 C 를 근거와 함께 다시 본다.
-- S1 이 실패한 실행에서 S2~S5 가 `ok` 로 나오면 D2 구현이 깨진 것이다(`tests/test_orchestration_sprint.py` 가 잡는다).
+- **명시 예산(`--budget-krw`) 없이** S1 이 실패한 실행에서 S2~S5 가 `ok` 로 나오면 D2 구현이 깨진 것이다(`tests/test_orchestration_sprint.py` 가 잡는다). 명시 예산을 준 실행이면 S2~S5 `ok` 는 정상이다(D2 예외) — 그때 가드레일이 `not_run` 이 아니거나 `roi_summary` 가 `ok` 이면 탐색 실행이 정식 비교처럼 기록된 것이다.
 
 ## 민감도
 
@@ -78,5 +80,6 @@ GATE 2(11/04)가 봉인하는 것이 S1 규칙 · `C_rule` · 예산 상한 B �
 
 - **값의 Lock** 은 하지 않았다 — GATE 2 봉인 실행(S1 1회)에서 C_rule 값을 기록하고 서명한다(광진 서명, #213 범위).
 - 실현 변동비 ≤ 계획 상한의 전제(고객당 쿠폰 1회 · 할인 ≤ 단가)는 공개 계약 수준에서만 확인했다. 시뮬레이터 내부는 읽지 않는다 — 실행마다 가드레일 실현 쪽이 그 대조다(#204 U2).
+- D2 예외(`S1 실패 × --budget-krw`)에는 회귀 테스트가 없다. 코드 대조와 #258 리뷰(광진 — 예산 선택 부분만 떼어 stub 으로 실행)로만 확인했다.
 - T1~T4 를 섞는 S3~S5 의 배송보조 등 다른 처치 회계와 계획 비용의 비교 범위(#204 U5)는 이 결정에 넣지 않았다 — 메시지 + 쿠폰만 대조한다.
 - 로컬에서 `tests/test_orchestration_sprint.py` 는 실행하지 않았다(시뮬레이터 api 를 import 해 소규모 세계를 돌린다 — 시스템 팀 에이전트는 시뮬레이터 코드를 돌리지 않는다). 순수 함수 두 개는 AST 로 떼어 확인했고 전체는 CI 가 돌린다.

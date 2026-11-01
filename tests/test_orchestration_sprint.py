@@ -803,7 +803,7 @@ class TestSprintWithoutDecision(unittest.TestCase):
             self.assertIn("events.purchase", meta["purchase_generated"]["detail"])
             self.assertEqual("not_run", meta["realism_report"]["status"])
             self.assertFalse((run_dir / "realism_report.json").exists())
-            # S1 이 없으면 S2~S5 예산을 정하지 않는다 — 설계 추정치로 메우지 않는다(#170 D2)
+            # 명시 예산 없이 S1 이 없으면 S2~S5 예산을 정하지 않는다 — 설계 추정치로 메우지 않는다(#170 D2)
             comparison = _read(run_dir, "strategy_comparison")
             budget = comparison["budget"]
             self.assertEqual("not_run", budget["status"])
@@ -1002,7 +1002,7 @@ class TestHelpers(unittest.TestCase):
         self.assertIn("C_rule", planned["c_rule_definition"])
 
     def test_budget_without_s1_is_not_estimated(self) -> None:
-        """#170 D2 — S1 계획 비용이 없으면 예산을 정하지 않는다. 설계 추정치(기대 비용 단위)로 메우면
+        """#170 D2 — `--budget-krw` 없이 S1 계획 비용이 없으면 예산을 정하지 않는다. 설계 추정치(기대 비용 단위)로 메우면
         배정 차감 단위(전량 사용 상한)와 섞이고 S1 과 같은 예산도 아니다(#204: 26,000명이면 1,242명만 배정)."""
         basis = rs.CostBasis({"T0": 0, "T3": 7000}, 30, 100_000)
         for s1 in (None, {"metrics": {}}):  # S1 실패 · S1 은 돌았지만 비용 근거가 없어 계획 비용이 없음

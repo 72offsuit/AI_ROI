@@ -95,7 +95,10 @@ RCT_CONTROL_SHARE = EXPERIMENT.rct.control_share  # T0 비율 · 나머지를 T1
 # 정본 모집단(#194)과 달라 없앴다 — DR-234.
 
 # 예산 — C_rule = S1(상한 없음) 배정의 계획 비용 합(쿠폰 전량 사용 상한 · 캠페인 고정비 제외)이다
-# (#170 · DR-170). S1 이 없으면 S2~S5 는 not_run 이다 — 설계 추정치로 메우지 않는다(같은 예산이 아니다).
+# (#170 · DR-170). `--budget-krw` 없이 S1 이 없으면 S2~S5 · What-if 는 not_run 이다 — 설계 추정치로
+# 메우지 않는다(같은 예산이 아니다). `--budget-krw` 를 주면 S1 단계가 실패해도 처치 비용 근거가 있으면
+# 그 예산으로 돈다 — 탐색 실행이고 S1 대비 정식 비교가 아니다(C_rule 이 없어 가드레일 · roi_summary 는
+# not_run, DR-170 D2 · D3).
 
 ECONOMIC_CONFIG = REPO_ROOT / "config" / "economic_config.yaml"
 # 대시보드가 docs/ 를 읽지 못하므로 있으면 결과 폴더로 사본을 둔다(없으면 not_run).
@@ -335,9 +338,13 @@ def resolve_budget(explicit_krw: int | None, s1_entry: Mapping[str, Any] | None,
     """S2~S5 의 `plan` 예산. 기본은 **C_rule**(``C_RULE_DEFINITION`` — #170 · DR-170)이다.
 
     우선순위: `--budget-krw`(변동비 plan 예산 — 캠페인 고정비 제외, 그대로 쓴다. 탐색용) → C_rule.
-    **S1 계획 비용이 없으면 예산을 정하지 않는다** — ``planning_budget_krw`` 가 ``None`` 이고
-    ``status: not_run`` 이다. 설계 추정치(data_spec §12.2)로 메우면 예산 단위(기대 비용)와 배정 차감
-    단위(전량 사용 상한)가 섞이고 S1 과 같은 예산도 아니다(#170 D2 · #204).
+    **`--budget-krw` 가 없고 S1 계획 비용도 없으면 예산을 정하지 않는다** — ``planning_budget_krw`` 가
+    ``None`` 이고 ``status: not_run`` 이다. 설계 추정치(data_spec §12.2)로 메우면 예산 단위(기대 비용)와
+    배정 차감 단위(전량 사용 상한)가 섞이고 S1 과 같은 예산도 아니다(#170 D2 · #204).
+    `--budget-krw` 가 있으면 S1 이 없어도 ``status: ok`` · ``c_rule_planned_krw: None`` 이다 — 기본 동일
+    예산 비교(C_rule)가 아니라 명시 예산 독립 탐색이다. C_rule 이 없으므로 ``budget_guardrail`` 은 판정하지
+    않고(``triggered: None``), S1 단계가 실패했으면 ``roi_summary`` 도 선행 조건 미충족으로 not_run 이다
+    (DR-170 D2).
     S1 의 실측 marketing_cost 는 참고로만 적는다 — C_rule 대조는 ``budget_guardrail`` 이 한다.
     """
     fixed = basis.campaign_fixed_cost_krw if basis is not None else None

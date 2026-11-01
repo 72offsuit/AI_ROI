@@ -24,7 +24,7 @@
 
 - **미봉인이다.** 결과는 GATE 1·2 봉인 이전 스프린트 실행이므로 "최종 비교"가 아니다. 봉인 후 `simulator/` 가 바뀌면 Baseline 부터 전 전략을 재실행한다(SRS FREEZE-003).
 - **S1(Rule-based) 기준선은 AI 결과 이전에 커밋했지만 정식 GATE 2 봉인은 하지 않았다** — `ce05a66`(태그 `gate2-s1-rule`). 경로는 `src/decision/strategies.py` 로 정했다(#170 · DR-170).
-- **C_rule 은 정의만 정했고 Lock 하지 않았다.** C_rule = S1 을 상한 없이 실행한 배정의 계획 비용 합(쿠폰 전량 사용 상한 · 캠페인 고정비 제외)이고 S2~S5 의 예산이다. S1 이 없으면 S2~S5 는 `not_run` 이다 — 추정 예산으로 메우지 않는다. 출처는 `strategy_comparison.budget`, 가드레일 `Marketing Cost ≤ C_rule` 대조는 `strategy_details.*.budget_guardrail` 에 남긴다(#170 · DR-170). 값의 Lock 은 GATE 2 봉인 실행에서 한다.
+- **C_rule 은 정의만 정했고 Lock 하지 않았다.** C_rule = S1 을 상한 없이 실행한 배정의 계획 비용 합(쿠폰 전량 사용 상한 · 캠페인 고정비 제외)이고 S2~S5 의 예산이다. `--budget-krw` 없이 S1 이 없으면 S2~S5 · What-if 는 `not_run` 이다 — 추정 예산으로 메우지 않는다. `--budget-krw` 를 주면 S1 단계가 실패해도 그 예산으로 돌지만 탐색 실행이다 — C_rule 이 없어 가드레일과 S1 기준 ROI 요약이 `not_run` 이고, S1 대비 정식 비교로 읽지 않는다. 출처는 `strategy_comparison.budget`, 가드레일 `Marketing Cost ≤ C_rule` 대조는 `strategy_details.*.budget_guardrail` 에 남긴다(#170 · DR-170). 값의 Lock 은 GATE 2 봉인 실행에서 한다.
 
 ## 3. 지표 정의의 근사
 
