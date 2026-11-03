@@ -180,6 +180,7 @@ EXPERIMENT_SCHEMA: Mapping[str, Any] = {
     "run": {
         "num_customers": _int(1),
         "profile": _TEXT,
+        "warmup_days": _int(1),
     },
     "holdout": {
         "development_seed": _int(0),
@@ -293,6 +294,8 @@ class ModelConfig:
 class RunDefaults:
     num_customers: int
     profile: str
+    #: ``profile`` 로 돌 때의 warmup(= t1 일수). 다른 프로파일에는 쓰지 않는다 — ``run_sprint.resolve_warmup``.
+    warmup_days: int
 
 
 @dataclass(frozen=True)

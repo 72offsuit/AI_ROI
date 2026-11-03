@@ -1,6 +1,6 @@
 """스프린트 v0 실행 루프 — 명령 하나로 탐색 RCT → 모델 학습 → 전략 비교까지 돈다 (이슈 #146).
 
-    python -m src.orchestration.run_sprint --seed 42 --customers 20000 --profile reference --out <dir>
+    python -m src.orchestration.run_sprint --out <dir>   # config 기본 — 50,000명 · reference · warmup 312일 (#211)
     python -m src.orchestration.run_sprint --seed 42 --customers 2000 --profile small --out <dir>   # 스모크
 
 흐름 (지휘자는 명령만 내린다 — `src/orchestration/AGENTS.md`):
@@ -79,9 +79,26 @@ EXPERIMENT = load_experiment_config()
 load_model_config()
 # 프로파일별 권장 warmup — docs/data_spec.html §2.2 표. `small` 은 시간축이 `short` 와 같다
 # (docs/decisions/DR-S3-p6-signup.md U11). `--warmup-days` 로 덮어쓸 수 있다.
+# config 의 기본 프로파일로 돌 때는 이 표가 아니라 config `run.warmup_days` 다(#211 · resolve_warmup).
 PROFILE_WARMUP_DAYS: dict[str, int] = {
     "smoke": 90, "short": 180, "small": 180, "reference": 273, "long": 365, "rolling": 273,
 }
+
+
+def resolve_warmup(profile: str, warmup_days: int | None) -> tuple[int | None, str]:
+    """warmup 일수(= t1)와 그 출처. 우선순위는 ① ``--warmup-days`` 인자 → ② config ``run.warmup_days`` —
+    ``profile`` 이 config ``run.profile`` 과 같을 때만 → ③ 프로파일 권장값(data_spec §2.2).
+
+    ②를 config 프로파일에만 묶는 것은 실험 규모(DR-234)가 그 프로파일의 실행을 위한 값이기 때문이다.
+    ``--profile small`` 스모크가 312일을 돌지 않는다. 권장값을 모르는 프로파일이면 ``None`` 이고, 실행이
+    warmup 단계에서 ``not_run`` 이 된다(DR-211).
+    """
+    if warmup_days is not None:
+        return warmup_days, "--warmup-days 인자"
+    if profile == EXPERIMENT.run.profile:
+        return (EXPERIMENT.run.warmup_days,
+                f"config/experiment_config.yaml run.warmup_days (프로파일 {profile} · DR-234 실험 규모)")
+    return PROFILE_WARMUP_DAYS.get(profile), "data_spec §2.2 프로파일 권장값"
 # label window 는 프로파일 간에도 고정이다(data_spec §2.2) — 인자로 받지 않는다.
 LABEL_WINDOW_DAYS = 42
 
@@ -1295,7 +1312,7 @@ def run(config: SprintConfig) -> Path:
     log = StageLog(config.stages, config.scope)
     out = Path(config.out)
     main_root = out / "raw" / "main"
-    warmup = config.warmup_days if config.warmup_days is not None else PROFILE_WARMUP_DAYS.get(config.profile)
+    warmup, warmup_basis = resolve_warmup(config.profile, config.warmup_days)
     basis, basis_reason = load_cost_basis()
     costs, costs_source = plan_costs(basis)
     _log(f"run_id={run_id} seed={config.seed} N={config.num_customers} profile={config.profile} out={out}")
@@ -1842,7 +1859,7 @@ def run(config: SprintConfig) -> Path:
             "num_customers": config.num_customers,
             "profile": config.profile,
             "warmup_days": warmup,
-            "warmup_basis": "--warmup-days 인자" if config.warmup_days is not None else "data_spec §2.2 프로파일 권장값",
+            "warmup_basis": warmup_basis,
             "label_window_days": LABEL_WINDOW_DAYS,
             "timeline": ctx["timeline"],
             "simulator_version": ", ".join(versions) if versions else None,
@@ -1922,7 +1939,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default=EXPERIMENT.run.profile)
     parser.add_argument("--out", type=Path, required=True, help="시뮬레이터 출력 루트의 상위 폴더 (빈 폴더)")
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
-    parser.add_argument("--warmup-days", type=int, default=None, help="기본: 프로파일 권장값(data_spec §2.2)")
+    parser.add_argument("--warmup-days", type=int, default=None,
+                        help="기본: --profile 이 config run.profile 이면 config run.warmup_days, "
+                             "아니면 프로파일 권장값(data_spec §2.2)")
     parser.add_argument("--budget-krw", type=int, default=None,
                         help="S2~S5 의 plan 예산(원). 기본: C_rule = S1(상한 없음) 배정의 계획 비용 합")
     parser.add_argument("--run-id", default=None)

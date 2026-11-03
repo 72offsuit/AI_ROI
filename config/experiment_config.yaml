@@ -15,9 +15,16 @@
 schema_version: 1
 
 # 실행 기본값 — `python src/main.py` · `python -m src.orchestration.run_sprint` 가 인자 없이 쓰는 값.
+# 실험 규모는 DR-234(규모 A · FR-05 · FR-03)이고 #211 이 여기에 넣었다(DR-211):
+#   고객 50,000명 · t1 = Day 312 · 총 396일(warmup 312 + RCT 42 + 분기 42) = 2025-01-01~2026-01-31, 13개월.
+#   control_share 0.5 에서 Eligible 비율 r ≈ 0.45 이면 T0 · T1~T4 합이 각 ≈ 1.1만 명이다.
+# 스모크는 --customers 2000 --profile small (warmup 은 그 프로파일 권장값 180일).
 run:
-  num_customers: 20000   # data_spec reference 규모. 스모크는 --customers 2000 --profile small
-  profile: reference     # 시뮬레이터 프로파일 이름(warmup 은 프로파일에서 유도 — run_sprint 표)
+  num_customers: 50000
+  profile: reference     # 시뮬레이터 프로파일 이름
+  # warmup(= t1 일수). **위 profile 로 돌 때만** 쓴다 — --profile 을 다른 값으로 주면 그 프로파일의
+  # 권장값(data_spec §2.2, run_sprint.PROFILE_WARMUP_DAYS)이고, --warmup-days 를 주면 그 값이다.
+  warmup_days: 312
 
 holdout:
   # 개발 seed — 탐색 RCT 배정(random.Random) · CV fold · uplift 분할 · 모델 random_state 가 모두 이 seed 다.

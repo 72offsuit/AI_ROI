@@ -161,7 +161,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, default=None, help="시뮬레이터 출력 폴더(새 폴더). 기본: data/sprint/<run_id>/")
     parser.add_argument("--results-root", type=Path, default=None,
                         help="기본: full 은 results/, 나머지는 results/cli/<mode>/")
-    parser.add_argument("--warmup-days", type=int, default=None, help="기본: 프로파일 권장값(data_spec §2.2)")
+    parser.add_argument("--warmup-days", type=int, default=None,
+                        help="기본: --profile 이 config run.profile 이면 config run.warmup_days, "
+                             "아니면 프로파일 권장값(data_spec §2.2)")
     parser.add_argument("--cv-folds", type=int, default=None,
                         help="churn 교차검증 fold 수 덮어쓰기 (기본: config/model_config.yaml churn.cv_folds)")
     parser.add_argument("--max-train-rows", type=int, default=None,
