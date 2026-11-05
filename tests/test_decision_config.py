@@ -418,6 +418,17 @@ class TestCodeUsesConfig(unittest.TestCase):
             # 권장값을 모르는 프로파일은 추측하지 않는다 — run() 이 warmup 단계에서 not_run.
             self.assertIsNone(rs.resolve_warmup("no-such-profile", None)[0])
 
+            # ②는 "reference" 라는 이름이 아니라 config run.profile 을 따른다. config 프로파일을 small · 77일로
+            # 바꾸면 small 이 77일, reference 는 권장값 273일이다 — `profile == "reference"` 로 박은 구현을 잡는다.
+            swapped = dataclasses.replace(
+                rs.EXPERIMENT, run=dataclasses.replace(rs.EXPERIMENT.run, profile="small", warmup_days=77))
+            with mock.patch.object(rs, "EXPERIMENT", swapped):
+                warmup, basis = rs.resolve_warmup("small", None)
+                self.assertEqual(77, warmup)
+                self.assertIn("run.warmup_days (프로파일 small", basis)
+                self.assertEqual((273, "data_spec §2.2 프로파일 권장값"), rs.resolve_warmup("reference", None))
+                self.assertEqual((60, "--warmup-days 인자"), rs.resolve_warmup("small", 60))
+
             # DR-234 규모 A: 50,000명 · t1 = Day 312 · 총 396일(warmup + RCT 42 + 분기 42) = 13개월.
             run = rs.EXPERIMENT.run
             self.assertEqual((50000, 312), (run.num_customers, run.warmup_days))

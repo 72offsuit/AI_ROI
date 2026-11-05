@@ -574,8 +574,11 @@ class TestOutcomeObservationContract(unittest.TestCase):
         self.assertIsNone(row["guardrails"]["retention_up_cost_surge"]["triggered"])
 
     def run_fake_contract(self, *, states=None, rejected=None, read_fail=None, include_uplift=False,
-                          real_margin=False):
-        """가짜 생성·가짜 모델과 실제 run/build_outcomes/집계/ROI를 연결한다. 실제 학습·E2E 아님."""
+                          real_margin=False, profile="smoke", warmup_days=90):
+        """가짜 생성·가짜 모델과 실제 run/build_outcomes/집계/ROI를 연결한다. 실제 학습·E2E 아님.
+
+        ``profile`` · ``warmup_days`` 는 SprintConfig 로 그대로 넘긴다. ``warmup_days=None`` 이면 run() 이
+        warmup 을 스스로 고른다(#211 · ``resolve_warmup``)."""
         import contextlib
         import io
         import json
@@ -729,10 +732,30 @@ class TestOutcomeObservationContract(unittest.TestCase):
                 frame for path, frame in frames.items() if path.resolve() == Path(root).resolve()))))
             stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
             stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
-            rs.run(rs.SprintConfig(seed=7, num_customers=40, profile="smoke", warmup_days=90,
+            rs.run(rs.SprintConfig(seed=7, num_customers=40, profile=profile, warmup_days=warmup_days,
                                    out=Path(temp) / "out", results_root=Path(temp) / "results", stages=selected,
                                    realism_report=Path(temp) / "absent.json", capture=captured))
         return payloads, captured, metric_calls, holdout_calls
+
+    def test_real_runner_default_profile_takes_config_warmup(self):
+        """#211 · DR-211 — warmup 인자 없이 config 프로파일(reference)로 돌면 config `run.warmup_days` 312일을 쓰고
+        그 출처를 run_meta 에 적는다. 다른 프로파일(smoke)은 그 프로파일 권장값이다.
+
+        run() 의 warmup 고르기를 예전 식(인자 아니면 프로파일 권장값)으로 되돌리면 reference 가 273일이 되어
+        여기서 실패한다. `resolve_warmup` 단독 검사(test_decision_config)는 run() 을 부르지 않아 그것을 못 잡는다.
+        """
+        cases = {
+            "reference": (312, "config/experiment_config.yaml run.warmup_days"),
+            "smoke": (90, "data_spec §2.2 프로파일 권장값"),
+        }
+        for profile, (days, basis) in cases.items():
+            with self.subTest(profile=profile):
+                result, _, _, _ = self.run_fake_contract(profile=profile, warmup_days=None)
+                meta = result["run_meta"]
+                self.assertEqual((profile, days), (meta["profile"], meta["warmup_days"]))
+                self.assertIn(basis, meta["warmup_basis"])
+                timeline = {k: datetime.fromisoformat(v) for k, v in meta["timeline"].items()}
+                self.assertEqual(days, (timeline["t1"] - timeline["start"]).days, "t1 이 warmup 만큼 뒤가 아니다")
 
     def test_real_runner_uses_separate_main_windows_and_one_call_per_branch(self):
         result, captured, calls, holdout = self.run_fake_contract()

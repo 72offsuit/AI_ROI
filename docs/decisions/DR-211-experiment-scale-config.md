@@ -20,7 +20,7 @@ DR-234 가 정한 실험 규모(고객 50,000명 · t1 = Day 312 · 총 396일)�
 | 안 | 내용 | 장점 | 단점 |
 |---|---|---|---|
 | A | `run.warmup_days` 를 config 에 두고 **config `run.profile` 로 돌 때만** 쓴다. 우선순위는 인자 → config(같은 프로파일) → 프로파일 권장값 | 기본 실행이 규모 A 그대로 돈다. `--profile small` 스모크는 180일 그대로다 | 같은 키가 프로파일에 따라 쓰이기도 하고 안 쓰이기도 한다 — 규칙을 한 함수와 도움말에 적어야 한다 |
-| B | `run.warmup_days` 를 모든 실행의 기본 warmup 으로 쓴다 | 규칙이 단순하다 | `--profile small` 스모크가 312 + 84일을 돈다(시간 ≈ 2배). 기본 실행에서 프로파일 권장값 표가 사라진다 |
+| B | `run.warmup_days` 를 모든 실행의 기본 warmup 으로 쓴다 | 규칙이 단순하다 | `--profile small` 스모크도 312 + 84 = 396일을 돈다 — 총 일수가 small 264 → 396일(1.5배), smoke 174 → 396일(≈ 2.28배)이다. 실제 시간 비율은 재지 않았다. 기본 실행에서 프로파일 권장값 표가 사라진다 |
 | C | 프로파일을 `long`(warmup 365)으로 바꾼다 | config 키를 늘리지 않는다 | DR-234 가 이미 기각했다 — 13개월보다 1.8개월 길어 시간만 늘고, 시뮬레이터 프리셋의 다른 성질은 시스템 팀이 모른다 |
 | D | config 는 고객 수만 바꾸고 warmup 은 실행 명령에 `--warmup-days 312` 로 준다 | 코드 변경이 가장 작다 | 인자를 빠뜨린 실행이 조용히 273일로 돈다. 값은 config 한 곳에만 둔다는 원칙(#206)과 어긋난다 |
 
@@ -40,7 +40,9 @@ DR-234 가 정한 실험 규모(고객 50,000명 · t1 = Day 312 · 총 396일)�
 - config: `run.num_customers: 50000` · `run.profile: reference` · `run.warmup_days: 312`(신설 — 필수 키, 정수 ≥ 1).
 - `run_sprint.resolve_warmup(profile, warmup_days)` — ① `--warmup-days` 인자 → ② `profile` 이 config `run.profile` 과 같으면 `run.warmup_days` → ③ `PROFILE_WARMUP_DAYS`. 고른 출처를 `run_meta.warmup_basis` 에 문장으로 싣는다. 권장값을 모르는 프로파일이면 추측하지 않고 warmup 단계가 `not_run` 이다(예전과 같다).
 - 두 CLI(`src/main.py` · `run_sprint`)의 `--warmup-days` 도움말에 같은 규칙을 적는다.
-- `tests/test_decision_config.py` 의 기준값을 50,000 · 312 로 바꾸고, 우선순위 6경우와 "총 396일 = warmup + RCT 42 + 분기 42" 를 고정한다.
+- 테스트로 고정하는 것:
+  - `tests/test_decision_config.py` — 기준값 50,000 · 312, 우선순위 6경우, "총 396일 = warmup + RCT 42 + 분기 42". config 프로파일을 small · 77일로 바꾸면 small → 77 · reference → 273 인지도 본다(②가 `"reference"` 라는 이름에 박히지 않았는지).
+  - `tests/test_feature_sprint_table.py` — 가짜 공개 API 로 `run()` 을 끝까지 돌려, warmup 인자 없는 reference 실행의 `run_meta` 가 312일 · config 출처 · t1 = start + 312일이고 smoke 는 90일 · 권장값 출처인지 본다(`run()` 이 `resolve_warmup` 을 실제로 쓰는지).
 
 **근거:** 기본 실행이 곧 GATE 2 Baseline 실행이므로 규모는 실행 인자가 아니라 config 에 있어야 한다(D 기각). 스모크는 개발 반복용이라 시간축이 바뀌면 안 된다(B 기각). 규모 값 자체는 DR-234 가 정했다 — 이 기록은 그 값을 어디에, 어떤 우선순위로 두는지만 정한다.
 
@@ -48,7 +50,7 @@ DR-234 가 정한 실험 규모(고객 50,000명 · t1 = Day 312 · 총 396일)�
 
 | 안 | 왜 택하지 않았나 |
 |---|---|
-| B 모든 실행의 기본 | 스모크 시간이 ≈ 2배가 되어 개발 반복(DR-234 민감도: "개발 반복은 small")이 느려진다. 프로파일 권장값이 기본 실행 밖에서도 가려진다 |
+| B 모든 실행의 기본 | 스모크의 warmup 이 312일로 늘어 총 일수가 small 1.5배(264 → 396일) · smoke ≈ 2.28배(174 → 396일)가 된다 — 개발 반복(DR-234 민감도: "개발 반복은 small")이 느려진다. 실제 시간 비율은 재지 않았다(RCT · 분기 42일씩은 그대로라 일수 비율과 같다고 볼 수 없다). 프로파일 권장값이 기본 실행 밖에서도 가려진다 |
 | C `long` 프로파일 | DR-234 의 기각 사유 그대로다 |
 | D 실행 인자로만 | 인자를 빠뜨리면 조용히 규모 미달 실행이 된다 — GATE 2 Baseline 을 잘못 돌릴 길을 남긴다 |
 
@@ -68,7 +70,7 @@ DR-234 가 정한 실험 규모(고객 50,000명 · t1 = Day 312 · 총 396일)�
 DR-234 결정대로 `arm_counts` 로 T · C ≥ 1만을 확인하고 실행 시간을 기록한다.
 
 - **방법:** 인자 없이(`--out` · `--results-root` · `--run-id` 만) 돈 기본 실행 1회. 사람(인성)이 돌린다 — 시스템 팀 에이전트는 시뮬레이터 코드를 돌리지 않는다. 에이전트는 결과 폴더의 `run_meta.json` 에서 `rct`(Eligible 수 · 조건별 탈락 수 · `arm_counts`) · `warmup_days` · `warmup_basis` · `timeline` · 단계별 시간만 읽는다.
-- **실행:** 2026-11-03 11:43~13:52 KST, 인성이 로컬(36GB 메모리 Mac)에서 돌렸다. run_id `SP-20261103-114303-75f731f8`, 종료 코드 0, 25단계 모두 `ok` 였다. 코드는 main `02648e9` 에 이 PR 의 커밋 전 변경을 얹은 것이다. `experiment_config.yaml` sha256 은 `4f93c792…` 이고, `simulator_commit` 은 `79c6214`(`simulator_worktree_dirty: false`)다.
+- **실행:** 2026-11-03 11:43~13:52 KST, 인성이 로컬(36GB 메모리 Mac)에서 돌렸다. run_id `SP-20261103-114303-75f731f8`, 종료 코드 0, 25단계 모두 `ok` 였다. 코드는 main `02648e9` 에 이 PR 의 커밋 전 변경을 얹은 것이다. `experiment_config.yaml` sha256 은 `4f93c792…` 로 이 PR 커밋 `128e615` 의 파일과 같다(리뷰 보완에서 주석만 고쳐 지금 파일의 해시는 다르고, 값은 같다). `simulator_commit` 은 `79c6214`(`simulator_worktree_dirty: false`)다.
 - **결과: 통과.**
 
 | 확인 항목 | 기준 | 실측 | 판정 |
@@ -91,11 +93,13 @@ DR-234 결정대로 `arm_counts` 로 T · C ≥ 1만을 확인하고 실행 시�
 | 배정 · 특성 · 모델 · 집계 | 나머지 15단계(가장 긴 것은 `churn` 138.3) | 420.2 | 5% |
 
 - **자원:** 실행 중 메모리를 한 번 쟀다. 84분 무렵(`strategy_S2` 중) RSS 6.8GB였고, 최댓값은 재지 않았다. 출력 크기는 시뮬레이터 출력 6.0GB, 결과 폴더 0.97MB다.
+- **하지 않은 것 — 분기 간 대조.** DR-234 는 측정 계층 지표를 Eligible 로 좁히지 않은 결정(P3 기각)의 근거인 분기 간 대조를 small 실행 1회(2,000명)로만 했고, 50,000명에서도 같은지 #211 실행에서 확인하라고 남겼다(DR-234 남은 불확실성). 이번 확인 실행에서는 하지 않았다. 대조는 분기마다 공개 이벤트를 읽어야 하는데, 이번에 에이전트는 `run_meta.json` 만 읽었다. GATE 2 Baseline 실행(#170)의 출력으로 같은 대조를 하도록 넘긴다. 그때까지 P3 기각의 근거는 small 1회 그대로다.
 
 ## 남은 불확실성
 
 - **실행 시간 · 메모리 · 디스크(확인 실행으로 잼).** 기본 실행 한 번이 ≈ 2시간 10분, 디스크 ≈ 6GB 다. GATE 2 Baseline(#170) 일정은 이 시간을 기준으로 잡는다. FREEZE-003 으로 봉인 뒤 다시 돌려야 하면 그때마다 2시간이 넘게 든다. 시간을 줄이려면 차례로 도는 분기 6개(83분)를 손봐야 하지만, 이 기록의 범위가 아니다. 메모리 최댓값은 재지 않았다.
-- **출처 기록의 빈칸.** `provenance()` 는 `src/simulator` 경로만 dirty 여부를 본다. 그래서 시스템 쪽 커밋 전 변경으로 돈 실행도 `repo_commit` 만 적힌다. 이번 확인 실행은 `02648e9` 로 적혔지만 실제로는 커밋 전 #211 변경이 얹혀 있었다. config 변경은 `config_sha256` 으로 드러나지만 코드 변경은 드러나지 않는다. 봉인 실행에 문제가 될 수 있어 별도 이슈로 다룬다(이 PR 은 고치지 않는다).
+- **출처 기록의 빈칸.** `provenance()` 는 `src/simulator` 경로만 dirty 여부를 본다. 그래서 시스템 쪽 커밋 전 변경으로 돈 실행도 `repo_commit` 만 적힌다. 이번 확인 실행은 `02648e9` 로 적혔지만 실제로는 커밋 전 #211 변경이 얹혀 있었다. config 변경은 `config_sha256` 으로 드러나지만 코드 변경은 드러나지 않는다. 봉인 실행에 문제가 될 수 있어 #262 로 다룬다(PR #263 — 실행 시작 때 저장소 전체의 커밋 전 변경을 적고, 봉인 실행은 `--require-clean` 으로 시작 전에 막는다). 이 PR 은 고치지 않는다.
 - **Day 312 의 Eligible 비율.** DR-234 남은 불확실성 그대로다. 봉인 전 시뮬레이터 변경(#256 등)으로 달라질 수 있어, GATE 2 Baseline 실행(#170)의 `arm_counts` 로 다시 확인한다.
+- **50,000명 규모의 분기 간 대조.** 위 "하지 않은 것". #170 Baseline 출력에서 비Eligible 고객의 분기 창 결과가 분기마다 다르면 DR-234 P3 기각을 다시 본다(DR-234 반증 조건).
 - **`docs/data_spec.html` §2.2 의 reference warmup 273 은 그대로다.** 공용 문서(`shared_read_only`)라 이 PR 에서 고치지 않았다. 기본 실행이 312 를 쓴다는 사실은 config 와 이 기록에만 있다 — 필요하면 양 팀 합의로 data_spec 에 적는다.
-- **로컬 검증 범위.** `tests.test_decision_config` 만 돌렸다. 실행 루프 쪽(`resolve_warmup`)은 시뮬레이터 import 를 뺀 하네스(`tests/test_feature_sprint_table._contract_runner`)로 확인했다. 실행 루프 통합 테스트는 CI 가 돈다.
+- **로컬 검증 범위.** 로컬(Python 3.12.4)에서 `tests.test_decision_config` · `tests.test_feature_sprint_table` · `tests.test_isolation` · `tests.test_team_boundaries` · `tests.test_decision_records` 108건을 돌렸다(OK · skip 0). 실행 루프 쪽은 시뮬레이터 import 를 뺀 하네스(`tests/test_feature_sprint_table._contract_runner`)와 그 위의 가짜 공개 API 실행으로 확인했다 — 실제 시뮬레이터 · 엔진은 돌지 않는다. 실행 루프 통합 테스트(`test_orchestration_*`)는 로컬에서 돌리지 않았다 — CI 가 돈다.
