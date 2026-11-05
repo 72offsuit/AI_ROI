@@ -29,7 +29,8 @@
 - **시뮬레이터**는 #252(2026-10-31 병합)에서 이 규칙으로 만든다 — #256 본문의 근거 표(정의 수준). 시뮬레이터 코드는 읽지 않았다.
 - **커머스** `Ecommerce_Service` `src/lib/server/commerce/event-log.ts` 276–278행 — 새 세션마다 · 함께(#256 본문).
 - **측정 계층이 접속 · 방문을 세는 방식**(이 저장소, main `e2942a1`):
-  - Observable `visit_count` · `last_visit_date` 는 `session_start` · `return_visit` 두 이벤트에서 계산한다(`src/measurement/schema.py`). B 에서는 세션마다 둘 중 하나만 있으므로 **두 이벤트를 합친 수 = 세션 수**다. 커머스의 지금 방식(함께)에서는 재방문 세션이 두 번 세진다.
+  - Observable `visit_count` · `last_visit_date` 의 근거 이벤트는 `session_start` · `return_visit` 이다(`src/measurement/schema.py` 매핑 — 어느 이벤트로 계산하는지를 정하고, `coverage.py` 는 그 이벤트가 있는지를 본다). B 에서는 생산자가 규칙을 지키면 세션마다 둘 중 하나만 있으므로 **두 이벤트를 합친 수 = 세션 수**다.
+  - **방문 Feature 는 어느 안이든 두 번 세지 않는다.** F08 · F25 · `visit_count_60d` 는 `session_id` 고유 개수다(`src/decision/features/d1_calculate.py` · `sprint_table.py`). 커머스의 지금 방식(함께)에서 **이벤트 수가 두 번 쌓이는 곳은 Churn DL 의 `visit` 채널**(`src/decision/churn_dl.py`, 일별 `session_start` · `return_visit` 이벤트 수)이다 — 재방문 세션이 커머스에서 2, 시뮬레이터에서 1 이다. 이벤트 수를 세는 `return_visit_count_60d` 도 출처마다 뜻이 다르다(#256 본문). B 를 고르는 이유는 이 두 곳이다 — PR #265 리뷰(광진)에서 범위를 좁혔다.
   - 미접속 경과일의 접속 = `session_start` · `return_visit` · `purchase`(`src/measurement/kpi.py`) — 마지막 시각만 보므로 어느 안이든 같다.
   - 퍼널 방문 단계 = `session_start ∪ return_visit`(#255 · #259, DR-255) — B 에 맞는다.
   - `session_duration` 의 계산 이벤트는 `session_start` · `page_view` · `product_view` 다(`schema.py`). B 에서 `return_visit` 하나로 끝나는 세션이 이 계산에서 빠지는지는 반영 ③에서 확인한다.
@@ -62,4 +63,7 @@
 
 - 시뮬레이터 팀 합의 전이다(#256, 11/06 오전 회신 요청).
 - 반영 ②(커머스) · ③(DQ · 소비처)은 이 기록 뒤에 한다. ③에서 `session_duration` 계산 이벤트(`schema.py`, GATE 1 정본)를 바꿔야 한다고 정하면 그것도 #208 실측 전에 병합한다.
-- **GATE 1 부분 봉인 기록을 다시 써야 한다.** 이 PR 로 정본 해시 2건(`measurement_contract.md` · `event_schema.md`)이 바뀐다. DR-109 와 같은 절차(같은 판 `gate1-lock/v1` · 항목 9종 · 선언 그대로)로 사람이 `freeze.record()` 로 서명한다. 에이전트는 서명하지 않는다.
+- 반영 ③에서 함께 볼 것(PR #265 리뷰):
+  - **DQ 가 B 를 강제하지 않는다.** `DQ-04` 는 시간 순서 검사라, 같은 세션에 두 시작 이벤트가 있어도 통과한다. 위반을 잡을 검사가 필요한지 정한다.
+  - **반영 ② 전에 "함께" 기록된 커머스 데이터**는 생산자를 고쳐도 그대로다. 이벤트 수를 세는 소비처(Churn DL `visit` 채널)에 쓸 때의 처리 방침을 정한다. 데이터 수정 · 삭제 · 재생성은 이 기록이 정하지 않는다.
+- **GATE 1 부분 봉인 기록은 다시 썼다 — 끝났다.** 정본 해시 2건(`measurement_contract.md` · `event_schema.md`)이 바뀌어, 사람(Danto7632)이 `freeze.record()` 로 서명했다(PR #265 두 번째 커밋 `1f6ff94`, 기록의 `repo_commit` = 첫 커밋 `e1372ec`). 바뀐 칸은 `locked_at` · `repo_commit` · 해시 2건뿐이고 판 `gate1-lock/v1` · 항목 9종 · `PARTIAL_FREEZE` · 가정 4건은 그대로다. 같은 판으로 다시 쓴 근거는 DR-109 의 전제("시뮬레이터 산출물 없음")가 아니라 지금의 사실이다 — **`EVENT_SCHEMA_v1` 은 아직 `PENDING` 이고, B 는 시뮬레이터가 이미 쓰는 정의를 바꾸지 않는 문서 정합 변경**이다. 이 DR 은 정본 해시 대상이 아니라 이 보완으로 다시 서명할 필요는 없다.
