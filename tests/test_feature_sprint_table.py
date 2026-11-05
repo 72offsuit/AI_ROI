@@ -719,7 +719,8 @@ class TestOutcomeObservationContract(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp, contextlib.ExitStack() as stack:
             patches = {"sim": api, "decision_fn": decision, "decision_available": lambda name: name in fns,
                                 "verify_event_run": verify,
-                                "branch_economics": economics, "provenance": lambda: {"fixture": True},
+                                "branch_economics": economics,
+                                "provenance": lambda *args, **kwargs: {"fixture": True},  # #262 — 시작 상태를 받는다
                                 "write_results": write}
             if not real_margin:
                 patches["margin_rate_basis"] = lambda raw: (None, {"status": "not_run", "reason": "범위 밖"})
