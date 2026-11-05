@@ -72,10 +72,13 @@ PRE_206_EXPERIMENT = {
     "rct": {"control_share": 0.5, "active_days": 90},
     "ab_test": {"alpha": 0.05, "target_power": 0.8, "srm_p_threshold": 0.001},
 }
-#: 지금 판 — #206 값에서 `rct.active_days` 만 없앴다(#234 · DR-234: RCT 모집단은 설정값이 아니라
-#: data_spec §4.1 Eligible 정본 정의다). 나머지 값은 #206 이전과 같다.
+#: 지금 판 — #206 값에서
+#:   · `rct.active_days` 를 없앴다(#234 · DR-234: RCT 모집단은 설정값이 아니라 data_spec §4.1 Eligible 정본 정의다).
+#:   · 실험 규모를 DR-234 규모 A 로 바꿨다(#211 · DR-211): 고객 20,000 → 50,000명, `run.warmup_days` 312 신설
+#:     (총 396일 = 13개월). 나머지 값은 #206 이전과 같다.
 EXPERIMENT_NOW = copy.deepcopy(PRE_206_EXPERIMENT)
 del EXPERIMENT_NOW["rct"]["active_days"]
+EXPERIMENT_NOW["run"] = {"num_customers": 50000, "profile": "reference", "warmup_days": 312}
 
 
 def _model(**patch) -> dict:
@@ -111,9 +114,15 @@ class TestSchema(unittest.TestCase):
         self.assertEqual("logistic_regression", dc.model_config_from(MODEL_NOW).churn.risk_baseline_model)
 
     def test_removed_active_days_is_rejected_not_ignored(self) -> None:
-        """#234 — 옛 설정 파일의 `active_days` 가 조용히 무시되면 그 값이 아직 쓰인다고 믿게 된다."""
+        """#234 — 옛 설정 파일의 `active_days` 가 조용히 무시되면 그 값이 아직 쓰인다고 믿게 된다.
+
+        지금 판에 옛 키 하나만 되살려 시험한다 — #206 판 전체를 넣으면 그 뒤에 생긴 필수 키(#211
+        `run.warmup_days`)의 누락이 먼저 잡혀 이 검사가 무엇을 막는지 흐려진다.
+        """
+        raw = copy.deepcopy(EXPERIMENT_NOW)
+        raw["rct"]["active_days"] = PRE_206_EXPERIMENT["rct"]["active_days"]
         with self.assertRaises(dc.DecisionConfigError) as caught:
-            dc.validate(copy.deepcopy(PRE_206_EXPERIMENT), dc.EXPERIMENT_SCHEMA, "t")
+            dc.validate(raw, dc.EXPERIMENT_SCHEMA, "t")
         self.assertIn("active_days", str(caught.exception))
 
     def test_unknown_keys_are_rejected_at_every_level(self) -> None:
@@ -164,6 +173,8 @@ class TestSchema(unittest.TestCase):
             "alpha 1.5": ("ab_test", "alpha", 1.5),
             "seed -1": ("holdout", "development_seed", -1),
             "빈 프로파일": ("run", "profile", " "),
+            "warmup 0": ("run", "warmup_days", 0),
+            "warmup 문자열": ("run", "warmup_days", "312"),
         }
         for label, (section, key, value) in experiment_bad.items():
             raw = copy.deepcopy(EXPERIMENT_NOW)
@@ -381,10 +392,49 @@ class TestCodeUsesConfig(unittest.TestCase):
         try:
             self.assertEqual(0.5, rs.RCT_CONTROL_SHARE)
             args = rs.build_parser().parse_args(["--out", "x"])
-            self.assertEqual((42, 20000, "reference"), (args.seed, args.customers, args.profile))
+            self.assertEqual((42, 50000, "reference", None),
+                             (args.seed, args.customers, args.profile, args.warmup_days))
             self.assertFalse(hasattr(args, "active_days"), "#234 에서 없앤 RCT 모집단 창이 CLI 에 남아 있다")
             assignment = rs.rct_assign([f"C{i:08d}" for i in range(80)], 42)
             self.assertEqual(40, sum(1 for t in assignment.values() if t == "T0"))
+        finally:
+            sys.modules.pop(rs.__name__, None)
+
+    def test_warmup_resolution_and_experiment_scale(self) -> None:
+        """#211 · DR-211 — config warmup 은 config 프로파일에만 붙고, 실험 규모가 DR-234 규모 A 다."""
+        import sys
+        from tests.test_feature_sprint_table import _contract_runner
+        rs = _contract_runner()
+        try:
+            warmup, basis = rs.resolve_warmup("reference", None)
+            self.assertEqual(312, warmup)
+            self.assertIn("run.warmup_days", basis)
+            # 다른 프로파일은 그 프로파일의 권장값 — small 스모크가 312일을 돌지 않는다.
+            self.assertEqual((180, "data_spec §2.2 프로파일 권장값"), rs.resolve_warmup("small", None))
+            self.assertEqual((90, "data_spec §2.2 프로파일 권장값"), rs.resolve_warmup("smoke", None))
+            # 인자가 언제나 이긴다(config 프로파일이어도).
+            self.assertEqual((60, "--warmup-days 인자"), rs.resolve_warmup("small", 60))
+            self.assertEqual((273, "--warmup-days 인자"), rs.resolve_warmup("reference", 273))
+            # 권장값을 모르는 프로파일은 추측하지 않는다 — run() 이 warmup 단계에서 not_run.
+            self.assertIsNone(rs.resolve_warmup("no-such-profile", None)[0])
+
+            # ②는 "reference" 라는 이름이 아니라 config run.profile 을 따른다. config 프로파일을 small · 77일로
+            # 바꾸면 small 이 77일, reference 는 권장값 273일이다 — `profile == "reference"` 로 박은 구현을 잡는다.
+            swapped = dataclasses.replace(
+                rs.EXPERIMENT, run=dataclasses.replace(rs.EXPERIMENT.run, profile="small", warmup_days=77))
+            with mock.patch.object(rs, "EXPERIMENT", swapped):
+                warmup, basis = rs.resolve_warmup("small", None)
+                self.assertEqual(77, warmup)
+                self.assertIn("run.warmup_days (프로파일 small", basis)
+                self.assertEqual((273, "data_spec §2.2 프로파일 권장값"), rs.resolve_warmup("reference", None))
+                self.assertEqual((60, "--warmup-days 인자"), rs.resolve_warmup("small", 60))
+
+            # DR-234 규모 A: 50,000명 · t1 = Day 312 · 총 396일(warmup + RCT 42 + 분기 42) = 13개월.
+            run = rs.EXPERIMENT.run
+            self.assertEqual((50000, 312), (run.num_customers, run.warmup_days))
+            self.assertEqual(396, run.warmup_days + 2 * rs.LABEL_WINDOW_DAYS)
+            # control_share 0.5 가 min(T, C) 를 가장 크게 만든다(DR-234 기각 표) — 바꾸면 규모를 다시 계산한다.
+            self.assertEqual(0.5, rs.RCT_CONTROL_SHARE)
         finally:
             sys.modules.pop(rs.__name__, None)
 
