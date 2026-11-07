@@ -1,6 +1,6 @@
 """스프린트 v0 실행 루프 — 명령 하나로 탐색 RCT → 모델 학습 → 전략 비교까지 돈다 (이슈 #146).
 
-    python -m src.orchestration.run_sprint --seed 42 --customers 20000 --profile reference --out <dir>
+    python -m src.orchestration.run_sprint --out <dir>   # config 기본 — 50,000명 · reference · warmup 312일 (#211)
     python -m src.orchestration.run_sprint --seed 42 --customers 2000 --profile small --out <dir>   # 스모크
 
 흐름 (지휘자는 명령만 내린다 — `src/orchestration/AGENTS.md`):
@@ -79,9 +79,26 @@ EXPERIMENT = load_experiment_config()
 load_model_config()
 # 프로파일별 권장 warmup — docs/data_spec.html §2.2 표. `small` 은 시간축이 `short` 와 같다
 # (docs/decisions/DR-S3-p6-signup.md U11). `--warmup-days` 로 덮어쓸 수 있다.
+# config 의 기본 프로파일로 돌 때는 이 표가 아니라 config `run.warmup_days` 다(#211 · resolve_warmup).
 PROFILE_WARMUP_DAYS: dict[str, int] = {
     "smoke": 90, "short": 180, "small": 180, "reference": 273, "long": 365, "rolling": 273,
 }
+
+
+def resolve_warmup(profile: str, warmup_days: int | None) -> tuple[int | None, str]:
+    """warmup 일수(= t1)와 그 출처. 우선순위는 ① ``--warmup-days`` 인자 → ② config ``run.warmup_days`` —
+    ``profile`` 이 config ``run.profile`` 과 같을 때만 → ③ 프로파일 권장값(data_spec §2.2).
+
+    ②를 config 프로파일에만 묶는 것은 실험 규모(DR-234)가 그 프로파일의 실행을 위한 값이기 때문이다.
+    ``--profile small`` 스모크가 312일을 돌지 않는다. 권장값을 모르는 프로파일이면 ``None`` 이고, 실행이
+    warmup 단계에서 ``not_run`` 이 된다(DR-211).
+    """
+    if warmup_days is not None:
+        return warmup_days, "--warmup-days 인자"
+    if profile == EXPERIMENT.run.profile:
+        return (EXPERIMENT.run.warmup_days,
+                f"config/experiment_config.yaml run.warmup_days (프로파일 {profile} · DR-234 실험 규모)")
+    return PROFILE_WARMUP_DAYS.get(profile), "data_spec §2.2 프로파일 권장값"
 # label window 는 프로파일 간에도 고정이다(data_spec §2.2) — 인자로 받지 않는다.
 LABEL_WINDOW_DAYS = 42
 
@@ -1137,29 +1154,135 @@ def _point_latest(sprint_dir: Path, run_id: str) -> None:
 # ── 출처 기록 ───────────────────────────────────────────────────────────────
 
 
-def _git(*args: str) -> str | None:
+#: `run_meta.provenance.repo_dirty_paths` 에 싣는 경로 수 상한. 넘으면 앞에서부터 이만큼만 싣고,
+#: 총수는 `repo_dirty_path_count` 에 둔다.
+DIRTY_PATHS_LIMIT = 200
+
+
+class DirtyRepoError(RuntimeError):
+    """`--require-clean` 인데 저장소에 커밋 전 변경이 있거나, 그 여부를 확인하지 못했다 (#262).
+
+    시뮬레이션을 시작하기 전에 던진다. 결과 폴더는 만들지 않는다.
+    """
+
+    exit_code = 4  # src/main.py 종료 코드 표의 4
+
+
+def _git(*args: str, strip: bool = True) -> str | None:
     try:
         result = subprocess.run(
             ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, timeout=10, check=False
         )
     except (OSError, subprocess.SubprocessError):
         return None
-    return result.stdout.strip() if result.returncode == 0 else None
+    if result.returncode != 0:
+        return None
+    return result.stdout.strip() if strip else result.stdout
 
 
-def provenance() -> dict[str, Any]:
-    simulator_commit = _git("log", "-1", "--format=%H", "--", "src/simulator")
-    dirty = _git("status", "--porcelain", "--ignore-submodules=all", "--", "src/simulator")
+def _dirty_paths(porcelain: str) -> list[str]:
+    """`git status --porcelain=v1 -z` 출력에서 경로만 뽑는다(저장소 루트 기준).
+
+    이름 바꿈 · 복사 항목은 새 경로 다음 칸에 옛 경로가 오므로 둘 다 싣는다.
+    """
+    tokens = porcelain.split("\0")
+    paths: set[str] = set()
+    i = 0
+    while i < len(tokens):
+        entry = tokens[i]
+        i += 1
+        if not entry:
+            continue
+        status, path = entry[:2], entry[3:]
+        paths.add(path)
+        if "R" in status or "C" in status:
+            if i < len(tokens) and tokens[i]:
+                paths.add(tokens[i])
+            i += 1
+    return sorted(paths)
+
+
+def repo_state() -> dict[str, Any]:
+    """지금 저장소 상태 — HEAD · 커밋 전 변경 경로 · 시뮬레이터 커밋 · config 해시 (#262).
+
+    커밋 전 변경은 추적 파일의 변경(스테이징 여부와 무관)과 `.gitignore` 밖의 새 파일이다. 서브모듈은 보지 않는다.
+    git 을 쓰지 못하면 ``dirty`` · ``paths`` 가 ``None`` 이다. 깨끗하다고 추측하지 않는다.
+    """
+    porcelain = _git(
+        "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=all", strip=False
+    )
+    paths = None if porcelain is None else _dirty_paths(porcelain)
     config_dir = REPO_ROOT / "config"
-    config_sha256 = {
-        p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(config_dir.glob("*.yaml"))
-    }
     return {
-        "repo_commit": _git("rev-parse", "HEAD"),
-        "simulator_commit": simulator_commit,
-        "simulator_worktree_dirty": None if dirty is None else bool(dirty),
-        "config_sha256": config_sha256,
+        "head": _git("rev-parse", "HEAD"),
+        "dirty": None if paths is None else bool(paths),
+        "paths": paths,
+        "simulator_commit": _git("log", "-1", "--format=%H", "--", "src/simulator"),
+        "simulator_dirty": None if paths is None else any(p.startswith("src/simulator/") for p in paths),
+        "config_sha256": {
+            p.name: hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(config_dir.glob("*.yaml"))
+        },
     }
+
+
+def check_clean(state: Mapping[str, Any]) -> None:
+    """`--require-clean` 검사. 변경이 있거나 확인하지 못하면 `DirtyRepoError` 를 던진다 (#262)."""
+    if state["dirty"] is None:
+        raise DirtyRepoError(
+            "--require-clean: git 으로 저장소 상태를 읽지 못했다 — 깨끗한지 확인할 수 없어 시작하지 않는다"
+        )
+    if state["dirty"]:
+        paths = state["paths"]
+        shown = ", ".join(paths[:10]) + (f" 외 {len(paths) - 10}개" if len(paths) > 10 else "")
+        raise DirtyRepoError(
+            f"--require-clean: 커밋 전 변경이 {len(paths)}개 있다({shown}) — "
+            "커밋하거나 깨끗한 worktree 에서 다시 시작한다"
+        )
+
+
+def _state_changes(start: Mapping[str, Any], end: Mapping[str, Any]) -> list[str] | None:
+    """시작 때와 끝날 때 상태의 차이를 문장 목록으로. 어느 한쪽이라도 읽지 못했으면 ``None``."""
+    if start["head"] is None or end["head"] is None or start["paths"] is None or end["paths"] is None:
+        return None
+    changes: list[str] = []
+    if start["head"] != end["head"]:
+        changes.append(f"HEAD {start['head'][:7]} → {end['head'][:7]}")
+    added = sorted(set(end["paths"]) - set(start["paths"]))
+    removed = sorted(set(start["paths"]) - set(end["paths"]))
+    if added:
+        changes.append(f"커밋 전 변경 경로가 생겼다: {', '.join(added[:10])}" + (" …" if len(added) > 10 else ""))
+    if removed:
+        changes.append(f"커밋 전 변경 경로가 사라졌다: {', '.join(removed[:10])}" + (" …" if len(removed) > 10 else ""))
+    for name in sorted(set(start["config_sha256"]) | set(end["config_sha256"])):
+        if start["config_sha256"].get(name) != end["config_sha256"].get(name):
+            changes.append(f"config/{name} 내용이 바뀌었다")
+    return changes
+
+
+def provenance(start: Mapping[str, Any], *, require_clean: bool = False) -> dict[str, Any]:
+    """실행 기록의 출처. **실행을 시작할 때** 잰 저장소 상태(``start``)를 싣는다 (#262).
+
+    끝날 때 한 번 더 재서, 실행 중에 HEAD · 커밋 전 변경 경로 · config 가 바뀌었으면 그 내용을 적는다.
+    이미 바뀌어 있던 파일을 실행 중에 또 고친 것은 잡지 못한다. `--require-clean` 실행은 시작 때 바뀐
+    파일이 없으므로, 실행 중에 생긴 변경은 모두 경로 차이로 드러난다.
+    """
+    changes = _state_changes(start, repo_state())
+    paths = start["paths"]
+    record: dict[str, Any] = {
+        "repo_commit": start["head"],
+        "repo_worktree_dirty": start["dirty"],
+        "repo_dirty_paths": None if paths is None else paths[:DIRTY_PATHS_LIMIT],
+        "repo_dirty_path_count": None if paths is None else len(paths),
+        "simulator_commit": start["simulator_commit"],
+        "simulator_worktree_dirty": start["simulator_dirty"],
+        "config_sha256": start["config_sha256"],
+        "require_clean": require_clean,
+        "repo_changed_during_run": None if changes is None else bool(changes),
+        "repo_changes_during_run": changes,
+    }
+    if paths is None or changes is None:
+        record["null_reason"] = "git 으로 저장소 상태를 읽지 못했다 — 깨끗하다고 추측하지 않는다"
+    return record
 
 
 # ── 실행 ────────────────────────────────────────────────────────────────────
@@ -1182,6 +1305,7 @@ class SprintConfig:
     stages: frozenset[str] | None = None   # 실행할 단계 이름 — None 이면 전 구간
     scope: str = ""                        # 범위 밖 단계의 not_run 사유에 쓰는 이름 (예: "--mode train")
     capture: dict[str, Any] | None = None  # 실행 뒤 ctx(점수 · 예산)·비용·결과 폴더를 넘겨받을 곳
+    require_clean: bool = False            # #262 — 커밋 전 변경이 있으면 시뮬레이션 전에 멈춘다(DirtyRepoError)
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -1294,10 +1418,15 @@ def run(config: SprintConfig) -> Path:
     """전 구간을 돌리고 결과 폴더 경로를 돌려준다. 단계 실패는 기록하고 다음으로 간다."""
     run_id = config.run_id or new_run_id()
     generated_at = mc.kst_now()
+    # 출처는 시작할 때 잰다 — 실행 중의 커밋 · 수정이 이 실행의 기록을 바꾸지 못하게 한다 (#262).
+    start_state = repo_state()
+    if config.require_clean:
+        check_clean(start_state)
+
     log = StageLog(config.stages, config.scope)
     out = Path(config.out)
     main_root = out / "raw" / "main"
-    warmup = config.warmup_days if config.warmup_days is not None else PROFILE_WARMUP_DAYS.get(config.profile)
+    warmup, warmup_basis = resolve_warmup(config.profile, config.warmup_days)
     basis, basis_reason = load_cost_basis()
     costs, costs_source = plan_costs(basis)
     _log(f"run_id={run_id} seed={config.seed} N={config.num_customers} profile={config.profile} out={out}")
@@ -1847,7 +1976,7 @@ def run(config: SprintConfig) -> Path:
             "num_customers": config.num_customers,
             "profile": config.profile,
             "warmup_days": warmup,
-            "warmup_basis": "--warmup-days 인자" if config.warmup_days is not None else "data_spec §2.2 프로파일 권장값",
+            "warmup_basis": warmup_basis,
             "label_window_days": LABEL_WINDOW_DAYS,
             "timeline": ctx["timeline"],
             "simulator_version": ", ".join(versions) if versions else None,
@@ -1890,7 +2019,7 @@ def run(config: SprintConfig) -> Path:
                                        "strategy_details.*.measured_economics (DR-169)",
             },
             "decision_modules": {k: decision_available(k) for k in DECISION_API},
-            "provenance": provenance(),
+            "provenance": provenance(start_state, require_clean=config.require_clean),
             "stages": log.stages,
         }
         # 머리(sprint·sealed·run_id·generated_at)와 단계 상태가 마지막에 오게 둔다 — 평가 결과의 키가 덮지 못한다.
@@ -1927,7 +2056,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--profile", default=EXPERIMENT.run.profile)
     parser.add_argument("--out", type=Path, required=True, help="시뮬레이터 출력 루트의 상위 폴더 (빈 폴더)")
     parser.add_argument("--results-root", type=Path, default=DEFAULT_RESULTS_ROOT)
-    parser.add_argument("--warmup-days", type=int, default=None, help="기본: 프로파일 권장값(data_spec §2.2)")
+    parser.add_argument("--warmup-days", type=int, default=None,
+                        help="기본: --profile 이 config run.profile 이면 config run.warmup_days, "
+                             "아니면 프로파일 권장값(data_spec §2.2)")
     parser.add_argument("--budget-krw", type=int, default=None,
                         help="S2~S5 의 plan 예산(원). 기본: C_rule = S1(상한 없음) 배정의 계획 비용 합")
     parser.add_argument("--run-id", default=None)
@@ -1937,6 +2068,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help="churn 학습·CV 표본 상한 — 클래스 비율 유지 추출 (기본: 전원)")
     parser.add_argument("--realism-report", type=Path, default=REALISM_REPORT,
                         help="있으면 결과 폴더로 사본을 둔다 (기본: docs/research/realism_report.json)")
+    parser.add_argument("--require-clean", action="store_true",
+                        help="저장소에 커밋 전 변경(추적 파일 변경 · .gitignore 밖 새 파일)이 있으면 시뮬레이션 전에 "
+                             "멈춘다(종료 코드 4). 봉인 실행(GATE 2 Baseline)은 이 옵션으로 돌린다 (#262)")
     return parser
 
 
@@ -1946,10 +2080,14 @@ def main(argv: list[str] | None = None) -> int:
         seed=args.seed, num_customers=args.customers, profile=args.profile, out=args.out,
         results_root=args.results_root, warmup_days=args.warmup_days, budget_krw=args.budget_krw,
         run_id=args.run_id, realism_report=args.realism_report,
-        cv_folds=args.cv_folds, max_train_rows=args.max_train_rows,
+        cv_folds=args.cv_folds, max_train_rows=args.max_train_rows, require_clean=args.require_clean,
     )
     started = time.perf_counter()
-    run_dir = run(config)
+    try:
+        run_dir = run(config)
+    except DirtyRepoError as error:
+        _log(str(error))
+        return error.exit_code
     meta = json.loads((run_dir / "run_meta.json").read_text(encoding="utf-8"))
     counts = Counter(stage["status"] for stage in meta["stages"])
     _log(f"완료 {time.perf_counter() - started:.1f}s — 단계 {dict(sorted(counts.items()))}")

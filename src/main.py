@@ -134,7 +134,8 @@ def _epilog() -> str:
         *wrap(" · ".join(NOT_PERSISTED), "저장하지 않는 것: ", 2),
         "",
         "종료 코드: 0 실행한 단계 전부 ok · 1 실패한 단계(또는 산출물) 있음 · 2 인자 오류(argparse) ·",
-        "  3 실패는 없지만 실행 범위 안에 not_run 이 있음(예: 라벨이 한 값뿐) · 5 config 오류",
+        "  3 실패는 없지만 실행 범위 안에 not_run 이 있음(예: 라벨이 한 값뿐) ·",
+        "  4 --require-clean 인데 커밋 전 변경이 있음(시작 전에 멈춤) · 5 config 오류",
         "",
         "예:  python src/main.py --mode train --customers 2000 --profile small",
         "     python src/main.py --mode optimize --budget 50000000",
@@ -161,12 +162,17 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--out", type=Path, default=None, help="시뮬레이터 출력 폴더(새 폴더). 기본: data/sprint/<run_id>/")
     parser.add_argument("--results-root", type=Path, default=None,
                         help="기본: full 은 results/, 나머지는 results/cli/<mode>/")
-    parser.add_argument("--warmup-days", type=int, default=None, help="기본: 프로파일 권장값(data_spec §2.2)")
+    parser.add_argument("--warmup-days", type=int, default=None,
+                        help="기본: --profile 이 config run.profile 이면 config run.warmup_days, "
+                             "아니면 프로파일 권장값(data_spec §2.2)")
     parser.add_argument("--cv-folds", type=int, default=None,
                         help="churn 교차검증 fold 수 덮어쓰기 (기본: config/model_config.yaml churn.cv_folds)")
     parser.add_argument("--max-train-rows", type=int, default=None,
                         help="churn 학습·CV 표본 상한 — 클래스 비율 유지 추출 (기본: 전원)")
     parser.add_argument("--run-id", default=None, help="기본: SP-<날짜>-<시각>-<난수>")
+    parser.add_argument("--require-clean", action="store_true",
+                        help="저장소에 커밋 전 변경(추적 파일 변경 · .gitignore 밖 새 파일)이 있으면 시뮬레이션 전에 "
+                             "멈춘다(종료 코드 4). 봉인 실행(GATE 2 Baseline)은 이 옵션으로 돌린다 (#262)")
     return parser
 
 
@@ -470,10 +476,14 @@ def main(argv: list[str] | None = None) -> int:
                                            else REPO_ROOT / "results" / "cli" / mode.name),
         warmup_days=args.warmup_days, budget_krw=args.budget, run_id=run_id,
         cv_folds=args.cv_folds, max_train_rows=args.max_train_rows,
-        stages=mode.stages, scope=f"--mode {mode.name}", capture=capture,
+        stages=mode.stages, scope=f"--mode {mode.name}", capture=capture, require_clean=args.require_clean,
     )
     started = time.perf_counter()
-    run_dir = rs.run(sprint)
+    try:
+        run_dir = rs.run(sprint)
+    except rs.DirtyRepoError as error:
+        print(f"[main] {error}", file=sys.stderr)
+        return error.exit_code
     outputs = {name: write_artifact(name, run_dir, capture) for name in mode.writes}
     stages = _read_json(run_dir / "run_meta.json").get("stages") or []
     report = stage_report(mode, stages)
