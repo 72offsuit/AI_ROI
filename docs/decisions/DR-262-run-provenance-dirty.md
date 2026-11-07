@@ -89,3 +89,4 @@
 - **측정 계층 게시물(`build_provenance`)과 `src/main.py` 의 `main_cli.json` 은 여전히 `repo_commit` · config 해시만 적는다.** 같은 실행의 `run_meta.provenance` 가 정본이다. 게시물 쪽은 필요하면 따로 정한다.
 - **main 클론에는 남의 변경(` M dashboard/AGENTS.md`)이 있다.** 그래서 거기서는 `--require-clean` 이 멈춘다. 의도한 동작이다. 봉인 실행은 깨끗한 worktree 에서 한다.
 - **로컬 검증 범위.** 새 `tests/test_run_provenance.py` 는 시뮬레이터 import 를 뺀 하네스와 임시 git 저장소로 돈다. 실제 실행 루프 통합 테스트(`test_orchestration_*`)는 로컬에서 돌리지 않았다 — CI 가 판정한다.
+- **후속 #264(2026-11-07) — git 출력을 바이트로 읽는다.** PR #263 리뷰(광진)가 `text=True` 결함을 재현했다 — CP949 로캘의 한글 경로 · 비 UTF-8 바이트 경로에서 `UnicodeDecodeError` 가 올라가 시작 검사가 기록 / 종료 4 로 가지 못했고, 끝의 `provenance()` 가 `finally` 안이라 결과 쓰기도 막았다. 이름 속 CR 은 LF 로 바뀌었다. 지금은 바이트로 받아 UTF-8 로 디코딩하고, 실패하면 `None`(→ 기본 실행은 `null_reason`, `--require-clean` 은 종료 4)이다. 같은 이슈에서 출처 기록 함수를 `src/orchestration/provenance.py`(표준 라이브러리만)로 옮겨, Git 검사가 ML 의존성 없는 3.10 잡에서도 실제로 돈다. 위 결정은 그대로다.
