@@ -17,8 +17,10 @@ import numpy as np
 import pandas as pd
 
 from src.decision.features.sprint_table import _clean, to_index_time
+from src.decision.return_visit import check_input
 
 CHANNELS: tuple[tuple[str, frozenset[str]], ...] = (
+    # #256 ③b: 두 시작 이벤트의 수를 합한다. B안에서는 세션당 하나이나 여기서 중복 제거하지 않는다.
     ("visit", frozenset({"session_start", "return_visit"})),
     ("page_view", frozenset({"page_view"})),
     ("product_view", frozenset({"product_view"})),
@@ -32,13 +34,19 @@ CHANNELS: tuple[tuple[str, frozenset[str]], ...] = (
 )
 
 
-def build_daily_sequences(events: pd.DataFrame, index_time, customers, lookback_days: int = 56) -> np.ndarray:
-    """(n_customers, lookback_days, n_channels) float32. T0 이전 이벤트만, 마지막 축이 T0 직전 날."""
+def build_daily_sequences(events: pd.DataFrame, index_time, customers, lookback_days: int = 56, *,
+                          purpose: str = "experiment", return_metadata: bool = False):
+    """일별 이벤트 수 log1p 배열. 관측 비교는 purpose=observation·return_metadata=True로 보관한다.
+
+    기본 반환은 기존 (n_customers, lookback_days, n_channels) float32 배열이다.
+    return_metadata=True면 (배열, 입력 의미 메타데이터)를 반환한다. 학습 계산은 바꾸지 않는다.
+    """
     t0 = to_index_time(index_time)
     ids = pd.Index(customers)
     frame = _clean(events)
     start = t0 - pd.Timedelta(days=lookback_days)
     frame = frame[(frame["timestamp"] >= start) & (frame["timestamp"] < t0) & frame["customer_id"].isin(ids)]
+    metadata = check_input(frame, purpose)
     out = np.zeros((len(ids), lookback_days, len(CHANNELS)), dtype=np.float32)
     if len(frame):
         day = ((frame["timestamp"] - start).dt.total_seconds() // 86400).astype(int).clip(0, lookback_days - 1)
@@ -46,7 +54,8 @@ def build_daily_sequences(events: pd.DataFrame, index_time, customers, lookback_
         for c, (_, types) in enumerate(CHANNELS):
             mask = frame["event_type"].isin(types).to_numpy()
             np.add.at(out, (row[mask], day.to_numpy()[mask], c), 1.0)
-    return np.log1p(out)
+    result = np.log1p(out)
+    return (result, metadata) if return_metadata else result
 
 
 def _make_net(n_channels: int, hidden: int):

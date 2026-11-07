@@ -38,6 +38,7 @@ import pandas as pd
 
 from src.measurement.schema import TIMEZONE, EventType
 from src.decision.observation_contract import normalize_index_time, outcome_observation_status
+from src.decision.return_visit import INPUT_METADATA, INPUT_VERSION, check_input
 
 EVENT_TYPES = frozenset(item.value for item in EventType)
 VISITS = frozenset({"session_start", "return_visit"})
@@ -75,7 +76,8 @@ SPRINT_FEATURES: tuple[SprintFeature, ...] = (
     SprintFeature("visit_count_60d", "F08", "activity"),
     SprintFeature("visit_recency", "F09", "activity"),
     SprintFeature("active_days_30d", "F10", "activity"),
-    SprintFeature("return_visit_count_60d", None, "activity"),
+    SprintFeature("return_visit_count_60d", None, "activity",
+                  "B안: 구매 뒤 첫 방문 수. 구 정의 커머스의 모든 재방문 수와 구분(#256)"),
     SprintFeature("push_sent_count_60d", None, "marketing"),
     # ── 탐색·퍼널 ───────────────────────────────────────────────────────
     SprintFeature("page_view_count_60d", "F11", "funnel"),
@@ -135,6 +137,14 @@ TABLE_COLUMNS: tuple[str, ...] = FEATURE_NAMES + tuple(ALIASES)
 
 def model_columns(X: pd.DataFrame) -> list[str]:
     """모델 입력 열 — 별칭 열을 뺀 나머지(순서 유지)."""
+    metadata = X.attrs.get(INPUT_METADATA)
+    if "return_visit_count_60d" in X.columns and metadata is None:
+        raise ValueError("return_visit input metadata missing; rebuild from source events before model input")
+    if metadata is not None:
+        if not isinstance(metadata, dict) or metadata.get("version") != INPUT_VERSION:
+            raise ValueError("invalid return_visit input metadata")
+        if not metadata.get("experiment_source_allowed", False):
+            raise ValueError("commerce feature table is observation-only, not experiment model input")
     return [c for c in X.columns if c not in ALIASES]
 
 
@@ -249,13 +259,16 @@ def _ratio(num: pd.Series, den: pd.Series) -> pd.Series:
     return (num / den.where(den != 0)).astype(float)
 
 
-def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
+def build_feature_table(events: pd.DataFrame, index_time, *, purpose: str = "experiment") -> pd.DataFrame:
     """index=customer_id, 컬럼=`TABLE_COLUMNS`(= `FEATURE_NAMES` + 별칭, 전부 float). T0 이전 이벤트만 쓴다.
 
     `attrs`: `index_time`·`nan_reasons`(Feature→NaN 사유)·`incomplete_windows`
-    (관측 시작보다 앞으로 뻗은 창을 쓴 Feature)·`population_scope`.
+    (관측 시작보다 앞으로 뻗은 창을 쓴 Feature)·`population_scope`·`return_visit_input`.
+    커머스는 purpose="observation"으로 분리 계산한다. 원시 이벤트를 B안으로 재작성하지 않는다.
     """
     t0 = to_index_time(index_time)
+    past = _clean(events)
+    metadata = check_input(past[past["timestamp"] < t0], purpose)
     ids = population(events, t0)
     b = _Builder(events, t0, ids)
     out: dict[str, pd.Series] = {}
@@ -429,6 +442,7 @@ def build_feature_table(events: pd.DataFrame, index_time) -> pd.DataFrame:
         population_scope="observed_only",
         label_def=LABEL_DEF,
     )
+    table.attrs[INPUT_METADATA] = metadata
     return table
 
 

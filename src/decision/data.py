@@ -24,6 +24,7 @@ import pandas as pd
 
 from src.measurement.schema import EVENT_FIELDS, TIMEZONE
 from src.decision.observation_contract import read_event_part as _read_part, verify_event_run
+from src.decision.return_visit import INPUT_METADATA, input_metadata
 
 EVENT_COLUMNS: list[str] = [spec.name for spec in EVENT_FIELDS]
 INT_COLUMNS: list[str] = [spec.name for spec in EVENT_FIELDS if spec.dtype == "int"]
@@ -88,4 +89,5 @@ def load_events(raw_root, *, allow_verified_empty: bool = False) -> pd.DataFrame
     frame = frame.sort_values(["timestamp", "event_id"], kind="mergesort").reset_index(drop=True)
     frame.attrs["source_files"] = len(parts)
     frame.attrs["duplicate_event_ids"] = before - len(frame)
+    frame.attrs[INPUT_METADATA] = input_metadata(frame)
     return frame

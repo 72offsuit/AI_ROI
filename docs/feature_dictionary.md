@@ -128,3 +128,23 @@ SD1–SD8 및 Q1–Q5의 사용자 방향 선택은 유지한다. 위 과거의 
 `encode_sequence_file`/`decode_sequence_file`은 실제 Parquet bytes와 typed 값의 hash를 구분한다. nullable Int64 gap, string token, Bool mask, date32의 실제 dtype을 검사한다. 의미 hash는 typed 행·입력/관측/필요 순서 의미·명시 정책을 포함하고 생성 시각·압축·물리 행 순서·근거 파일 포장을 제외한다. reader는 별도의 정확한 파일 SHA256과 필요한 근거 FilePin을 계속 요구한다. legacy load_bundle의 cutoff/UNKNOWN 표현·전체 Store/CURRENT는 수정하지 않는다. 원시 파일 투영으로 F36/F37 학습 또는 FE-006 전체 충족을 주장하지 않는다.
 
 관련 결정: `docs/decisions/DR-D1-w1-evidence-sequence-file.md`. 합성 검증과 실제 입력 인수를 구분하며 소유 등록·독립 검토는 후속이다.
+
+## #256 ③b — 스프린트 입력의 return_visit 의미 (2026-11-08)
+
+이 절은 F-ID를 추가하거나 canonical F31을 확정하지 않는다. [리드 결정](https://github.com/72offsuit/AI_ROI/issues/256#issuecomment-6706213916)에 따라 스프린트 전용 Feature와 DL 입력을 다음처럼 구분한다. 세부 선택과 검증 범위는 `DR-256-return-visit-inputs.md`를 따른다.
+
+| 입력/출력 | 정의·단위 | 처리 |
+|---|---|---|
+| `return_visit_count_60d` | B안: `[T0-60일,T0)`의 구매 뒤 첫 방문 세션을 여는 `return_visit` 이벤트 수 | 기존 count 계산 유지. 부분 창 안에 앞선 구매가 없다는 이유로 이벤트를 버리거나 위반 판정하지 않음 |
+| 구 정의 커머스의 같은 열 | 최초 방문 이후 모든 새 세션의 재방문 이벤트 수. 당시 `session_start`와 함께 기록 | B안의 구매 뒤 첫 방문 수로 해석하지 않음. 값은 재작성하지 않고 `every_repeat_session_with_session_start`로 구분 |
+| DL `visit` | 일별 `session_start` 수 + `return_visit` 수를 log1p. B안 생산자의 세션당 시작 이벤트가 하나라는 전제에서 세션 수와 같음 | 기존 두 타입 이벤트 수 합 유지. 구 데이터에서 같은 session_id로 둘 다 있어도 이 함수에서 중복 제거하지 않음 |
+| D1 F08/F09/F25 | 두 시작 타입의 고유 session_id 기반 방문 수·최근 방문·변화 | 기존 계산 유지 |
+| canonical F31 | SessionFact 제공자·완료 근거 계약 미결 | 기존 보류 유지. B안이 세션 완료 근거를 제공하지 않음 |
+
+`src.decision.return_visit`의 `label_commerce_definition(events, definition, evidence_ref=...)`는 원시 22필드를 바꾸지 않는 사본에 생산 이력의 선언을 붙인다. 확실한 Ecommerce #54 이전 생산분은 구 정의로 선언한다. B안 생산분은 `purchase_first_session`으로 선언할 수 있으나 그 범위와 증거 참조는 데이터 제공자가 책임진다. 참조 문자열의 존재를 자동 검증된 내용 증명으로 취급하지 않는다.
+
+이 선언이 없는 커머스는 `unknown`이다. `service_version`, 이벤트 날짜, 묶음 생성일 또는 #54의 병합 시각만으로 B안을 추측하지 않는다. 특히 수정 후 export에도 구 이벤트가 남을 수 있다. `input_metadata`는 측정 계층의 `event_source()`로 출처를 재판정하고, 공개 service/customer/simulator 버전과 공유 이벤트 스키마 버전·입력 의미 버전을 별도 메타데이터에 남긴다. 시뮬레이터의 B안 표지는 공개 생산자 계약에 대한 기대이며 런타임 준수 검사나 관측 완전성의 증거가 아니다.
+
+Feature와 DL 빌더의 기본 `purpose="experiment"`는 시뮬레이터 출처만 허용한다. 커머스는 `purpose="observation"`을 명시해 별도로 계산하며, 한 호출에 두 출처를 섞으면 같은 고객 ID를 합산하지 않고 거부한다. Feature 결과는 `attrs["return_visit_input"]`에 구분을 보존하고, `model_columns()`는 커머스 관측 표와 입력 의미 메타데이터를 잃은 스프린트 표를 실험 학습 입력으로 받지 않는다. DL 관측 비교는 `return_metadata=True`로 `(배열, 입력 의미)`를 함께 받는다. 이 메타데이터는 Feature 열이 아니며 모델 입력에 넣지 않는다.
+
+DataFrame attrs나 NumPy 배열은 영구 출처 저장소가 아니다. CSV·배열로 내보낼 때는 이 메타데이터를 별도 보존하고, 로더로 다시 원천 이벤트를 인수해 의미를 확인해야 한다. 범용 학습기에 출처 없는 수치 배열을 직접 넘기는 모든 경로를 차단한다고 주장하지 않는다. 원시 이벤트 수정·일괄 삭제, 측정 매핑·DQ·교환 계약·봉인 변경 및 커머스 데이터의 실험 판정 사용은 이 반영 범위에 없다.

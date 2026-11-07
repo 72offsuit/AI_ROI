@@ -272,7 +272,8 @@ class TestSprintFeatureTable(unittest.TestCase):
                 ev(10, "purchase", 4, order_id="O20260101-000003", order_amount=2000, page_type="complete"),
                 ev(10, "purchase", 5, order_id="O20260101-000003", order_amount=2000, page_type="complete"),
                 ev(-3, "purchase", 6, order_id="O20260101-000004", order_amount=9000, page_type="complete")]
-        table = build_feature_table(_coerce(pd.DataFrame.from_records(rows)), t0)
+        # 메타가 없는 수작업 행은 공개 출처 규칙상 commerce다. 산술 대조 목적으로만 계산한다.
+        table = build_feature_table(_coerce(pd.DataFrame.from_records(rows)), t0, purpose="observation")
         row = table.loc[cid]
         self.assertAlmostEqual(10.0, row["recency"])
         self.assertEqual(2.0, row["frequency_90d"])        # 중복 주문은 1 건, 미래 주문 제외
@@ -608,11 +609,12 @@ class TestOutcomeObservationContract(unittest.TestCase):
             clock["number"] += 1
             rid = f"public-fixture-{clock['number']}"
             rows = []
+            source_meta = {"simulator_version": "fixture-public-api", "random_seed": 7}
             for i in range(1, 41):
-                rows.append({"customer_id": f"C{i:08d}", "event_type": "page_view", "event_id": f"e{rid}-{i}",
+                rows.append({**source_meta, "customer_id": f"C{i:08d}", "event_type": "page_view", "event_id": f"e{rid}-{i}",
                              "timestamp": start + timedelta(days=1), "order_id": None, "order_amount": None})
                 if days != 42 or i % 2 == 0:
-                    rows.append({"customer_id": f"C{i:08d}", "event_type": "purchase", "event_id": f"p{rid}-{i}",
+                    rows.append({**source_meta, "customer_id": f"C{i:08d}", "event_type": "purchase", "event_id": f"p{rid}-{i}",
                                  "timestamp": start + timedelta(days=2), "order_id": f"o{rid}-{i}", "order_amount": 12000})
             frame = _coerce(pd.DataFrame(rows))
             frames[root] = pd.concat([frames[root], frame], ignore_index=True) if root in frames else frame
