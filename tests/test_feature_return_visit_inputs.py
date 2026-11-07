@@ -193,11 +193,13 @@ class TestReturnVisitInputs(unittest.TestCase):
         self.assertFalse(input_metadata(combined)["experiment_source_allowed"])
 
     def test_observation_table_cannot_be_reused_by_model_column_selection(self):
-        from src.decision.features.sprint_table import FEATURE_NAMES, build_feature_table, model_columns
+        from src.decision.features.sprint_table import (FEATURE_NAMES, build_feature_table,
+                                                        model_columns, observation_columns)
         from src.decision.return_visit import INPUT_METADATA
         commerce = build_feature_table(self.events(source="commerce"), self.t0, purpose="observation")
         with self.assertRaisesRegex(ValueError, "observation-only"):
             model_columns(commerce)
+        self.assertEqual(list(FEATURE_NAMES), observation_columns(commerce))
         simulator = build_feature_table(self.events(), self.t0)
         self.assertEqual(list(FEATURE_NAMES), model_columns(simulator))
         self.assertNotIn(INPUT_METADATA, simulator.columns)
@@ -224,15 +226,42 @@ class TestReturnVisitInputs(unittest.TestCase):
             self.assertEqual(["cust-1.0"], group["customer_versions"])
 
     def test_empty_scope_does_not_prove_experiment_source(self):
-        from src.decision.features.sprint_table import build_feature_table
+        import numpy as np
+        from src.decision.features.sprint_table import FEATURE_NAMES, build_feature_table, model_columns
         from src.decision.churn_dl import build_daily_sequences
-        from src.decision.return_visit import input_metadata
+        from src.decision.return_visit import INPUT_METADATA, input_metadata
         empty = self.events().iloc[:0]
-        self.assertFalse(input_metadata(empty)["experiment_source_allowed"])
-        with self.assertRaisesRegex(ValueError, "source is unconfirmed"):
-            build_feature_table(empty, self.t0)
-        with self.assertRaisesRegex(ValueError, "source is unconfirmed"):
-            build_daily_sequences(empty, self.t0, [self.customer])
+        self.assertIsNone(input_metadata(empty)["experiment_source_allowed"])
+        table = build_feature_table(empty, self.t0)
+        self.assertEqual(0, len(table))
+        self.assertEqual(list(FEATURE_NAMES), model_columns(table))
+        self.assertEqual([], table.attrs[INPUT_METADATA]["groups"])
+        seq, metadata = build_daily_sequences(empty, self.t0, [self.customer], return_metadata=True)
+        self.assertEqual((1, 56, 10), seq.shape)
+        np.testing.assert_array_equal(seq, np.zeros_like(seq))
+        self.assertIsNone(metadata["experiment_source_allowed"])
+
+    def test_inactive_customer_values_do_not_depend_on_active_peers(self):
+        import numpy as np
+        import pandas as pd
+        from src.decision.churn_dl import build_daily_sequences
+        events = self.events()
+        inactive = events.iloc[:1].copy()
+        inactive["customer_id"] = "C00000003"
+        inactive["timestamp"] = pd.Timestamp(self.t0-timedelta(days=100)).tz_convert(events["timestamp"].dt.tz)
+        events = pd.concat([events, inactive], ignore_index=True)
+        alone = build_daily_sequences(events, self.t0, ["C00000003"])
+        together = build_daily_sequences(events, self.t0, ["C00000003", self.customer])
+        np.testing.assert_array_equal(alone[0], together[0])
+        np.testing.assert_array_equal(alone, np.zeros_like(alone))
+        self.assertGreater(float(together[1].sum()), 0)
+
+    def test_empty_scope_metadata_cannot_authorize_nonempty_feature_rows(self):
+        from src.decision.features.sprint_table import build_feature_table, model_columns
+        table = build_feature_table(self.events().iloc[:0], self.t0)
+        table.loc[self.customer] = 0
+        with self.assertRaisesRegex(ValueError, "unconfirmed"):
+            model_columns(table)
 
 
 if __name__ == "__main__":

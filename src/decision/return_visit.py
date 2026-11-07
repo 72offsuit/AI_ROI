@@ -67,7 +67,8 @@ def input_metadata(events: pd.DataFrame) -> dict:
                          evidence_ref=declaration["evidence_ref"] if declaration else None)
         records.append(group)
     return {"version": INPUT_VERSION, "event_schema_version": SCHEMA_VERSION,
-            "groups": records, "experiment_source_allowed": bool(records) and all(g["source"] == "simulator" for g in records),
+            "groups": records,
+            "experiment_source_allowed": all(g["source"] == "simulator" for g in records) if records else None,
             "definition_verified": False,
             "notice": "선언·출처 구분이며 B안 준수·관측 완전성·모집단 적격성의 증명이 아니다"}
 
@@ -79,9 +80,8 @@ def check_input(events: pd.DataFrame, purpose: str) -> dict:
     metadata = input_metadata(events)
     if len(metadata["groups"]) > 1:
         raise ValueError("mixed event sources: separate simulator and commerce inputs before calculation")
-    if purpose == "experiment" and not metadata["groups"]:
-        raise ValueError("experiment input source is unconfirmed: no in-scope events")
-    if purpose == "experiment" and not metadata["experiment_source_allowed"]:
+    # 0행은 출처를 증명하지 않지만 집계할 타 출처 행도 없다. 관측 완전성은 별도 계약이다.
+    if purpose == "experiment" and metadata["experiment_source_allowed"] is False:
         raise ValueError("commerce is observation-only; keep legacy/B/unknown inputs separate from experiment input")
     metadata["purpose"] = purpose
     return metadata

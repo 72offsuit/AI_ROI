@@ -196,6 +196,161 @@ class TestRoiBySegment(unittest.TestCase):
 
 @unittest.skipUnless(DEPS, REASON)
 class TestReportCli(unittest.TestCase):
+    def _source_events(self, source="commerce"):
+        from tests.test_feature_return_visit_inputs import TestReturnVisitInputs
+        from uuid import UUID
+        events = TestReturnVisitInputs().events(source=source)
+        offset = 20000 if source == "simulator" else 10000
+        events["event_id"] = [str(UUID(int=offset+i, version=4)) for i in range(len(events))]
+        return events
+
+    def _sink(self, root, events):
+        from src.measurement.sink import EventSink
+        with EventSink(root, fmt="jsonl.gz", run_id="report-270") as sink:
+            sink.write_events(events.to_dict("records"))
+
+    def _reports(self, root, out):
+        from src.decision.analytics_report import run
+        return run(root, ["2026-06-25", "2026-07-01"], out)
+
+    def test_single_source_observation_reports_preserve_source_and_alias_policy(self):
+        for source in ("commerce", "simulator"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "sink"
+                self._sink(root, self._source_events(source))
+                paths = self._reports(root, Path(tmp) / "out")
+                self.assertEqual({"funnel", "cohort", "drift"}, set(paths))
+                bodies = {name: json.loads(path.read_text()) for name, path in paths.items()}
+                for body in bodies.values():
+                    self.assertEqual("observation", body["source"]["purpose"])
+                    metadata = body["source"]["return_visit_input"]
+                    self.assertEqual(source, metadata["groups"][0]["source"])
+                    self.assertEqual(source == "simulator", metadata["experiment_source_allowed"])
+                self.assertEqual("ok", bodies["drift"]["status"])
+                self.assertNotIn("days_since_last_purchase", bodies["drift"]["features"])
+
+    def test_mixed_sources_produce_not_run_without_combining_customer_ids(self):
+        from unittest.mock import patch
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "sink"
+            events = pd.concat([self._source_events("commerce"), self._source_events("simulator")], ignore_index=True)
+            self._sink(root, events)
+            with patch("src.decision.analytics.funnel", side_effect=AssertionError("must not aggregate")), \
+                    patch("src.decision.analytics.cohort_retention", side_effect=AssertionError("must not aggregate")), \
+                    patch("src.decision.monitoring.feature_drift", side_effect=AssertionError("must not aggregate")):
+                paths = self._reports(root, Path(tmp) / "out")
+            for path in paths.values():
+                body = json.loads(path.read_text())
+                self.assertEqual("not_run", body["status"])
+                self.assertIn("mixed event sources", body["reason"])
+                self.assertIsNone(body["source"]["n_customers"])
+                self.assertEqual({"commerce", "simulator"},
+                                 {g["source"] for g in body["source"]["return_visit_input"]["groups"]})
+                self.assertNotIn("overall", body)
+
+    def test_empty_reference_window_is_not_run_not_a_cli_exception(self):
+        from src.decision.analytics_report import run
+        for source in ("commerce", "simulator"):
+            with self.subTest(source=source), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp) / "sink"
+                self._sink(root, self._source_events(source))
+                paths = run(root, ["2025-01-01", "2026-07-01"], Path(tmp) / "out")
+                body = json.loads(paths["drift"].read_text())
+                self.assertEqual("not_run", body["status"])
+                self.assertEqual(0, body["n_reference"])
+                self.assertEqual(1, body["n_current"])
+                self.assertTrue(body["features"])
+                for feature in body["features"].values():
+                    self.assertIsNone(feature["psi"])
+                    self.assertEqual("계산 불가", feature["level"])
+
+    def test_calculation_failure_preserves_existing_outputs_and_leaves_no_partial_reports(self):
+        from unittest.mock import patch
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
+                root, out = Path(tmp) / "sink", Path(tmp) / "out"
+                self._sink(root, self._source_events())
+                before = self._old_outputs(out) if existing else {}
+                with patch("src.decision.monitoring.feature_drift", side_effect=ValueError("probe calculation")), \
+                        self.assertRaisesRegex(ValueError, "probe calculation"):
+                    self._reports(root, out)
+                self._assert_outputs(out, before)
+
+    def test_serialization_failure_preserves_existing_outputs_and_leaves_no_partial_reports(self):
+        from unittest.mock import patch
+        from src.decision import analytics_report
+        original = analytics_report._write
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
+                root, out = Path(tmp) / "sink", Path(tmp) / "out"
+                self._sink(root, self._source_events())
+                before = self._old_outputs(out) if existing else {}
+                calls = []
+                def write(path, payload, header):
+                    calls.append(path)
+                    if len(calls) == 2:
+                        raise TypeError("probe serialization")
+                    original(path, payload, header)
+                with patch.object(analytics_report, "_write", side_effect=write), \
+                        self.assertRaisesRegex(TypeError, "probe serialization"):
+                    self._reports(root, out)
+                self._assert_outputs(out, before)
+
+    def test_publish_failure_restores_prior_outputs_or_removes_new_files(self):
+        from unittest.mock import patch
+        from src.decision import analytics_report
+        original = analytics_report.os.replace
+        for existing in (False, True):
+            with self.subTest(existing=existing), tempfile.TemporaryDirectory() as tmp:
+                root, out = Path(tmp) / "sink", Path(tmp) / "out"
+                self._sink(root, self._source_events())
+                before = self._old_outputs(out) if existing else {}
+                calls = []
+                def replace(src, dst):
+                    calls.append((src, dst))
+                    if len(calls) == 2:
+                        raise OSError("probe publish")
+                    original(src, dst)
+                with patch.object(analytics_report.os, "replace", side_effect=replace), \
+                        self.assertRaisesRegex(OSError, "probe publish"):
+                    self._reports(root, out)
+                self._assert_outputs(out, before)
+
+    def _old_outputs(self, out):
+        out.mkdir()
+        before = {f"{name}.json": f"old {name}\n".encode() for name in ("funnel", "cohort", "drift")}
+        before["user-note.txt"] = b"preserve user file\n"
+        for name, raw in before.items():
+            (out / name).write_bytes(raw)
+        return before
+
+    def test_restore_failure_retains_recovery_copy_of_previous_outputs(self):
+        from unittest.mock import patch
+        from src.decision import analytics_report
+        original = analytics_report.os.replace
+        with tempfile.TemporaryDirectory() as tmp:
+            root, out = Path(tmp) / "sink", Path(tmp) / "out"
+            self._sink(root, self._source_events())
+            before = self._old_outputs(out)
+            calls = []
+            def replace(src, dst):
+                calls.append((src, dst))
+                if len(calls) in (2, 3):
+                    raise OSError("probe replacement/restoration")
+                original(src, dst)
+            with patch.object(analytics_report.os, "replace", side_effect=replace), \
+                    self.assertRaisesRegex(OSError, "recovery files retained"):
+                self._reports(root, out)
+            recovery = list(out.glob(".analytics-report-*"))
+            self.assertEqual(1, len(recovery))
+            self.assertEqual(before["funnel.json"], (recovery[0] / "funnel.previous").read_bytes())
+            self.assertEqual(before["cohort.json"], (out / "cohort.json").read_bytes())
+            self.assertEqual(before["user-note.txt"], (out / "user-note.txt").read_bytes())
+
+    def _assert_outputs(self, out, expected):
+        actual = {p.name: p.read_bytes() for p in out.iterdir()} if out.exists() else {}
+        self.assertEqual(expected, actual)
+
     def test_cli_writes_three_files_with_header(self) -> None:
         from src.decision.analytics_report import main
 

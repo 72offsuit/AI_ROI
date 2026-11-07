@@ -135,6 +135,11 @@ ALIASES: dict[str, str] = {"days_since_last_purchase": "recency"}
 TABLE_COLUMNS: tuple[str, ...] = FEATURE_NAMES + tuple(ALIASES)
 
 
+def observation_columns(X: pd.DataFrame) -> list[str]:
+    """관측·드리프트 열 선택. 별칭만 제외하며 학습 적격성 검사를 대신하지 않는다."""
+    return [c for c in X.columns if c not in ALIASES]
+
+
 def model_columns(X: pd.DataFrame) -> list[str]:
     """모델 입력 열 — 별칭 열을 뺀 나머지(순서 유지)."""
     metadata = X.attrs.get(INPUT_METADATA)
@@ -143,9 +148,12 @@ def model_columns(X: pd.DataFrame) -> list[str]:
     if metadata is not None:
         if not isinstance(metadata, dict) or metadata.get("version") != INPUT_VERSION:
             raise ValueError("invalid return_visit input metadata")
-        if not metadata.get("experiment_source_allowed", False):
-            raise ValueError("commerce feature table is observation-only, not experiment model input")
-    return [c for c in X.columns if c not in ALIASES]
+        allowed = metadata.get("experiment_source_allowed")
+        if allowed is False:
+            raise ValueError("feature table has observation-only sources, not experiment model input")
+        if allowed is not True and not (allowed is None and len(X) == 0 and metadata.get("groups") == []):
+            raise ValueError("experiment feature source is unconfirmed for non-empty input")
+    return observation_columns(X)
 
 
 def to_index_time(index_time) -> pd.Timestamp:

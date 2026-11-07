@@ -40,6 +40,7 @@ def build_daily_sequences(events: pd.DataFrame, index_time, customers, lookback_
 
     기본 반환은 기존 (n_customers, lookback_days, n_channels) float32 배열이다.
     return_metadata=True면 (배열, 입력 의미 메타데이터)를 반환한다. 학습 계산은 바꾸지 않는다.
+    창 안 이벤트 0건도 허용하며 출처 메타는 미확인(None)이다. 0배열이 완전 관측의 증거는 아니다.
     """
     t0 = to_index_time(index_time)
     ids = pd.Index(customers)
