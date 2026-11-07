@@ -583,9 +583,11 @@ class EventReader:
         # root-local 사슬은 독립 검증. 명시적 외부 부모는 기존 정확한 머리 검사로만 해소한다.
         proof = verify_event_run(root, run_id)
         if proof.get("status") != "ok":
+            root_local_reason = proof.get("reason")
             proof = verify_event_run(root, run_id, history_evidence=parent)
             if proof.get("status") != "ok":
-                raise NotRun(f"이벤트 원시 읽기 근거 미충족: {proof.get('reason')}")
+                raise NotRun("이벤트 원시 읽기 근거 미충족: "
+                             f"root-local 검증: {root_local_reason}; history 검증: {proof.get('reason')}")
             local_ids = set(proof["verified_run_ids"]) - set(parent["verified_run_ids"])
         else:
             local_ids = set(proof["verified_run_ids"])
@@ -1671,6 +1673,7 @@ def run(config: SprintConfig) -> Path:
                     entry["sim_metrics_error"] = f"{type(error).__name__}: {error}"
                 generated, detail = purchase_generated(raw_metrics)
                 entry["purchase_generated"] = {"value": generated, "detail": detail}
+                entry["sim_metrics"] = {k: mc.metric_to_json(v) for k, v in (raw_metrics or {}).items()}
                 try:
                     events = reader.read(branch_root, summary.end, history=ctx["events_t2"], run_id=summary.run_id)
                     read_evidence = events.attrs.get("run_read_evidence")
@@ -1681,15 +1684,17 @@ def run(config: SprintConfig) -> Path:
                 entry["event_read_evidence"] = read_evidence
                 observation_status = outcome_observation_status(
                     ctx["t2"], LABEL_WINDOW_DAYS, observation)
-                # 측정 계산은 그대로 보존하되 같은 저장 자료를 쓰는 정식 입력은 창·쓰기 성공이 필요하다.
+                # 측정 계산은 그대로 보존하되 정식 입력은 창·쓰기·읽기 성공이 필요하다.
                 economics_observed = (observation_status["label_window_complete"]
                                       and observation_status["writing_complete"] and observation_status["read_complete"])
+                economics_missing = [key for key in ("label_window_complete", "writing_complete", "read_complete")
+                                     if not observation_status[key]]
                 entry["economics_input_observation"] = {
                     "status": "ok" if economics_observed else "not_run",
-                    "reason": None if economics_observed else "라벨 창 또는 같은 실행의 쓰기 근거 미충족",
+                    "reason": (None if economics_observed else
+                               "정식 경제 입력의 관측 근거 미충족: " + ", ".join(economics_missing)),
                     "observation": observation_status,
                 }
-                entry["sim_metrics"] = {k: mc.metric_to_json(v) for k, v in (raw_metrics or {}).items()}
                 # 실측 기여이익 — 이 분기 세계가 활성인 지금 묶음을 받는다(다음 restore 전에, DR-169).
                 entry["measured_economics"] = (branch_economics(branch_root, summary.end)
                     if observation_status["read_complete"] else {"status": "not_run", "reason": "원시 이벤트 읽기 근거 미충족"})

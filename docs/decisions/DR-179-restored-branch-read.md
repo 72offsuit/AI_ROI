@@ -2,9 +2,9 @@
 
 | | |
 |---|---|
-| 태스크 | #179 · PR #251 · N2 |
+| 태스크 | #179 · PR #251 · N2 · 후속 #257 |
 | 작성 | 광진 작업용 Codex · 2026-10-30 |
-| 상태 | 30d69ae의 Claude 독립 재검수: 차단0·비차단5. 문서 보완·clean 54f41ce 동일 조건 재실행 대조 완료. GitHub 승인·병합 전 |
+| 상태 | 아래 #179 기록은 당시 검수·실행 이력. #257의 로컬 변경과 날짜별 검증 근거는 아래에 기록하며, 커밋·CI·리뷰 상태는 #257에 연결된 PR에서 확인한다 |
 
 ## 무엇을 정하는가
 
@@ -99,3 +99,55 @@ NB-A·B·C는 해석/분류/docstring 보완, NB-D는 clean 재실행 계보로 
 - 소유 검사와 git diff --check 통과. 새 공용 계약·측정·시뮬레이터·봉인·Plan 변경은 없다. 실제 모델 성능을 근거로 시뮬레이터를 고치지 않았다.
 
 재현: python3 -B -m unittest tests.test_orchestration_observation_contract tests.test_feature_sprint_table -v, python3 -B -m unittest tests.test_orchestration_sprint tests.test_orchestration_main_cli -v. 경계 제한 하네스·로그·초기 실패·소스/결과 해시는 plans/issue179_n2_evaluation_20261030_v08에 보존한다. 이번 자체 검증은 Claude 독립 재검토나 GitHub 승인 리뷰가 아니다.
+
+## #257 — #251 P3 후속 진단 보존 (2026-11-03 · 로컬 구현)
+
+[승인 리뷰 P3 세 건](https://github.com/72offsuit/AI_ROI/pull/251#pullrequestreview-5711172895)과 [후속 처리 기록](https://github.com/72offsuit/AI_ROI/pull/251#issuecomment-6526934142)을 [#257](https://github.com/72offsuit/AI_ROI/issues/257)로 처리한다. 작업 기준 main은 02648e944d0748a61dd5a0ee0b2354169738e3a3이고 브랜치는 fix/257-branch-diagnostics다. 2026-11-01 v02 제안의 허용 파일 17개가 이 기준에서도 동일함을 Git blob으로 대조했다. 2026-11-03 최초 반영 당시 코드와 신규 시험은 독립 검수를 받은 v02와 바이트 단위로 같았다. 이후 R1~R3 보완은 아래 2026-11-06 절에 별도로 기록한다. 이전 검수·실행 결과는 해당 날짜의 소스 범위에 한정한다.
+
+**로컬 근거의 보존 범위:** 이 문서의 `plans/` 참조는 기존 #179 절을 포함해 작성자 기기의 검증 사본을 가리킨다. 저장소에 이 문서가 있다는 사실만으로 그 사본이 다른 환경에 제공되거나 영구 보존되는 것은 아니다. PR 제출 시 참조한 검수 원문·소스 해시·하네스·실행 결과와 필요한 패치 또는 판본 차이를 첨부 목록에 넣고, 본문에 검증 범위·환경·한계를 기록한다. 원본을 확보하지 못한 참조는 확인 불가로 명시하며 임시 경로나 로컬 경로만으로 재현 근거를 대신하지 않는다.
+
+- **분기 검증 원인:** root-local 검증과 history를 붙인 검증이 모두 실패하면 두 사유를 순서와 함께 남긴다. 첫 사유가 부모 문제인지 문자열로 분류해 재검증을 건너뛰는 안은 기각한다. 기존 검증 순서·성공 조건을 그대로 유지하고 파일·부모를 검증하는 한 벌의 규칙을 재사용한다.
+- **경제 입력 사유:** label_window_complete·writing_complete·read_complete 중 실제 거짓인 플래그만 문구에 넣는다. observation_status.reasons 전체를 복사하는 안은 구매 관측 불가도 독립 경제값의 차단 조건처럼 보이게 하므로 기각한다. 세 플래그의 기존 AND와 read_complete를 요구하는 측정 경로를 유지한다.
+- **진단값:** 확보한 raw_metrics를 읽기 전에 기존 metric_to_json으로 저장한다. 공개 API 예외를 잡아 성공이나 not_run으로 바꾸는 안은 기각한다. OutputRootError·SinkFormatError 같은 공개 예외는 기존 failed이고, read 내부의 OSError/ValueError는 기존 NotRun이다. failed에서도 보존하는 sim_metrics는 참고값이며 정식 경제 입력을 승인하지 않는다.
+
+반증 조건은 정상 부모가 새로 차단되거나 잘못된 부모·손상 파일이 통과하는 것, 원래 파일 사유가 event_read_evidence에서 사라지는 것, 실제 거짓 플래그가 문구와 다른 것, 읽기 오류로 확보한 진단값이 사라지거나 측정이 승인되는 것이다. 측정된 0·결손·지표 조회 실패를 구분하고 기존 분기 읽기 반례를 함께 확인한다.
+
+최초 진단 검증은 공개 계약의 합성 EventSink 파일과 API 대역으로 수행했다. 당시 하네스는 runner의 관련 정의와 실제 전략 진단 블록만 AST로 추출하며 전체 runner·시뮬레이터를 import하지 않았다. 실제 경제 계산은 대역이며 모델·CLI·전체 격리 검사·전체 통합 통과를 뜻하지 않는다. 2026-11-06의 확대 회귀 검증 범위는 아래에 별도로 기록한다. 이전 제안 기록은 로컬 plans/pr251_p3_followup_20261031_v01/evidence.md와 plans/pr251_p3_followup_20261101_v02/evidence.md를 따른다.
+
+### 이전 독립 검수 대조 후 한계 보완 (2026-11-01 · 최초 반영본의 한계)
+
+같은 소스의 독립 검수는 차단0·비차단2건이다. 제품 로직과 테스트는 그대로 두고 한계를 보완한다. sim.metrics가 공개 반환 계약인 dict[str, MetricValue]를 어겨 일부 값으로 dict 등을 반환하면, 앞당긴 직렬화가 읽기 전에 실패하여 기존에 남던 purchase_generated·event_read_evidence·경제 입력 진단이 덜 남을 수 있다. 해당 단계는 기존처럼 failed이고 측정 호출·정식 값 생성은 없으며, 남은 활성 분기 컨텍스트는 다음 restore가 초기화한다. 계약 위반값을 성공이나 0으로 바꾸지 않고, 이 예외 입력에서 기존 진단 전부를 보존한다고 주장하지 않는다.
+
+package_check의 AST 되돌리기 대조는 교체한 raise와 경제 입력 진단 노드를 원본으로 돌려 놓고 비교하므로 그 노드의 새 내용은 검증하지 않는다. 진단용 임시 배정문도 제거한다. 나머지 runner와 원래의 창·쓰기·읽기 AND·측정 조건이 같다는 범위의 검사다. 새 오류 종류·사유·상태 문구는 diff와 반례 테스트가 별도로 검증한다. 세부 대조·직접 재현·기존 기록 재사용 구분은 로컬 plans/pr251_p3_followup_20261101_v02/evidence.md에 기록한다.
+
+### 최초 반영본 로컬 검증 (2026-11-03)
+
+- 수정 전 main + 같은 신규 시험: 신규 7건 중 PASS3·FAIL4·ERROR0·SKIP0, 실패 하위 사례 19개. 기존 분기 읽기 12건은 PASS12다. 이 실패는 수정 대상 결함을 재현한 대조군이며 수정 후 실패와 구분한다.
+- 수정 후: 신규 7건 PASS7, 기존 분기 읽기 12건 PASS12. FAIL0·ERROR0·SKIP0이다. 원본 isolation의 정적 검사 3건을 허용 소스 2개에 제한해 실행하여 PASS3, 금지 모듈 import 시도·적재는 0이다. 전체 isolation 실행이 아니다.
+- Python 3.12.14·pandas 2.2.3·numpy 2.3.5와 기존 D1 환경의 PyYAML 6.0.3을 사용했다. pandas·numpy는 저장소 고정값과 다르므로 고정 의존성 환경 검증 완료로 보지 않는다. 첫 실행의 PyYAML 부재로 기존 12건이 skip됐으며, 기존 설치 경로를 추가한 뒤 실제 실행·통과한 결과가 위 수치다. 사용자 가상환경은 수정하지 않았다.
+- 팀 경계 원본 15건 PASS15·FAIL0·ERROR0·SKIP0, 소유 검사 PASS다. 신규 시험은 기존 tests/test_orchestration*.py 소유 규칙에 포함되어 별도 등록이 필요 없다.
+- 결정 기록 검사도 수정한 DR 1개와 공용 템플릿·안내서에 제한해 원본 검사 15건을 실행하여 PASS15·FAIL0·ERROR0·SKIP0다. 다른 DR/MC 전체를 검증한 결과가 아니다.
+- 실제 시뮬레이터·전체 CLI·모델 학습·실제 branch_economics·전체 discover는 미실행이다. 전체 격리 검사는 시스템 팀 금지 경로를 읽으므로 BLOCKED다. Python 3.10은 실행기가 없어 BLOCKED이며, 고정 의존성 전체 환경 검증과 원격 CI는 미실행이다.
+
+이 실행 당시 재현 하네스·수정 전후 로그·환경·소스 해시는 /private/tmp/ai-roi-257-20261103-rcnq3py5/에 기록했다. 이 경로는 로컬 임시 사본으로만 사용하며 영구 보존을 보장하지 않는다. PR 제출 시 검토한 소스 해시·환경·실행 명령·결과·검증 한계를 본문에 옮기고 재현 자료를 첨부한다. 임시 경로만으로 검증 근거를 대신하지 않는다. 이 자체 검증은 새 Claude 검수·GitHub 승인·이슈 완료가 아니다.
+
+### R1~R3 보완 결정 (2026-11-06)
+
+2026-11-03 독립 검수의 R1~R3은 비차단 의견이다. 사용자가 2026-11-06 세 건의 보완과 관련 59건 재실행을 요청하여 다음을 반영한다. 기존 #257의 진단 보완 범위이며 새 공유 계약이나 경제 판정 변경은 없다.
+
+- **R1:** 진행 상태를 매번 덮어쓰는 대신 날짜별 소스·실행 이력을 기록하고 GitHub 상태는 연결 PR에서 확인한다. 임시 파일 경로의 영구 보존을 주장하는 안은 기각한다. PR 제출 시 근거를 본문과 첨부 자료로 보존한다.
+- **R2:** 원본 MetricValue의 구매 상태를 판정·기록한 뒤 sim_metrics를 직렬화하고, 그 뒤 이벤트를 읽는다. docstring의 JSON 변환 전 호출 순서와 일치시키면서 공개 읽기 오류에서 sim_metrics를 남기는 P3 목적도 유지한다. 형식 위반 지표를 성공이나 0으로 바꾸는 안은 기각한다. 이전 N1의 dict·SimpleNamespace 지표값 반례에서는 purchase_generated를 보존하지만 event_read_evidence·경제 입력 진단은 여전히 생성되지 않으며 failed·측정 호출 0인 N1의 나머지 한계는 유지한다.
+- **R3:** 기존 신규 시험 7개 중 손상 반례 메서드의 포함 여부 단언을 전체 문자열 동등 단언으로 강화한다. 독립적으로 얻은 root-local·history 재검증 사유를 순서대로 대조하며, 부모 None과 정확한 명시 부모 a 각각에 손상 4종을 적용한다. 검수자의 임시 반례에만 의존하는 안은 기각한다. 같은 7개 메서드 안에 R2의 dict·SimpleNamespace 반환 계약 위반 반례도 넣어 구매 진단 보존과 failed·측정 호출 0을 검사한다.
+
+반증 조건은 사유 순서가 바뀌어도 시험이 통과하는 것, 정상 입력의 값·승인 조건이 달라지는 것, 형식 위반 지표가 정식 경제값을 만들거나 읽기 오류에서 sim_metrics가 사라지는 것이다. N2의 AST 원복 비교 한계는 유지하며 새 내용의 정확성은 반례와 diff로 확인한다. 이 보완본은 이전 Claude 판정의 자동 승인 대상으로 보지 않고 재검수한다.
+
+### R1~R3 보완본 검증 기록 (2026-11-06)
+
+- 관련 59건을 한 번의 최종 실행에서 PASS59·FAIL0·ERROR0·SKIP0로 확인했다. 구성은 신규 진단 7건, TestRestoredBranchReads 12건, test_feature_sprint_table 40건이다. 하위 사례와 반복 실행을 이 건수에 합산하지 않는다.
+- 허용한 시스템·측정 코드와 공개 설정·시험만 복사한 사본에서 원래 unittest를 실행했다. 기존 12건의 _contract_runner를 교체하지 않았다. 원래 helper가 시뮬레이터 import를 AST에서 제거하고 시스템 러너와 가짜 공개 API를 연결한다. 금지 모듈 import 차단기를 추가했으며 시도·적재 0이다. 실제 시뮬레이터·CLI·실제 경제 계산 검증이 아니다.
+- R2의 보완 전 러너를 같은 새 시험에 연결한 대조군은 1메서드 FAIL·하위 사례 2개·ERROR0·SKIP0이다. 두 검증 사유의 순서를 반전한 별도 변이 사본은 1메서드 FAIL·하위 사례 8개·ERROR0·SKIP0이다. 의도한 결함 검출이며 제품 수정 후 실패로 합산하지 않는다. 실제 작업트리는 변이하지 않았다.
+- 보완 전 작업트리와 비교하면 제품 러너 변경은 sim_metrics 직렬화 배정문 1개의 위치 이동뿐이다. 이 이동을 원복한 AST는 보완 전과 동일하다. 기존 #257 세 조건 AND·측정 조건·검증 순서·예외 분류를 추가로 바꾸지 않았다.
+- Python 3.12.14·pandas 2.2.3·numpy 2.3.5·PyYAML 6.0.3·pyarrow 25.0.1·scikit-learn 1.7.2·scipy 1.15.3 환경이다. 저장소 고정 의존성 환경과 다르며 사용자 환경 설치·변경은 하지 않았다. 기존 pandas의 dtype 관련 FutureWarning은 관측했으나 이번 범위에서 수정하지 않았다.
+- 팀 경계 원본 15건과 허용 소스 2개에 제한한 원본 정적 격리 3건은 모두 PASS·FAIL0·ERROR0·SKIP0이며 소유 검사도 PASS다. 결정 기록 검사는 수정 DR 1개와 공용 템플릿·안내서에 제한한다. 전체 isolation은 금지 소스를 읽으므로 BLOCKED, 전체 discover·실제 시뮬레이터·실제 경제 계산·모델 학습·CLI·원격 CI·고정 의존성 환경 검증은 미실행이다. Python 3.10은 실행기가 없어 BLOCKED다.
+
+실행 명령은 허용 사본 루트와 새 결과 파일을 인자로 지정하여 `python3 -B run_59.py SOURCE_ROOT RESULT_JSON tests.test_orchestration_branch_diagnostics tests.test_orchestration_observation_contract.TestRestoredBranchReads tests.test_feature_sprint_table`이다. run_59.py와 소스 manifest·보완 전후 패치·결과·환경은 /private/tmp/ai-roi-257-r123-20261106-zcmzfg3t/에 기록했다. 이 경로 역시 임시 사본이다. PR 제출 시 이 절의 환경·범위·결과와 검토 소스 해시를 본문에 남기고 재현 자료를 첨부한다. 이 자체 검증을 새 독립 검수나 GitHub 승인으로 표시하지 않는다.
