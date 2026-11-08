@@ -49,6 +49,12 @@
 
 **Repurchase** 는 별도 `event_type` 이 아니다 — 같은 고객의 두 번째 이후 `purchase` 다. 재구매율은 게시 시점에 계산한다 (`kpi.repurchase_rate`).
 
+> ### ★ `return_visit` 은 **구매 뒤 첫 방문 세션**을 연다 — `session_start` 와 함께가 아니라 **대신**이다 (#256 · DR-256)
+> - 고객의 마지막 `purchase` 뒤 **처음 시작하는 세션**은 `return_visit` 으로 연다. 그 세션에는 `session_start` 를 **남기지 않는다.**
+> - 다른 세션 — 구매 이력이 없는 고객의 세션, 구매 뒤 두 번째 이후 세션 — 은 `session_start` 로 연다.
+> - 그래서 세션은 `session_start` · `return_visit` 중 **하나**로 시작한다. 방문(세션) 수는 두 이벤트를 합쳐 세거나 `session_id` 고유 개수로 센다 — 둘은 같다. **`session_start` 만 세면 재방문 세션이 빠진다.**
+> - 근거: `docs/data_spec.html` §3.4 ④(#198). 두 생산자 — 커머스 · 시뮬레이터 — 가 이 정의로 기록한다.
+
 > ### ★ 표에 없는 필드는 **금지**다 (`NOT_APPLICABLE`)
 > 화이트리스트가 **부재로 동작한다.** `push_sent` 에 `product_id` 를 붙이면 `validate_event()` 가 거부한다:
 > ```

@@ -6,9 +6,9 @@ declaration: PARTIAL_FREEZE
 experiment_environment_v1_declared: false
 declaration_note: C1 은 GATE 1 을 통과시키지 않는다. 측정 계층이 소유한 항목만 부분 봉인하고 나머지는 봉인 대기로 남긴다.
   EXPERIMENT_ENVIRONMENT_v1 을 선언하지 않는다.
-locked_at: '2026-09-28T19:15:03.314+09:00'
+locked_at: '2026-11-05T16:58:25.127+09:00'
 locked_by: Danto7632
-repo_commit: 1493964f6c1797744e0122a338668b51ccebfd7d
+repo_commit: e1372ecc1eb0b40a6972f47a63f9a0234b4b89a0
 simulator_commit: null
 items:
 - item: SERVICE_v1
@@ -56,8 +56,8 @@ items:
 canonical_files:
   src/measurement/schema.py: 4b9dafcb4517e3e5590decae78ede8a834debb1fd65b8bc9fa38bcf24394b4b3
   config/economic_config.yaml: a9a46dcde1dc09ad3079073e6071ac3b3e58ac518077403f3b5558dfc6fb2a78
-  docs/event_schema.md: ed4a13e3b4cecc81f09588d3f71138bff175804701cfeacd3d1c7980dad2ca57
-  docs/measurement_contract.md: 855df25209e053f31d1b2b0b1cd073cfe87384a5e4d30fea33b269e1bd816c35
+  docs/event_schema.md: d83c1feb1f8d1282afa57942b1a3df1a3d2011de6538043180bec435c8e0454d
+  docs/measurement_contract.md: 3b6a080ebcc652a191578280e636861ab985f838f2ef14d47777da956c21b226
 assumptions:
 - id: A-REFUND
   decision: D-2 (사용자, 2026-09-11)
