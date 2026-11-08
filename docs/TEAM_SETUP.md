@@ -249,7 +249,7 @@ metrics(start, end)
 | | 언제 | 무엇이 잠기나 | 이후 변경 비용 |
 |---|---|---|---|
 | **GATE 1** | `S7` | Persona 구성비 · Hidden Trait 분포 · 행동 규칙 · Churn 임계값 · Treatment 반응 · 경제 파라미터 · Event Schema | `FREEZE-003` — 버전 상향 → **전 데이터 재생성 → Baseline 부터 전 전략 재실행** |
-| **GATE 2** | `D7` | `decision/strategies/rule_based.py` · 예산 상한 | 같음 |
+| **GATE 2** | `D7` | `decision/strategies.py` 의 S1 규칙 · 예산 상한 `C_rule`(S1 계획 비용 합, #170) | 같음 |
 
 **GATE 1 은 부분 봉인(`PARTIAL_FREEZE`)이다.** 완전히 잠긴(`LOCKED`) 항목은 아직 0 종이고, 측정 계층 항목은 `PENDING`·`PARTIAL`, 시뮬레이터 항목 5 종은 `OUT_OF_SCOPE` 다 — `S7` 이 그것을 채운다. 정본 4종(`schema.py` · `economic_config.yaml` · `event_schema.md` · `measurement_contract.md`)의 해시가 기록돼 있어, 이 넷을 고치면 재봉인(사람 서명)이 필요하다. 마지막 재봉인 2026-09-28(`#109`).
 

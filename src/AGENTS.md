@@ -43,7 +43,7 @@
 ## 봉인 (GATE)
 
 - **GATE 1** 이후 `simulator/`의 행동·처치 파라미터를 AI 성능을 이유로 바꾸지 않는다.
-- **GATE 2** 이후 `decision/strategies/rule_based.py`와 예산 상한을 바꾸지 않는다.
+- **GATE 2** 이후 `decision/strategies.py`의 S1 규칙(`S1_RULE` · `plan_S1`)과 예산 상한 `C_rule`을 바꾸지 않는다(#170).
 - 결과 리포트에는 실행 시점의 `simulator_commit`을 기록한다. 봉인 후 `simulator/`가 바뀌면 이 값이 어긋나고, 그때는 **Baseline부터 전 전략을 재실행**한다 (SRS FREEZE-003).
 
 상세는 `Plan/AI_Retention_ROI_PRD_v2.md` §10 · §21 · §80, `Plan/AI_Customer_Retention_ROI_SRS_v2.0.md` NFR-002 / ISO-001~005, `docs/data_spec.html` §17을 따른다.

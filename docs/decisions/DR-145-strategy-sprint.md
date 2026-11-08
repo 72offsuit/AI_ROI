@@ -106,6 +106,9 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
   바뀐다. 이 값이 결과 전체에 가장 크게 작용한다.
 - 계획 비용(상한 vs 기대값): 쿠폰 사용률이 30% 면 기대 비용은 상한의 약 1/3 이다. 상한을 쓰면
   같은 예산에서 AI 전략이 고르는 고객 수가 그만큼 적다 — AI 에 불리한 방향의 보수적 오차다.
+  ★ 2026-11-01 한정(#170 · #204): 이 불리함은 **고정된 숫자 예산**을 상한 단가로 차감할 때의 이야기다.
+  C_rule 자체가 S1 의 같은 상한 단가 합이면 S1 과 AI 가 같은 단위에 서므로 어느 쪽에도 불리하다고
+  일반화하지 않는다. C_rule 정의는 `DR-170-c-rule-budget.md`.
 - `uplift_band_q` 0.6 ±0.12: Persuadables·Sleeping Dog 비율이 대략 ±12%p 움직인다.
 
 ## 남은 불확실성
@@ -113,6 +116,10 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
 - GATE 2 정식 봉인(C_rule 실측·`config/gate1_lock.yaml` 류 기록)은 하지 않았다. AGENTS.md 가 말하는
   `strategies/rule_based.py` 경로가 아니라 `strategies.py` 에 두었다(이슈 지시 시그니처) — 봉인 시
   경로를 합의해야 한다.
+  → 2026-11-01 해소(#170 · DR-170): 경로는 `src/decision/strategies.py` 로 정하고 AGENTS.md 를 맞췄다.
+  S1 선행 고정 증거 `ce05a66`(2026-10-22 14:10 KST)은 squash 병합으로 main 이력에 없어 태그
+  `gate2-s1-rule` 로 고정한다. `S1_RULE` · `plan_S1` 은 `ce05a66` 과 main `80b1446` 이 같다(본문 대조).
+  C_rule 의 정의도 DR-170 에서 정했다 — 값의 Lock 은 여전히 GATE 2 봉인 실행의 일이다.
 - CLV 의 기준(매출/이익)이 D5 에서 정해지지 않았다. `margin_rate` 를 넘기지 않으면 이익 기준으로
   읽는다는 가정이 S4·S5 결과를 좌우한다.
 - X-learner 성향점수를 표본 비율 상수로 둔 것은 무작위 배정 전제다(SIM-010 기본값). 공개
