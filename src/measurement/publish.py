@@ -404,8 +404,10 @@ def build_ingestion_report(
     all_events = split.commerce + split.simulator
     observed = sorted(set(partition_dates))
     rows_by_date: dict[date, Counter[str]] = {}
-    for name, events in split.items():
-        for event in events:
+    # ★ 반복 변수에 `events` 를 쓰지 않는다 (#267). 반복이 끝난 뒤 남은 그 이름을
+    #   합계가 집어 써서 마지막 출처(시뮬레이터)만 반영했다.
+    for name, source_events in split.items():
+        for event in source_events:
             moment = _event_day(event)
             if moment is not None:
                 rows_by_date.setdefault(moment, Counter())[name] += 1
@@ -429,10 +431,13 @@ def build_ingestion_report(
             "event_type_coverage": _metric(kpi.event_type_coverage(manifest)),
             "partition_day_count": _metric(kpi.partition_day_count(partition_dates)),
             "ingestion_days_gap": _metric(kpi.ingestion_days_gap(partition_dates)),
+            # ★ 합계는 **두 출처를 합친 입력**의 타입 근거로 센다 (#267). 출처별
+            #   계산 불가 수를 더하지 않는다 — 한 지표의 근거 타입이 두 출처에 나뉘어
+            #   있어도 합친 입력에서는 계산할 수 있다. 출처 순서와 무관하다.
             "unavailable_metric_count": _metric(
                 kpi.unavailable_metric_count(
                     cov.unavailable_metrics(
-                        Counter(str(e.get("event_type")) for e in events)
+                        Counter(str(e.get("event_type")) for e in all_events)
                     )
                 )
             ),

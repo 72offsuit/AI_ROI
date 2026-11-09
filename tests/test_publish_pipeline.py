@@ -19,9 +19,11 @@ import json
 import tempfile
 import unittest
 import uuid
+from collections import Counter
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
+from src.measurement import coverage as cov
 from src.measurement import publish as pub
 from src.measurement import schema as sc
 from src.measurement.config_loader import yaml_available
@@ -236,6 +238,97 @@ class TestHeadlinePriority(unittest.TestCase):
         for code in pub.HEADLINE_PRIORITY:
             with self.subTest(code=code):
                 self.assertTrue(pub._headline_detail(code, self.EMPTY).strip())
+
+
+# ── 수집 리포트 합계 — 두 출처를 합친 입력으로 센다 (#267) ───────────────────
+
+class TestIngestionTotalsUseAllSources(unittest.TestCase):
+    """`totals.unavailable_metric_count` 는 **두 출처를 합친 입력**의 타입 근거로 센다.
+
+    예전에는 출처 반복문이 끝난 뒤 남은 지역 변수를 써서 마지막 출처(시뮬레이터)만
+    반영했다 — 커머스만 있는 입력에서 16(전부 계산 불가)이 나왔다. 기대값은 같은
+    입력을 `coverage.unavailable_metrics()` 로 다시 센 값이다(정본 규칙 재사용).
+    """
+
+    DAY = date(2025, 10, 1)
+
+    def published(self, split: pub.SourceSplit) -> int:
+        events = split.commerce + split.simulator
+        manifest = {
+            "rows": len(events), "rejected": 0,
+            "event_type_counts": dict(Counter(e["event_type"] for e in events)),
+        }
+        report = pub.build_ingestion_report(manifest, split, [self.DAY])
+        metric = report["totals"]["unavailable_metric_count"]
+        self.assertEqual("ok", metric["status"])
+        return metric["value"]
+
+    @staticmethod
+    def combined(*events: dict[str, object]) -> int:
+        return len(cov.unavailable_metrics(Counter(e["event_type"] for e in events)))
+
+    def test_commerce_only_is_counted(self) -> None:
+        """#267 재현 1 — 커머스 session_start + page_view, 시뮬레이터 빈 묶음."""
+        rows = [commerce_event(sc.EventType.SESSION_START),
+                commerce_event(sc.EventType.PAGE_VIEW)]
+        self.assertEqual(12, self.combined(*rows))
+        self.assertEqual(12, self.published(pub.partition_by_source(rows)))
+
+    def test_mixed_sources_are_counted_together(self) -> None:
+        """#267 재현 2 — 위 커머스 + 시뮬레이터 return_visit 1건."""
+        rows = [commerce_event(sc.EventType.SESSION_START),
+                commerce_event(sc.EventType.PAGE_VIEW),
+                simulator_event(sc.EventType.RETURN_VISIT)]
+        self.assertEqual(12, self.combined(*rows))
+        self.assertEqual(12, self.published(pub.partition_by_source(rows)))
+
+    def test_simulator_only(self) -> None:
+        rows = [simulator_event(sc.EventType.SESSION_START),
+                simulator_event(sc.EventType.PURCHASE)]
+        self.assertEqual(self.combined(*rows),
+                         self.published(pub.partition_by_source(rows)))
+
+    def test_both_sources_empty_marks_every_metric_unavailable(self) -> None:
+        total = self.combined()
+        self.assertEqual(16, total)
+        self.assertEqual(total, self.published(pub.partition_by_source([])))
+
+    def test_swapping_types_between_sources_gives_the_same_total(self) -> None:
+        """같은 타입을 출처 사이에서 맞바꿔도, 출처 순서가 달라도 합계는 같다."""
+        a = sc.EventType.SESSION_START
+        b = sc.EventType.PURCHASE
+        first = pub.SourceSplit(commerce=(commerce_event(a),),
+                                simulator=(simulator_event(b),))
+        swapped = pub.SourceSplit(commerce=(commerce_event(b),),
+                                  simulator=(simulator_event(a),))
+        expected = self.combined(commerce_event(a), simulator_event(b))
+        self.assertEqual(expected, self.published(first))
+        self.assertEqual(expected, self.published(swapped))
+
+    def test_total_is_not_the_sum_of_per_source_counts(self) -> None:
+        """근거 타입이 두 출처에 나뉘면 합친 입력에서는 계산 가능하다."""
+        commerce = (commerce_event(sc.EventType.SESSION_START),)
+        simulator = (simulator_event(sc.EventType.PAGE_VIEW),)
+        total = self.published(pub.SourceSplit(commerce=commerce,
+                                               simulator=simulator))
+        per_source = self.combined(*commerce) + self.combined(*simulator)
+        self.assertEqual(self.combined(*commerce, *simulator), total)
+        self.assertLess(total, per_source)
+        self.assertLessEqual(total, min(self.combined(*commerce),
+                                        self.combined(*simulator)))
+
+    def test_per_source_counts_keep_measured_zero(self) -> None:
+        """출처별 타입 수는 그대로다 — 빈 출처는 계산 불가가 아니라 실측 0 이다."""
+        rows = [commerce_event(sc.EventType.SESSION_START)]
+        report = pub.build_ingestion_report(
+            {"rows": 1, "rejected": 0, "event_type_counts": {"session_start": 1}},
+            pub.partition_by_source(rows), [self.DAY],
+        )
+        cell = report["by_event_type"]["session_start"]["by_source"]
+        self.assertEqual(("ok", 1), (cell["commerce"]["status"],
+                                     cell["commerce"]["value"]))
+        self.assertEqual(("ok", 0), (cell["simulator"]["status"],
+                                     cell["simulator"]["value"]))
 
 
 # ── ★ 보안 — 거부 레코드 원문을 게시하지 않는다 (AC-6) ──────────────────────
