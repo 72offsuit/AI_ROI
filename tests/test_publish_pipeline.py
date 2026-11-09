@@ -767,9 +767,10 @@ class TestRepresentativeScene(unittest.TestCase):
         # ★ `overall` 을 상수로 박지 않는다. Lock 을 실행하면 not_started →
         #   partial 이 되고, 내 진행으로 내 테스트가 낡는다 (G-15 때와 같은 실수).
         #   `freeze.verify()` 를 정본으로 대조한다.
+        record = fz.load_record()
         expected_verification = fz.verify(
-            preconditions=fz.GATE1_PRECONDITIONS, items=fz.gate1_lock_items(),
-            lock_record=fz.load_record(),
+            preconditions=fz.GATE1_PRECONDITIONS, items=fz.gate1_lock_items(record),
+            lock_record=record,
         )
         self.assertEqual(expected_verification.overall, freeze["overall"])
         self.assertIn(freeze["overall"], ("not_started", "partial"),

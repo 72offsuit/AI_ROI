@@ -1219,11 +1219,17 @@ def build_freeze_status() -> dict[str, object]:
     탐지 3층(테스트 · 게시 · 화면)이 같은 함수를 쓴다는 것이 `AC-4` 이고, 이
     함수는 그 판정을 게시 형식으로 옮기는 일만 한다. `publish.py` 가 자기 사본의
     선행 조건 표를 들면 `tests/test_freeze.py` 와 판정이 갈린다.
+
+    항목 상태도 서명 기록에서 읽는다(#163) — 코드 기본값을 쓰면 서명 전에 게시물이
+    LOCKED 로 나오거나, 서명 뒤에 LOCKED 가 사라진다.
     """
+    path = fz.DEFAULT_LOCK_RECORD
+    record = fz.load_record(path) if path.exists() else None
     verification = fz.verify(
         preconditions=fz.GATE1_PRECONDITIONS,
-        items=fz.gate1_lock_items(),
-        lock_record=fz.load_record() if fz.DEFAULT_LOCK_RECORD.exists() else None,
+        items=fz.gate1_lock_items(record),
+        lock_record=record,
+        lock_record_path=path,
     )
     return fz.to_artifact(verification)
 
