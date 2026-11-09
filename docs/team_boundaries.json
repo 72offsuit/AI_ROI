@@ -19,7 +19,17 @@
         "docs/ab_test_report.md",
         "docs/sprint1_report.md"
       ],
-      "must_not_read_why": "AI 성능을 보고 시뮬레이터를 조정하는 것이 이 프로젝트에서 가장 위험한 누수다 (PRD §80 Risk 1). 코드가 파일을 훔쳐보는 것보다 사람이 결과를 본 뒤 파라미터를 고치는 쪽이 위험하다."
+      "must_not_read_why": "AI 성능을 보고 시뮬레이터를 조정하는 것이 이 프로젝트에서 가장 위험한 누수다 (PRD §80 Risk 1). 코드가 파일을 훔쳐보는 것보다 사람이 결과를 본 뒤 파라미터를 고치는 쪽이 위험하다.",
+      "must_not_read_exceptions": [
+        {
+          "path": "results/**",
+          "scope": "S8 채점 입력 — 고객별 τ̂(cate.jsonl) · 분기 목록",
+          "when": "GATE 4 Final Holdout 결과(§92 최종 평가표 · Primary 두 개)가 main 에 커밋된 뒤",
+          "how": "S8 CLI(src/diagnostics)로만 읽는다. 사람이 파일을 직접 열지 않고, 리포트에는 집계값만 싣는다",
+          "why": "그때는 GATE 1 봉인(FREEZE-003)으로 시뮬레이터를, GATE 2 · GATE 4 로 모델과 판정을 고칠 수 없어 결과를 보고 되돌아갈 길이 없다",
+          "decided": "인성(리드) · 2026-11-09 · #224 · DR-S8 결정 3"
+        }
+      ]
     },
     "sys": {
       "name": "시스템 (의사결정)",
