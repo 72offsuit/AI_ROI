@@ -181,6 +181,9 @@ class TestCorruptedLockRecordFailsWithItsOwnMessage(unittest.TestCase):
                 defined.add(node.id)
             elif isinstance(node, ast.arg):
                 defined.add(node.arg)
+            elif isinstance(node, ast.ExceptHandler) and node.name:
+                # `except E as name` 의 name 은 ast.Name 이 아니라 문자열로 붙는다.
+                defined.add(node.name)
         undefined = sorted({
             node.id
             for node in ast.walk(tree)

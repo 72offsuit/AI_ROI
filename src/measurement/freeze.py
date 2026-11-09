@@ -6,6 +6,14 @@
 `EXPERIMENT_ENVIRONMENT_v1` 을 **선언하지 않는다** — 그 선언은 GATE 1 전체 통과를
 전제하고, 부분 봉인은 시간이 지나면 *"전체를 Lock 했다"* 로 읽힌다.
 
+## #163 — 항목 상태는 서명 때 증거로 정하고, 이후에는 서명 기록이 정본이다
+
+`record()` 가 `simulator_commit`(시뮬레이터 4종) · `ChurnThresholdEvidence`(CHURN,
+data_spec §5.1)를 받아 증거가 있는 항목만 LOCKED 로 쓴다(`lock_items_at_signing`).
+verify · 게시 · 테스트는 `gate1_lock_items(record)` 로 **기록의 상태**를 읽는다.
+declaration 은 인자가 아니라 항목에서 유도한다 — SERVICE_v1 을 뺀 8종이 LOCKED 일
+때만 FULL_FREEZE 다. 근거: `docs/decisions/DR-163-gate1-lock-evidence.md`.
+
 ## ★ 탐지 3층이 **같은 함수**를 쓴다
 
     1층  tests/test_freeze.py      → verify() 를 부른다. **실패한다.** 경고가 아니다
@@ -28,6 +36,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +65,22 @@ LOCK_ITEMS: tuple[str, ...] = (
     "EVENT_SCHEMA_v1",
     "KPI_DEFINITION_v1",
 )
+
+#: commerce 소관이라 이 저장소가 봉인할 수 없는 항목. declaration 유도에서 뺀다 (#163).
+DECLARATION_EXEMPT_ITEMS = frozenset({"SERVICE_v1"})
+
+#: 시뮬레이터 Lock 5종 (#163). 서명 시 증거가 있을 때만 LOCKED 로 기록한다.
+SIMULATOR_LOCK_ITEMS: tuple[str, ...] = (
+    "CUSTOMER_PERSONA_v1",
+    "HIDDEN_TRAIT_RULE_v1",
+    "BEHAVIOR_RULE_v1",
+    "TREATMENT_RESPONSE_v1",
+)
+CHURN_ITEM = "CHURN_DEFINITION_v1"
+
+#: 시뮬레이터 정본 파일. 페르소나 · Hidden Trait · 행동 · 가드레일 · churn 임계값 블록이
+#: 모두 여기 있다. src/simulator 코드는 해시가 아니라 기록의 simulator_commit 으로 남는다.
+SIMULATOR_CANONICAL_FILE = Path("config/simulator_config.yaml")
 
 ITEM_STATUSES = ("LOCKED", "PARTIAL", "PENDING", "BLOCKED", "OUT_OF_SCOPE")
 OVERALL_STATES = ("not_started", "partial", "sealed", "violated")
@@ -110,6 +135,13 @@ class LockItem:
                 "부분 Lock 은 범위를 문장으로 남긴다 — 남기지 않으면 시간이 지나 "
                 "전체를 Lock 한 것으로 읽힌다"
             )
+        # 계약(freeze_status.schema.json)이 LOCKED 항목에 canonical_files 를 요구한다.
+        # 무엇을 봉인했는지 해시로 가리키지 못하는 LOCKED 는 대조할 수 없다.
+        if self.status == "LOCKED" and not self.canonical_files:
+            raise ValueError(
+                f"{self.item}: LOCKED 인데 canonical_files 가 비었다. 봉인한 정본 "
+                "파일을 가리켜야 verify() 가 해시를 대조할 수 있다"
+            )
 
 
 @dataclass(frozen=True, slots=True)
@@ -130,6 +162,31 @@ class Precondition:
 
 
 @dataclass(frozen=True, slots=True)
+class ChurnThresholdEvidence:
+    """`docs/data_spec.html` §5.1 ①~④(churn 임계값 실측 확인)의 결과.
+
+    `met` 은 `True`/`False` 뿐이다. *"확인하지 않았다"* 는 이 객체를 넘기지 않는
+    것으로 나타낸다 — 그때 CHURN_DEFINITION_v1 은 기본 상태(PARTIAL)로 남는다.
+    `evidence` 는 충족이든 미충족이든 근거 경로나 설명이며 기록에 그대로 남는다.
+    """
+
+    met: bool
+    evidence: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.met, bool):
+            raise ValueError(
+                f"met={self.met!r} — True/False 만 받는다. 확인하지 않았으면 "
+                "증거 객체를 넘기지 않는다"
+            )
+        if not isinstance(self.evidence, str) or not self.evidence.strip():
+            raise ValueError(
+                "§5.1 확인 근거가 비었다. 근거 없는 충족은 주장이고, 근거 없는 "
+                "미충족은 다음 사람이 무엇을 다시 해야 하는지 모른다"
+            )
+
+
+@dataclass(frozen=True, slots=True)
 class FreezeVerification:
     """`verify()` 의 결과. **세 층이 이 객체를 공유한다.**"""
 
@@ -146,6 +203,11 @@ class FreezeVerification:
     계약이 기록 전체가 아니라 `path` + `sha256` + 핵심 4필드만 받는 이유가 있다:
     게시물이 기록을 **복제하면 진실이 둘**이 되고, 둘이 갈라지면 어느 쪽이 정본인지
     알 수 없다. 포인터 + 해시면 **기록이 조용히 바뀐 것도 드러난다.**"""
+    file_hashes: Mapping[str, tuple[str | None, str | None]] = field(default_factory=dict)
+    """정본 경로 → (기록된 해시, 현재 해시). 대조를 실행했을 때만 채운다.
+
+    게시물의 항목별 `canonical_files[]` 가 이것을 읽는다 — 항목마다 다시 해시하면
+    한 번의 판정 안에서 같은 파일의 답이 둘이 될 수 있다."""
 
     def __post_init__(self) -> None:
         if self.overall not in OVERALL_STATES:
@@ -192,6 +254,10 @@ def file_sha256(path: Path) -> str | None:
 #: `owner_part` 가 중요하다: 측정 계층이 봉인할 수 있는 것은 3종뿐이고 나머지는
 #: 시뮬레이터·커머스 소관이다. **남의 소관을 `PENDING` 으로 적으면 우리가 안 한
 #: 것처럼 보인다** — `OUT_OF_SCOPE` 가 그 구분이다.
+#:
+#: ★ #163 이후 이 표는 **서명 전 기본 상태**다. 서명된 기록이 있으면 verify · 게시는
+#: 기록의 상태를 쓴다(`gate1_lock_items(record)`). 서명 때 증거로 올릴 목표는
+#: `_LOCK_TARGETS` 에 있다.
 _LOCK_ROWS: tuple[tuple[str, str, str, str], ...] = (
     ("SERVICE_v1", "OUT_OF_SCOPE", "commerce",
      "서비스 정의는 Ecommerce_Service 소관이고 이 저장소가 봉인할 수 없다. "
@@ -225,6 +291,52 @@ _LOCK_ROWS: tuple[tuple[str, str, str, str], ...] = (
      "그래서 metrics[].role 이 전부 none 이다 — 배정하지 않은 것이지 "
      "빠뜨린 것이 아니다"),
 )
+
+_SIMULATOR_PROVENANCE_NOTE = (
+    "정본은 config/simulator_config.yaml 해시와 기록의 simulator_commit"
+    "(src/simulator 코드)이다. verify() 는 config 해시만 대조하고 simulator_commit "
+    "은 대조하지 않는다(#163 후속)"
+)
+
+#: ★ 서명 시 증거가 있으면 LOCKED 로 기록할 **목표** (#163). item → (owner_part, scope_note).
+#:
+#: 정본 파일은 다섯 항목 모두 `SIMULATOR_CANONICAL_FILE` 이다. CHURN 의 임계값도
+#: 그 파일의 `churn` 블록에 있다(DR-183). 판정 방식 자체는 측정 정본 4종이 덮는다.
+_LOCK_TARGETS: Mapping[str, tuple[str, str]] = {
+    "CUSTOMER_PERSONA_v1": (
+        "simulator",
+        "페르소나 정의(종류 · 구성비 · 가입일 범위)를 Lock 한다. "
+        + _SIMULATOR_PROVENANCE_NOTE,
+    ),
+    "HIDDEN_TRAIT_RULE_v1": (
+        "simulator",
+        "Hidden Trait 생성 규칙을 Lock 한다. 측정 계층은 이 값을 "
+        "통과시키지 않으므로(ISO-003) 내용이 아니라 해시만 안다. "
+        + _SIMULATOR_PROVENANCE_NOTE,
+    ),
+    "BEHAVIOR_RULE_v1": (
+        "simulator",
+        "행동 규칙과 상품 카탈로그 생성 규칙을 Lock 한다. " + _SIMULATOR_PROVENANCE_NOTE,
+    ),
+    "TREATMENT_RESPONSE_v1": (
+        "simulator",
+        "처치 반응 규칙과 처치 강도 가드레일을 Lock 한다. Treatment 비용은 "
+        "ECONOMIC_RULE_v1 이고 여기 들지 않는다. " + _SIMULATOR_PROVENANCE_NOTE,
+    ),
+    CHURN_ITEM: (
+        "measurement",
+        "이탈 판정 방식(고정 윈도우 · 운영 상태와 모델 라벨의 분리 · "
+        "label_window_days=42)과 config/simulator_config.yaml churn 블록의 임계값을 "
+        "Lock 한다. 임계값은 data_spec §5.1 ①~④ 실측으로 확정했고 근거는 기록의 "
+        "churn_threshold_evidence 에 있다. 정본 해시는 config/simulator_config.yaml "
+        "이고, 실측을 만든 시뮬레이터는 simulator_commit 이다",
+    ),
+}
+assert set(_LOCK_TARGETS) == {*SIMULATOR_LOCK_ITEMS, CHURN_ITEM}
+assert all(
+    _LOCK_TARGETS[item][0] == owner
+    for item, _status, owner, _note in _LOCK_ROWS if item in _LOCK_TARGETS
+), "LOCKED 로 올려도 소관은 바뀌지 않는다 — 기본 상태와 목표의 owner_part 가 같아야 한다"
 
 
 _GATE1_ROWS: tuple[tuple[str, str, bool | None, str], ...] = (
@@ -322,34 +434,221 @@ assert len(GATE1_PRECONDITIONS) == 16, (
 assert len({item.id for item in GATE1_PRECONDITIONS}) == 16, "G-n 이 중복이다"
 
 
-def gate1_lock_items() -> tuple[LockItem, ...]:
-    """PRD §22 Lock 9종의 C1 판정. **9종 전부** 돌려준다.
-
-    `LockItem.__post_init__` 이 `PARTIAL`·`LOCKED` 에 `scope_note` 를 강제하므로,
-    범위를 비워 둔 부분 Lock 은 **만들 수조차 없다.**
-    """
-    items = tuple(
-        LockItem(
-            item=item, status=status, owner_part=owner, scope_note=note,
-            reason_code=(
-                sc.ReasonCode.NOT_RUN.value if status == "PENDING"
-                else sc.ReasonCode.PRECONDITION_MISSING.value
-                if status == "OUT_OF_SCOPE" else None
-            ),
-            reason_detail=(
-                "C1 은 GATE 1 을 통과시키지 않고 부분 봉인만 한다. 실제 Lock 기록은 "
-                "freeze.record() 가 쓴다"
-                if owner == "measurement"
-                else "이 저장소의 측정 계층이 봉인할 수 없는 항목이다"
-            ),
-        )
-        for item, status, owner, note in _LOCK_ROWS
+def _lock_item(
+    item: str, status: str, owner: str, note: str,
+    canonical_files: tuple[str, ...] = (),
+) -> LockItem:
+    """사유 필드를 상태 · 소관에서 유도한다. 기본값과 서명 기록이 같은 규칙을 쓴다."""
+    return LockItem(
+        item=item, status=status, owner_part=owner, scope_note=note,
+        reason_code=(
+            sc.ReasonCode.NOT_RUN.value if status == "PENDING"
+            else sc.ReasonCode.PRECONDITION_MISSING.value
+            if status == "OUT_OF_SCOPE" else None
+        ),
+        # LOCKED 에 "봉인할 수 없다" 류의 미봉인 사유를 붙이면 상태와 사유가 모순된다.
+        reason_detail=(
+            None if status == "LOCKED"
+            else "C1 은 GATE 1 을 통과시키지 않고 부분 봉인만 한다. 실제 Lock 기록은 "
+            "freeze.record() 가 쓴다"
+            if owner == "measurement"
+            else "이 저장소의 측정 계층이 봉인할 수 없는 항목이다"
+        ),
+        canonical_files=canonical_files,
     )
+
+
+def _recorded_items(lock_record: Mapping[str, object]) -> tuple[LockItem, ...]:
+    """서명 기록의 `items` 를 읽는다. 구조가 깨졌으면 `ConfigError` — 기본값으로 떨어지지 않는다.
+
+    기본값으로 떨어지면 손으로 고쳐 깨진 기록이 *"서명 전 상태"* 로 보이고, 그것은
+    `FREEZE-003` 이 막는 변조를 조용히 덮는 것이다.
+    """
+    entries = lock_record.get("items")
+    if not isinstance(entries, Sequence) or isinstance(entries, (str, bytes)):
+        raise ConfigError(
+            "gate1_lock.yaml 의 items 가 목록이 아니다 — freeze.record() 로 다시 "
+            "서명한다. 손으로 고치지 않는다"
+        )
+    items: list[LockItem] = []
+    for index, entry in enumerate(entries):
+        try:
+            if not isinstance(entry, Mapping):
+                raise TypeError("항목이 매핑이 아니다")
+            files = entry.get("canonical_files") or ()
+            if isinstance(files, (str, bytes)) or not isinstance(files, Sequence):
+                raise TypeError("canonical_files 가 경로 목록이 아니다")
+            items.append(_lock_item(
+                str(entry["item"]), str(entry["status"]), str(entry["owner_part"]),
+                str(entry["scope_note"]), tuple(str(path) for path in files),
+            ))
+        except (KeyError, TypeError, ValueError) as error:
+            raise ConfigError(
+                f"gate1_lock.yaml items[{index}] 를 읽을 수 없다: {error}. "
+                "freeze.record() 로 다시 서명한다. 손으로 고치지 않는다"
+            ) from error
+    names = sorted(item.item for item in items)
+    if names != sorted(LOCK_ITEMS):
+        raise ConfigError(
+            f"gate1_lock.yaml items 가 Lock 9종을 정확히 한 번씩 담지 않는다: {names}. "
+            "빠지거나 겹친 기록은 무엇을 봉인했는지 말하지 못한다"
+        )
+    return tuple(items)
+
+
+def gate1_lock_items(lock_record: object = None) -> tuple[LockItem, ...]:
+    """PRD §22 Lock 9종의 판정. **9종 전부** 돌려준다. ★ verify · 게시 · 테스트가 이것 하나를 쓴다.
+
+    - 읽을 수 있는 서명 기록을 넘기면 **그 기록의 상태**다. 서명 뒤에 코드
+      기본값이 바뀌어도 게시물은 서명된 내용을 보여 준다.
+    - `None`(기록 없음) · `RECORD_UNREADABLE`(PyYAML 없음)이면 코드의 서명 전 기본
+      상태(`_LOCK_ROWS`)다. 후자는 기록 내용을 모르므로 이 값이 기록과 다를 수
+      있다 — `verify()` 가 같은 경우를 `verification: not_run` 으로 표시한다.
+
+    `LockItem.__post_init__` 이 `PARTIAL`·`LOCKED` 에 `scope_note` 를, `LOCKED` 에
+    `canonical_files` 를 강제하므로 그런 항목은 **만들 수조차 없다.**
+
+    기록은 쓰기 경로와 같은 규칙으로 다시 검사한다(`_check_recorded_invariants`).
+    증거 없는 LOCKED · 항목과 어긋난 선언은 `ConfigError` 다.
+    """
+    if lock_record is not None and lock_record is not RECORD_UNREADABLE:
+        if not isinstance(lock_record, Mapping):
+            raise ConfigError("gate1_lock.yaml 이 매핑이 아니다")
+        items = _recorded_items(lock_record)
+        _check_recorded_invariants(lock_record, items)
+        return items
+    items = tuple(_lock_item(*row) for row in _LOCK_ROWS)
     assert {i.item for i in items} == set(LOCK_ITEMS), (
         "Lock 9종 중 빠진 항목이 있다 — 빼면 '봉인 대상이 아니다'와 '봉인을 "
         "잊었다'가 같아진다"
     )
     return items
+
+
+
+def recorded_signing_evidence(
+    lock_record: Mapping[str, object],
+) -> tuple[str | None, ChurnThresholdEvidence | None]:
+    """서명 기록에 적힌 증거를 `record()` 인자 형태로 돌려준다.
+
+    같은 증거로 `lock_items_at_signing()` 을 다시 계산하면 기록의 항목이 나와야 한다 —
+    검사와 테스트가 이 왕복을 쓴다. 형식이 틀리면 `ConfigError` 다.
+    """
+    simulator_commit = lock_record.get("simulator_commit")
+    if simulator_commit is not None and not isinstance(simulator_commit, str):
+        raise ConfigError(
+            f"gate1_lock.yaml simulator_commit={simulator_commit!r} 가 문자열이 아니다. "
+            "freeze.record() 로 다시 서명한다. 손으로 고치지 않는다"
+        )
+    try:
+        _check_simulator_commit(simulator_commit)
+    except FreezeViolation as error:
+        raise ConfigError(f"gate1_lock.yaml — {error}") from error
+
+    raw = lock_record.get("churn_threshold_evidence")
+    if raw is None:
+        return simulator_commit, None
+    if not isinstance(raw, Mapping) or "met" not in raw or "evidence" not in raw:
+        raise ConfigError(
+            "gate1_lock.yaml churn_threshold_evidence 가 {met, evidence} 매핑이 아니다. "
+            "freeze.record() 로 다시 서명한다. 손으로 고치지 않는다"
+        )
+    try:
+        churn_evidence = ChurnThresholdEvidence(met=raw["met"], evidence=raw["evidence"])  # type: ignore[arg-type]
+    except ValueError as error:
+        raise ConfigError(f"gate1_lock.yaml churn_threshold_evidence — {error}") from error
+    return simulator_commit, churn_evidence
+
+
+def _check_recorded_invariants(
+    lock_record: Mapping[str, object], items: Sequence[LockItem],
+) -> None:
+    """기록을 쓸 때의 불변식을 읽을 때 다시 본다. 같은 함수를 써야 두 경로가 갈리지 않는다.
+
+    손으로 고친 기록을 막는 것이 목적이다 — 구조만 보면 증거 없는 LOCKED 가 게시되고,
+    선언과 항목이 어긋난 기록에서 verify() 가 sealed 를 낸다. 9종 · 선언 · 증거를
+    모두 일관되게 위조한 기록은 여기서 잡지 못한다. 게시물의 기록 파일 sha256 이 남는다.
+    """
+    simulator_commit, churn_evidence = recorded_signing_evidence(lock_record)
+    try:
+        _check_lock_evidence(items, simulator_commit, churn_evidence)
+    except FreezeViolation as error:
+        raise ConfigError(
+            f"gate1_lock.yaml — {error}. freeze.record() 로 다시 서명한다"
+        ) from error
+    full = _all_lockable_locked(items)
+    declaration = lock_record.get("declaration")
+    declared = lock_record.get("experiment_environment_v1_declared")
+    # `is` 로 비교한다 — 0 · 1 이 False · True 와 같다고 통과하지 않게.
+    if declaration != ("FULL_FREEZE" if full else "PARTIAL_FREEZE") or declared is not full:
+        raise ConfigError(
+            f"gate1_lock.yaml 선언(declaration={declaration!r}, "
+            f"experiment_environment_v1_declared={declared!r})이 항목에서 유도한 값"
+            f"({'FULL_FREEZE' if full else 'PARTIAL_FREEZE'}, {full})과 다르다. "
+            "선언은 항목에서만 유도한다 — freeze.record() 로 다시 서명한다"
+        )
+
+
+_SIMULATOR_COMMIT = re.compile(r"^[0-9a-f]{40}$")
+
+
+def _check_simulator_commit(simulator_commit: str | None) -> None:
+    """40자 소문자 git sha 만 받는다. 자리 표시값은 *"확인했고 이 값이다"* 가 되어 거부한다."""
+    if simulator_commit is not None and not _SIMULATOR_COMMIT.match(simulator_commit):
+        raise FreezeViolation(
+            f"simulator_commit={simulator_commit!r} 는 40자 git sha 가 아니다. "
+            "`git log -1 --format=%H -- src/simulator` 값을 넘긴다. 모르면 넘기지 "
+            "않는다 — 그러면 시뮬레이터 항목은 LOCKED 로 기록되지 않는다"
+        )
+
+
+def _all_lockable_locked(items: Sequence[LockItem]) -> bool:
+    """commerce 소관(SERVICE_v1)을 뺀 8종이 전부 LOCKED 인가. declaration 과 overall 이 공유한다."""
+    locked = {item.item for item in items if item.status == "LOCKED"}
+    # 빈 목록에서 all() 이 참이 되는 것을 막으려고 항목 이름으로 센다.
+    return locked >= set(LOCK_ITEMS) - DECLARATION_EXEMPT_ITEMS
+
+
+def lock_items_at_signing(
+    *,
+    simulator_commit: str | None = None,
+    churn_evidence: ChurnThresholdEvidence | None = None,
+) -> tuple[LockItem, ...]:
+    """서명 시점에 기록할 9종. **코드 기본값에서 출발해 증거가 있는 항목만** LOCKED 로 올린다.
+
+    | 증거 | 결과 |
+    |---|---|
+    | 없음 | 기본값 그대로 (시뮬레이터 4종 OUT_OF_SCOPE · CHURN PARTIAL) |
+    | `simulator_commit` | 시뮬레이터 4종 LOCKED |
+    | + `churn_evidence.met is True` | CHURN 도 LOCKED |
+    | `churn_evidence.met is False` | CHURN 은 PARTIAL 로 남는다 (근거는 기록에 남는다) |
+
+    이전 서명 기록의 상태는 이어받지 않는다 — 이번 서명의 증거로만 정한다.
+
+    Raises:
+        FreezeViolation: `simulator_commit` 이 40자 sha 가 아니거나, §5.1 충족 증거를
+            `simulator_commit` 없이 넘겼다. 쓸 수 없는 증거를 조용히 무시하면
+            서명자는 LOCKED 를 기대한 채 PARTIAL 기록을 커밋한다.
+    """
+    _check_simulator_commit(simulator_commit)
+    churn_met = churn_evidence is not None and churn_evidence.met
+    if churn_met and simulator_commit is None:
+        raise FreezeViolation(
+            "§5.1 충족 증거를 받았지만 simulator_commit 이 없다. ④(재생성 이탈률)는 "
+            "특정 시뮬레이터의 실행 결과이므로 그 커밋이 없으면 증거가 재현되지 "
+            "않는다. simulator_commit 을 함께 넘긴다"
+        )
+    promoted = set(SIMULATOR_LOCK_ITEMS) if simulator_commit is not None else set()
+    if churn_met:
+        promoted.add(CHURN_ITEM)
+    return tuple(
+        _lock_item(
+            item.item, "LOCKED", *_LOCK_TARGETS[item.item],
+            (SIMULATOR_CANONICAL_FILE.as_posix(),),
+        )
+        if item.item in promoted else item
+        for item in gate1_lock_items()
+    )
 
 
 #: The assumptions a GATE 1 seal stands on. **A record without these reads as
@@ -540,13 +839,26 @@ def verify(
             "gate1_lock.yaml 의 canonical_files 가 매핑이 아니다 — "
             "`경로: sha256` 형태여야 한다"
         )
+    file_hashes: dict[str, tuple[str | None, str | None]] = {}
     for relative, expected in recorded.items():
         actual = file_sha256(repo_root / str(relative))
+        file_hashes[str(relative)] = (None if expected is None else str(expected), actual)
         if actual != expected:
             mismatches.append(
                 f"{relative}: 기록 {str(expected)[:12]}… ≠ 현재 "
                 f"{(actual or '(파일 없음)')[:12]}…"
             )
+    # LOCKED 항목이 가리키는 정본의 해시가 기록에 없으면 대조할 기준이 없다.
+    # 일치로 적으면 봉인하지 않은 파일이 봉인된 것으로 보인다.
+    for item in items:
+        if item.status != "LOCKED":
+            continue
+        for relative in item.canonical_files:
+            if relative not in file_hashes:
+                file_hashes[relative] = (None, file_sha256(repo_root / relative))
+                mismatches.append(
+                    f"{relative}: LOCKED 항목 {item.item} 의 정본인데 기록에 해시가 없다"
+                )
 
     if mismatches:
         return FreezeVerification(
@@ -557,6 +869,7 @@ def verify(
             unmet=unmet,
             lock_record_path=lock_record_path,
             mismatches=tuple(mismatches),
+            file_hashes=file_hashes,
             detail=(
                 f"봉인된 정본 파일 {len(mismatches)}건이 봉인 이후 변경됐다. "
                 "FREEZE-003 — Baseline 부터 전 전략을 재실행해야 한다"
@@ -565,12 +878,15 @@ def verify(
 
     locked = sum(1 for item in items if item.status == "LOCKED")
     return FreezeVerification(
-        overall="sealed" if locked == len(LOCK_ITEMS) else "partial",
+        # build_record() 의 FULL_FREEZE 유도와 같은 규칙이다. 갈리면 기록은 FULL 인데
+        # 화면은 partial 이 된다.
+        overall="sealed" if _all_lockable_locked(items) else "partial",
         verification="match",
         lock_record=lock_record,
         items=tuple(items),
         unmet=unmet,
         lock_record_path=lock_record_path,
+        file_hashes=file_hashes,
         detail=(
             f"정본 파일 {len(recorded)}건이 기록과 일치한다. "
             f"{locked}/{len(LOCK_ITEMS)} 종이 LOCKED 다"
@@ -611,6 +927,25 @@ def _lock_record_summary(
     }
 
 
+def _canonical_file_entry(
+    verification: FreezeVerification, path: str,
+) -> dict[str, object]:
+    """계약 `items[].canonical_files[]` 한 칸. 대조하지 않았으면 해시를 싣지 않고 그 사실만 싣는다."""
+    hashes = verification.file_hashes.get(path)
+    if hashes is None:
+        # 대조하지 않았거나(not_run) 기록에 이 경로의 해시가 없다(missing).
+        # 전체 판정이 match 여도 이 파일은 대조되지 않았으므로 match 로 적지 않는다.
+        state = "not_run" if verification.verification == "not_run" else "missing"
+        return {"path": path, "verification": state}
+    locked, current = hashes
+    return {
+        "path": path,
+        "locked_sha256": locked,
+        "current_sha256": current,
+        "verification": "match" if locked is not None and locked == current else "mismatch",
+    }
+
+
 def to_artifact(verification: FreezeVerification) -> dict[str, object]:
     """`results/measurement/freeze_status.json` 본문 (봉투는 `contracts.envelope`).
 
@@ -640,8 +975,10 @@ def to_artifact(verification: FreezeVerification) -> dict[str, object]:
                 "scope_note": item.scope_note,
                 **({"reason_code": item.reason_code} if item.reason_code else {}),
                 **({"reason_detail": item.reason_detail} if item.reason_detail else {}),
-                **({"canonical_files": list(item.canonical_files)}
-                   if item.canonical_files else {}),
+                **({"canonical_files": [
+                    _canonical_file_entry(verification, path)
+                    for path in item.canonical_files
+                ]} if item.canonical_files else {}),
             }
             for item in verification.items
         ],
@@ -665,16 +1002,24 @@ def build_record(
     repo_commit: str | None,
     now: datetime,
     simulator_commit: str | None = None,
+    churn_evidence: ChurnThresholdEvidence | None = None,
     assumptions: Sequence[Mapping[str, object]] = (),
 ) -> dict[str, object]:
-    """Lock 기록을 만든다. **`declaration` 은 `PARTIAL_FREEZE` 로 고정이다.**
+    """Lock 기록을 만든다. **`declaration` 은 인자가 아니라 `items` 에서 유도한다.**
+
+    SERVICE_v1(commerce 소관)을 뺀 8종이 전부 LOCKED 일 때만 `FULL_FREEZE` +
+    `experiment_environment_v1_declared: true` 이고, 아니면 `PARTIAL_FREEZE` + `false` 다.
 
     ★ `locked_by` 는 **사람 이름**이다. 빈 문자열이나 `"agent"` 를 허용하지
     않는다 — 봉인은 책임 소재가 있는 행위이고, 누가 눌렀는지가 기록의 요점이다.
 
-    ★ `simulator_commit` 은 **`None`** 이 정직한 값이다. C1 에 시뮬레이터가 없다.
-    `""`·`"unknown"`·`"0"` 으로 채우면 *"확인했고 이 값이다"* 가 되어 `FREEZE-003`
-    대조가 무의미해진다.
+    ★ `simulator_commit` 을 모르면 **`None`** 이 정직한 값이다. `""`·`"unknown"`·
+    `"0"` 은 *"확인했고 이 값이다"* 가 되어 `FREEZE-003` 대조가 무의미해지므로
+    40자 sha 가 아니면 거부한다.
+
+    Raises:
+        FreezeViolation: 사람 이름이 아니거나, 증거 없이 LOCKED 인 항목이 있거나
+            (시뮬레이터 4종 · CHURN), LOCKED 항목의 정본 파일이 없다.
     """
     if not locked_by.strip() or locked_by.strip().lower() in (
         "agent", "unknown", "n/a", "-",
@@ -684,18 +1029,35 @@ def build_record(
             "있는 행위이고, 누가 언제 무엇을 어느 범위까지 Lock 했는지가 이 "
             "기록의 존재 이유다"
         )
-    # ★ FULL_FREEZE 를 만들 경로를 두지 않는다. C1 은 GATE 1 을 통과시키지 않고,
-    #   인자로 받으면 누군가 전달한다.
+    _check_simulator_commit(simulator_commit)
+    _check_lock_evidence(items, simulator_commit, churn_evidence)
+
+    # LOCKED 항목의 정본도 해시 대조 대상이다. 호출자가 넘긴 목록에 없으면 덧붙인다.
+    hashed = [path.as_posix() for path in canonical_files]
+    for item in items:
+        if item.status == "LOCKED":
+            hashed.extend(path for path in item.canonical_files if path not in hashed)
+    hashes = {path: file_sha256(Path(path)) for path in hashed}
+    absent = sorted(
+        path for item in items if item.status == "LOCKED"
+        for path in item.canonical_files if hashes[path] is None
+    )
+    if absent:
+        # 해시가 null 이면 verify() 가 null == null 로 일치를 낸다 — 없는 파일이 봉인된다.
+        raise FreezeViolation(
+            f"LOCKED 항목의 정본 파일이 없다: {absent}. 저장소 루트에서 실행했는지 "
+            "확인한다"
+        )
+
+    # ★ declaration 을 인자로 받지 않는다 — 받으면 누군가 FULL_FREEZE 를 전달한다.
+    #   항목에서 유도하므로 LOCKED 증거 없이는 FULL 이 될 수 없다.
+    full = _all_lockable_locked(items)
     record: dict[str, object] = {
         "lock_record_version": LOCK_RECORD_VERSION,
         "gate": "GATE_1",
-        "declaration": "PARTIAL_FREEZE",
-        "experiment_environment_v1_declared": False,
-        "declaration_note": (
-            "C1 은 GATE 1 을 통과시키지 않는다. 측정 계층이 소유한 항목만 부분 "
-            "봉인하고 나머지는 봉인 대기로 남긴다. EXPERIMENT_ENVIRONMENT_v1 을 "
-            "선언하지 않는다."
-        ),
+        "declaration": "FULL_FREEZE" if full else "PARTIAL_FREEZE",
+        "experiment_environment_v1_declared": full,
+        "declaration_note": _declaration_note(items, full=full),
         "locked_at": now.isoformat(timespec="milliseconds"),
         "locked_by": locked_by.strip(),
         "repo_commit": repo_commit,
@@ -704,12 +1066,12 @@ def build_record(
             {
                 "item": item.item, "status": item.status,
                 "owner_part": item.owner_part, "scope_note": item.scope_note,
+                **({"canonical_files": list(item.canonical_files)}
+                   if item.canonical_files else {}),
             }
             for item in items
         ],
-        "canonical_files": {
-            path.as_posix(): file_sha256(path) for path in canonical_files
-        },
+        "canonical_files": hashes,
         # ★ 봉인이 무엇을 **가정한 채** 성립하는지 기록에 남긴다.
         #   가정을 남기지 않으면 다음 사이클이 Lock 을 "전부 확인됨" 으로 읽는다.
         "assumptions": [dict(item) for item in assumptions],
@@ -719,6 +1081,10 @@ def build_record(
             "승인 사항이며 이 파일을 손으로 고치는 것으로 대체되지 않는다."
         ),
     }
+    if churn_evidence is not None:
+        record["churn_threshold_evidence"] = {
+            "met": churn_evidence.met, "evidence": churn_evidence.evidence,
+        }
     if simulator_commit is None:
         record["simulator_commit_null_reason"] = (
             sc.ReasonCode.PRECONDITION_MISSING.value
@@ -726,6 +1092,47 @@ def build_record(
     if repo_commit is None:
         record["repo_commit_null_reason"] = sc.ReasonCode.PRECONDITION_MISSING.value
     return record
+
+
+def _check_lock_evidence(
+    items: Sequence[LockItem],
+    simulator_commit: str | None,
+    churn_evidence: ChurnThresholdEvidence | None,
+) -> None:
+    """LOCKED 항목이 그 증거와 함께 기록되는가. `lock_items_at_signing()` 을 거치지 않은 호출도 막는다."""
+    locked = {item.item for item in items if item.status == "LOCKED"}
+    if locked & set(SIMULATOR_LOCK_ITEMS) and simulator_commit is None:
+        raise FreezeViolation(
+            f"{sorted(locked & set(SIMULATOR_LOCK_ITEMS))} 가 LOCKED 인데 "
+            "simulator_commit 이 없다. 어느 시뮬레이터를 봉인했는지 모르는 봉인은 "
+            "FREEZE-003 대조를 할 수 없다"
+        )
+    if CHURN_ITEM in locked and not (churn_evidence is not None and churn_evidence.met):
+        raise FreezeViolation(
+            f"{CHURN_ITEM} 가 LOCKED 인데 data_spec §5.1 충족 증거가 없다. 임계값 "
+            "28/42/60 은 ①~④ 실측 없이 Lock 하지 않는다 (DR-183)"
+        )
+
+
+def _declaration_note(items: Sequence[LockItem], *, full: bool) -> str:
+    if full:
+        return (
+            "SERVICE_v1(commerce 소관)을 뺀 Lock 8종이 전부 LOCKED 다. "
+            "EXPERIMENT_ENVIRONMENT_v1 을 선언한다."
+        )
+    locked = [item.item for item in items if item.status == "LOCKED"]
+    if not locked:
+        # #163 전 기록과 같은 문장 — 증거 없이 다시 서명해도 기록이 바뀌지 않는다.
+        return (
+            "C1 은 GATE 1 을 통과시키지 않는다. 측정 계층이 소유한 항목만 부분 "
+            "봉인하고 나머지는 봉인 대기로 남긴다. EXPERIMENT_ENVIRONMENT_v1 을 "
+            "선언하지 않는다."
+        )
+    return (
+        f"LOCKED {len(locked)}종({', '.join(locked)})이다. SERVICE_v1 을 뺀 8종이 "
+        "전부 LOCKED 가 아니므로 부분 봉인이다. EXPERIMENT_ENVIRONMENT_v1 을 "
+        "선언하지 않는다."
+    )
 
 
 def record(
@@ -737,11 +1144,18 @@ def record(
     now: datetime,
     path: Path = DEFAULT_LOCK_RECORD,
     assumptions: Sequence[Mapping[str, object]] = (),
+    simulator_commit: str | None = None,
+    churn_evidence: ChurnThresholdEvidence | None = None,
 ) -> dict[str, object]:
     """Lock 을 **실행**한다. ★ 선행 조건이 하나라도 미충족이면 거부한다.
 
     `can_lock` 은 `met is None`(확인하지 않았다)도 미충족으로 센다. **확인하지 않은 것을 충족으로 읽으면 봉인이
     거짓말이 된다.**
+
+    항목 상태는 `verification.items` 가 아니라 이번에 넘긴 증거로 정한다
+    (`lock_items_at_signing()`). 증거가 없으면 시뮬레이터 4종 · CHURN 은 서명 전
+    기본 상태로 기록된다 — 예외가 아니다. 쓸 수 없는 증거(자리 표시 sha, sha 없는
+    §5.1 충족)는 `FreezeViolation` 이다.
     """
     if not verification.can_lock:
         raise FreezeViolation(
@@ -755,8 +1169,12 @@ def record(
             "전 데이터 재생성 + 전 전략 재실행이다 (FREEZE-003)."
         )
     payload = build_record(
-        locked_by=locked_by, items=verification.items,
+        locked_by=locked_by,
+        items=lock_items_at_signing(
+            simulator_commit=simulator_commit, churn_evidence=churn_evidence,
+        ),
         canonical_files=canonical_files, repo_commit=repo_commit, now=now,
+        simulator_commit=simulator_commit, churn_evidence=churn_evidence,
         assumptions=assumptions,
     )
     # ★ YAML 은 config_loader 가 만진다. 가정 A7-6 이 `import yaml` 을 그 파일

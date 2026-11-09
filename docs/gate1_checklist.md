@@ -101,6 +101,16 @@ revenue = Σ order_amount        환불된 매출을 뺄 수 없다
 **완전 Lock 0종 · 부분/조건부 4종 · 다른 파트 소관 5종.**
 **측정 계층이 소유한 4종이 정확히 "부분/조건부 가능"에 대응한다** — 우연이 아니라 범위의 결과다.
 
+> ★ **아래 표는 서명 전 기본 상태(`freeze._LOCK_ROWS`)다** (#163). 서명된 기록이 있으면 검증·게시는 **기록의 상태**를 쓴다(`freeze.gate1_lock_items(record)`).
+> 서명 때 증거가 있으면 시뮬레이터 Lock 5종을 `LOCKED` 로 기록한다 — 목표 범위는 `freeze._LOCK_TARGETS`, 정본은 `config/simulator_config.yaml` 해시 + `simulator_commit`:
+>
+> | 항목 | `LOCKED` 로 기록되는 조건 | 증거가 없거나 미충족이면 |
+> |---|---|---|
+> | `CUSTOMER_PERSONA_v1` · `HIDDEN_TRAIT_RULE_v1` · `BEHAVIOR_RULE_v1` · `TREATMENT_RESPONSE_v1` | `simulator_commit`(40자 git sha) | `OUT_OF_SCOPE` 그대로 |
+> | `CHURN_DEFINITION_v1` | `simulator_commit` + `ChurnThresholdEvidence(met=True)` — `data_spec` §5.1 ①~④ 실측 | `PARTIAL` 그대로 (`met=False` 의 근거도 기록에 남는다) |
+>
+> `SERVICE_v1` 과 측정 3종(`EVENT_SCHEMA_v1` · `ECONOMIC_RULE_v1` · `KPI_DEFINITION_v1`)은 이번 변경으로 바뀌지 않는다. 근거: `docs/decisions/DR-163-gate1-lock-evidence.md`.
+
 | # | 항목 | 상태 | 소관 | 범위 한정 |
 |---|---|---|---|---|
 | 1 | `SERVICE_v1` | `OUT_OF_SCOPE` | commerce | 별도 저장소 소관. 이 저장소가 봉인할 수 없다 |
@@ -233,8 +243,26 @@ fz.record(
     repo_commit=commit,
     now=datetime.now(KST),
     assumptions=fz.gate1_assumptions(),      # ★ 빠뜨리면 가정이 전부 사라진다
+    # ★ #163 — 시뮬레이터 Lock 5종의 증거. 넘기지 않으면 그 항목은 LOCKED 로 기록되지 않는다
+    simulator_commit="<git log -1 --format=%H -- src/simulator 의 40자 sha>",
+    churn_evidence=fz.ChurnThresholdEvidence(
+        met=True,                            # §5.1 ①~④ 를 실측으로 확인했을 때만 True
+        evidence="<실측 근거 경로와 요약>",
+    ),
 )
 ```
+
+> ★ **증거 인자는 서명 때만 정한다.** `config/simulator_config.yaml` 은 `LOCKED` 항목의 정본으로 `canonical_files` 해시에 **자동으로** 들어간다 — 목록에 따로 적지 않아도 된다.
+>
+> | 넘긴 것 | 기록 |
+> |---|---|
+> | 둘 다 없음 | 시뮬레이터 4종 `OUT_OF_SCOPE` · CHURN `PARTIAL` · `simulator_commit: null` (#163 전과 같다) |
+> | `simulator_commit` 만 | 시뮬레이터 4종 `LOCKED` · CHURN `PARTIAL` |
+> | `simulator_commit` + `met=True` | 5종 `LOCKED` |
+> | `met=False` | CHURN `PARTIAL` + `churn_threshold_evidence` 에 미충족 근거 |
+> | 40자 sha 가 아닌 값 · `simulator_commit` 없이 `met=True` | `FreezeViolation` — 기록을 쓰지 않는다 |
+>
+> 이전 기록의 `LOCKED` 는 이어받지 않는다. 다시 서명할 때 증거를 빠뜨리면 그 항목은 기본 상태로 돌아간다.
 
 > ★ **`assumptions=` 를 빠뜨리지 않는다.** 이 인자의 기본값은 `()` 이므로, 넘기지
 > 않으면 기록의 `assumptions` 가 **조용히 빈 목록이 된다.** 가정을 잃은 봉인 기록은
@@ -250,19 +278,22 @@ fz.record(
 ### 5.3 기록에 들어가는 것
 
 ```
-declaration: PARTIAL_FREEZE                      ★ FULL_FREEZE 가 아니다
+declaration: PARTIAL_FREEZE                      ★ 항목에서 유도한다 — 인자가 아니다
 experiment_environment_v1_declared: false
 locked_at: <KST +09:00>
 locked_by: <사람 이름>
 repo_commit: <git rev-parse HEAD>
-simulator_commit: null                           ★ "" · "unknown" · "0" 금지
-simulator_commit_null_reason: PRECONDITION_MISSING
-items: Lock 9종 전부 (status · owner_part · scope_note)
-canonical_files: { 경로: SHA-256 }
+simulator_commit: <40자 sha> 또는 null           ★ "" · "unknown" · "0" 금지
+simulator_commit_null_reason: PRECONDITION_MISSING   (null 일 때만)
+items: Lock 9종 전부 (status · owner_part · scope_note · LOCKED 면 canonical_files)
+canonical_files: { 경로: SHA-256 }               LOCKED 항목의 정본 포함
+churn_threshold_evidence: { met, evidence }      (넘겼을 때만)
 release_procedure: FREEZE-003
 ```
 
-**`simulator_commit` 은 `null` 이 정직한 값이다.** C1 에 시뮬레이터가 없다. 빈 문자열로 채우면 *"확인했고 이 값이다"* 가 되어 `FREEZE-003` 대조가 무의미해진다.
+**`declaration` 유도 규칙** — `SERVICE_v1`(commerce 소관)을 뺀 8종이 **전부** `LOCKED` 일 때만 `FULL_FREEZE` + `experiment_environment_v1_declared: true` 다. 측정 3종이 `LOCKED` 가 아니므로 지금은 시뮬레이터 5종을 올려도 `PARTIAL_FREEZE` 다 — `EXPERIMENT_ENVIRONMENT_v1` 을 선언하지 않는다. 게시물 `overall` 의 `sealed` 도 같은 규칙이다.
+
+**`simulator_commit` 을 모르면 `null` 이 정직한 값이다.** 빈 문자열로 채우면 *"확인했고 이 값이다"* 가 되어 `FREEZE-003` 대조가 무의미해진다. `freeze.verify()` 는 지금 `simulator_commit` 을 현재 코드와 대조하지 **않는다** — 해시 대조는 `config/simulator_config.yaml` 뿐이다 (DR-163 남은 불확실성).
 
 ---
 
