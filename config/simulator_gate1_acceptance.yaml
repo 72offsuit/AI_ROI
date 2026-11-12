@@ -34,8 +34,10 @@ verdict:
   mean: "5 seed 평균은 반올림하지 않고 실수 그대로 lo ≤ v ≤ hi (경계값 포함) 로 비교한다"
 
   required:                            # 하나라도 못 맞추면 GATE 1 불통과 — 봉인하지 않는다
-    rule: "5 seed 평균이 띠 안(pass) 이고, 5 seed 각각이 pass 또는 borderline (identity_* 는 identity_rule)"
-    identity_rule: "각 seed 의 절댓값 |gap| 이 50bp 이하 — 부호 있는 평균은 쓰지 않고 borderline 도 허용하지 않는다"
+    rule: "5 seed 평균이 띠 안(pass) 이고, 5 seed 각각이 pass 또는 borderline (quadrant_consistency_* 는 consistency_rule)"
+    consistency_rule: "각 seed 의 절댓값 |identity_gap_bp| 이 50bp 이하 — 부호 있는 평균은 쓰지 않고 borderline 도 허용하지 않는다"
+    # quadrant_consistency_*(옛 identity_*): 4분면과 τ 를 같은 arms 에서 세므로 구조적으로 항상 0 이다.
+    # 잠재결과의 독립 검증이 아니라 분류 · 집계 코드 회귀 검사다. 값은 가드레일 JSON 필드 identity_gap_bp(호환 유지).
     source: guardrail_report
     checks:
       - {fact: F12, name: churn_rate,         population: active42,      band_from: guardrails.churn_rate_bp}
@@ -45,10 +47,10 @@ verdict:
       - {fact: F15, name: coupon_use_T3,      population: eligible_spec41, band_from: guardrails.coupon_use_bp}
       - {fact: F16, name: sleeping_dog_T3,    population: eligible_spec41, band_from: guardrails.sleeping_dog_bp}
       - {fact: F16, name: persuadable_T3,     population: eligible_spec41, band_from: guardrails.persuadable_bp}
-      - {fact: F16, name: identity_T1,        population: eligible_spec41, abs_max_bp: 50}
-      - {fact: F16, name: identity_T2,        population: eligible_spec41, abs_max_bp: 50}
-      - {fact: F16, name: identity_T3,        population: eligible_spec41, abs_max_bp: 50}
-      - {fact: F16, name: identity_T4,        population: eligible_spec41, abs_max_bp: 50}
+      - {fact: F16, name: quadrant_consistency_T1, population: eligible_spec41, abs_max_bp: 50}
+      - {fact: F16, name: quadrant_consistency_T2, population: eligible_spec41, abs_max_bp: 50}
+      - {fact: F16, name: quadrant_consistency_T3, population: eligible_spec41, abs_max_bp: 50}
+      - {fact: F16, name: quadrant_consistency_T4, population: eligible_spec41, abs_max_bp: 50}
 
   recorded:                            # 실패해도 봉인할 수 있다 — 봉인 PR 전에 DR 에 원인·영향을 적는다
     rule: "5 seed 평균을 realism_check 판정 규칙(pass · borderline · fail)으로 판정해 리포트에 싣는다"
