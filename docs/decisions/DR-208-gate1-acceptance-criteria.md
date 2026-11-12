@@ -64,6 +64,8 @@ GATE 1 봉인 실측(#208)을 **몇 개 seed · 몇 명 규모로**, **어느 �
 | 가드레일(필수) | `python3.12 -m src.simulator guardrails --seed {seed} --customers 13000 --profile small --warmup-days 180 --output-root {새 디렉터리}` |
 | F1~F11 · F13 · F17(기록) | `run_world.py --seed {seed} --customers 13000 --profile reference --days 315 --assign-day 180` → `realism_check.py` |
 
+가드레일 리포트의 실측 조건(profile `small` · warmup 180일 · `--sample` 없이 전원 평가)은 기준 파일 `sample` 블록에 구조화된 키로도 적는다 — 판정 스크립트가 리포트 값과 대조해, 다른 조건으로 만든 리포트를 판정하지 않는다.
+
 **필수 검사(하나라도 못 맞추면 GATE 1 불통과 — 봉인하지 않는다).** 규칙: 5 seed **평균이 띠 안**이고, **5 seed 각각이 통과 또는 경계**(가까운 경계값의 ±20% 이내, `realism_check.judge` 와 같은 정의). `not_run` · 값 없음은 실패다. 평균은 반올림하지 않고 실수 그대로 `lo ≤ v ≤ hi`(경계값 포함)로 비교한다 — 예: 600.2bp 는 띠 3~6%p 밖이다. **4분면 일관성(`quadrant_consistency_*`)은 예외다** — 부호 있는 gap(필드 `identity_gap_bp`)을 평균하면 +60 · −60 이 상쇄되므로, 각 seed 의 **절댓값** \|gap\| 이 50bp 이하여야 한다(경계 불허). 이 검사는 크기 띠가 아니라 산술 일관성 검사라 seed 잡음 여유를 두지 않는다. ★ 구조적으로 항상 0 이므로(「조사한 것」) 통과는 "잠재결과가 맞다"는 증거가 **아니다** — 4분면 분류와 τ 집계가 어긋나지 않았다는 뜻뿐이다.
 
 | F | 검사(가드레일 리포트 `checks[].name`) | 모집단 | 띠 |
