@@ -9,6 +9,10 @@ fixed_before_measurement: true
 # ★ 처치 지표(eligible_spec41) 판정 모집단은 리드(인성) 확인 대기다. 확인되면 이 줄과 pending 키를 지운다.
 pending: lead_confirmation_treatment_population
 
+# 실측 인터프리터 — realism_check.py 가 numpy · pandas 를 쓰고, pyarrow 유무로 이벤트 저장 형식(parquet / gzip JSONL)이 바뀐다.
+# 의존성 없는 3.12 에서는 실측하지 않는다. #209 ③ 재현도 같은 환경에서 한다.
+environment: "python3.12 + pip install -r requirements.txt -r requirements-dev.txt"
+
 sample:
   seeds: [47, 48, 49, 50, 51]          # 확인 seed (보정 seed 42~46 은 쓰지 않는다)
   customers: 13000                     # 정본 모집단 ② 약 5,200명 이상 (DR-194 가드레일 표본)
@@ -60,7 +64,7 @@ verdict:
     rule: "5 seed 평균을 realism_check 판정 규칙(pass · borderline · fail)으로 판정해 리포트에 싣는다"
     source: realism
     facts: [F1, F2, F3, F4, F5, F6, F7, F8, F9, F10, F11, F13, F17]
-    on_fail: "봉인 PR 전에 실패 항목마다 DR 에 원인 Trait · 영향 · 후속 이슈를 기록한다 (data_grounding §4 의 'GATE 1 전 DR 재개' 를 이 항목들에 한해 대체 — DR-208)"
+    on_fail: "봉인 PR 전에 실패 항목(값이 안 나온 no_data 포함)마다 DR 에 원인 Trait · 영향 · 후속 이슈를 기록한다 (data_grounding §4 의 'GATE 1 전 DR 재개' 를 이 항목들에 한해 대체 — DR-208)"
 
   reference_only:                      # 판정하지 않는다 — 값만 리포트에 싣는다
     - "가드레일 리포트의 role: 참고 검사 (spec41_churn_rate · active42_* — ① 의 처치 지표)"
