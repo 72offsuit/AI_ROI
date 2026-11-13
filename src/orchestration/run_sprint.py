@@ -122,7 +122,9 @@ RCT_CONTROL_SHARE = EXPERIMENT.rct.control_share  # T0 비율 · 나머지를 T1
 
 ECONOMIC_CONFIG = REPO_ROOT / "config" / "economic_config.yaml"
 # 대시보드가 docs/ 를 읽지 못하므로 있으면 결과 폴더로 사본을 둔다(없으면 not_run).
-REALISM_REPORT = REPO_ROOT / "docs" / "research" / "realism_report.json"
+# #163 (2026-11-14) — 시뮬 팀 내부 리포트(realism_report)는 처치 효과 실측 · 참 4분면을 담아 시스템 팀 열람 금지다.
+# 결과 폴더(시스템 팀이 읽는다)로는 관측 통계만 담은 공개 판을 복사한다. 그 파일이 없으면 not_run.
+REALISM_REPORT = REPO_ROOT / "docs" / "research" / "realism_public.json"
 
 # Eligible — data_spec §4.1 · #164 정본 정의(#194): 가입 ≥ 60일 · T0 이전 구매 ≥ 1 · 마지막 구매 ≥ 14일.
 # RCT 배정 · S1~S5 배정 · 분기 결과 집계가 같은 정의를 쓴다(DR-234). 세 조건 모두 T0 **이전** 관측만 본다.
