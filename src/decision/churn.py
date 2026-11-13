@@ -189,17 +189,101 @@ def lift_at(y: np.ndarray, score: np.ndarray, frac: float = 0.10) -> float:
     return float(y[top].mean() / base)
 
 
+#: 보정(calibration) 표 · ECE 의 확률 구간 수 — [0, 0.1), [0.1, 0.2), … 등간격 (#215).
+CALIBRATION_BINS = 10
+#: 임계값 비교표의 "상위 비율" 행 — 마케팅이 한 번에 감당할 수 있는 대상 비율의 예시 (#215).
+THRESHOLD_TOP_SHARES = (0.10, 0.20, 0.30)
+#: 임계값 비교표의 "재현율 목표" 행 — 이탈자 중 이 비율 이상을 잡는 가장 높은 임계 (#215).
+THRESHOLD_RECALL_TARGET = 0.80
+
+
+def calibration(y, score, bins: int = CALIBRATION_BINS) -> dict:
+    """예측 확률이 실제 비율과 맞는가 (#215, 멘토 피드백 — ROC-AUC 만으로는 채택 근거가 부족하다).
+
+    ROC-AUC 는 **순서**만 본다. 확률 0.8 이라고 말한 고객 중 실제로 80% 가 이탈하는지는 보지 않는다.
+      - ``brier`` = 평균 (확률 − 실제)². 0 이 완벽.
+      - ``ece`` = 구간별 |평균 확률 − 실제 비율| 을 고객 수로 가중 평균(Expected Calibration Error).
+      - ``bins`` = 구간마다 고객 수 · 평균 확률 · 실제 이탈률. 고객이 없는 구간은 None (0 으로 채우지 않는다).
+    """
+    y = np.asarray(y, dtype=float)
+    p = np.clip(np.asarray(score, dtype=float), 0.0, 1.0)
+    if not len(y):
+        return {"brier": float("nan"), "ece": float("nan"), "bins": []}
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    index = np.clip(np.searchsorted(edges, p, side="right") - 1, 0, bins - 1)
+    rows, ece = [], 0.0
+    for b in range(bins):
+        mask = index == b
+        n = int(mask.sum())
+        row = {"low": float(edges[b]), "high": float(edges[b + 1]), "n": n, "mean_pred": None, "observed": None}
+        if n:
+            row["mean_pred"], row["observed"] = float(p[mask].mean()), float(y[mask].mean())
+            ece += n / len(y) * abs(row["mean_pred"] - row["observed"])
+        rows.append(row)
+    return {"brier": float(np.mean((p - y) ** 2)), "ece": float(ece), "bins": rows}
+
+
+def threshold_table(y, score) -> list[dict]:
+    """임계값 비교표 (#215) — 같은 점수를 어디서 자르느냐에 따라 정밀도 · 재현율 · 대상 비율이 어떻게 바뀌나.
+
+    행: F1 최대(기본 — ``predicted_label`` 에 쓰는 규칙) · 확률 0.5 · 상위 10/20/30% · 재현율 80%.
+    **학습 데이터 안의 검증 예측(OOF)** 으로만 계산한다 — 시험 데이터로 임계를 고르지 않는다.
+    """
+    y = np.asarray(y).astype(int)
+    s = np.asarray(score, dtype=float)
+    positives = int(y.sum())
+
+    def row(rule: str, threshold: float) -> dict:
+        flagged = s >= threshold
+        tp = int((flagged & (y == 1)).sum())
+        n_flagged = int(flagged.sum())
+        precision = tp / n_flagged if n_flagged else float("nan")
+        recall = tp / positives if positives else float("nan")
+        f1 = (2 * precision * recall / (precision + recall)
+              if n_flagged and positives and (precision + recall) > 0 else 0.0)
+        return {"rule": rule, "threshold": float(threshold), "flagged_share": n_flagged / len(y) if len(y) else None,
+                "precision": precision, "recall": recall, "f1": float(f1)}
+
+    rows = [row("f1_max", _best_f1_threshold(y, s)), row("probability_0.5", 0.5)]
+    for share in THRESHOLD_TOP_SHARES:
+        rows.append(row(f"top_{round(share * 100)}pct", float(np.quantile(s, 1 - share)) if len(s) else math.inf))
+    if positives:
+        order = np.argsort(-s, kind="mergesort")
+        reached = np.flatnonzero(np.cumsum(y[order]) >= THRESHOLD_RECALL_TARGET * positives)
+        rows.append(row(f"recall_{round(THRESHOLD_RECALL_TARGET * 100)}", float(s[order][reached[0]])))
+    return rows
+
+
+#: 임계 선택 근거 — churn_eval 과 DR-215 에 같은 문장을 싣는다.
+THRESHOLD_SELECTION = {
+    "selected": "f1_max",
+    "reason": ("이탈 확률의 이진 판정(predicted_label)은 보고 · 위험 분포 표시에만 쓴다. 실제로 누구에게 쿠폰을 "
+               "보낼지는 전략(S2~S5)이 예산 안에서 점수 순서로 정하므로, 임계가 지출을 바꾸지 않는다. 그래서 "
+               "정밀도와 재현율을 함께 보는 F1 최대를 기본으로 두고, 마케팅 수용량(상위 비율) · 놓치면 안 되는 "
+               "비율(재현율 목표)에 따른 대안을 이 표로 함께 낸다"),
+    "basis": "학습 데이터 교차검증의 검증 fold 예측(OOF) — 시험 · 홀드아웃 데이터 미사용",
+}
+
+
 def _metrics(y: np.ndarray, score: np.ndarray, threshold: float) -> dict[str, float]:
     from sklearn.metrics import average_precision_score, f1_score, roc_auc_score
 
     y = np.asarray(y).astype(int)
     two_class = 0 < y.sum() < len(y)
+    cal = calibration(y, score)
     return {
         "roc_auc": float(roc_auc_score(y, score)) if two_class else float("nan"),
         "pr_auc": float(average_precision_score(y, score)) if two_class else float("nan"),
         "f1": float(f1_score(y, (score >= threshold).astype(int), zero_division=0)),
         "lift_at_10": lift_at(y, score, 0.10),
+        "brier": cal["brier"],
+        "ece": cal["ece"],
     }
+
+
+def _not_probability(metrics: dict[str, float]) -> dict[str, float]:
+    """규칙 기준선의 점수는 순위(경험분포)라 확률이 아니다 — 보정 지표를 매기지 않는다(None 으로 남는다)."""
+    return {**metrics, "brier": float("nan"), "ece": float("nan")}
 
 
 def _summary(values: list[float]) -> dict[str, float | None]:
@@ -261,9 +345,12 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
     X, yv = _prepare(X, y)
     folds = fold_indices(yv, seed)
     models = []
+    oof: dict[str, np.ndarray] = {}  # 검증 fold 예측 — 임계값 비교표 · 보정표(#215)
     for name in MODEL_NAMES:
-        per_fold: dict[str, list[float]] = {"roc_auc": [], "pr_auc": [], "f1": [], "lift_at_10": []}
+        per_fold: dict[str, list[float]] = {"roc_auc": [], "pr_auc": [], "f1": [], "lift_at_10": [],
+                                            "brier": [], "ece": []}
         thresholds = []
+        oof[name] = np.full(len(yv), np.nan)
         for k, (tr, va) in enumerate(folds):
             factory = (lambda n=name, s=seed + k: make_model(n, s))
             model = factory().fit(X.iloc[tr], yv[tr])
@@ -272,15 +359,17 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
                 threshold = None
                 pred_days = model._days(X.iloc[va])
                 score = _score(model, X.iloc[va])
-                metrics = _metrics(yv[va], score, 0.0)
+                metrics = _not_probability(_metrics(yv[va], score, 0.0))
                 from sklearn.metrics import f1_score
                 metrics["f1"] = float(f1_score(
                     yv[va], (pred_days >= model.threshold_days_).astype(int), zero_division=0))
                 thresholds.append(model.threshold_days_)
             else:
                 threshold = _threshold_from_train(factory, X.iloc[tr], yv[tr], seed + k)
-                metrics = _metrics(yv[va], _score(model, X.iloc[va]), threshold)
+                score = _score(model, X.iloc[va])
+                metrics = _metrics(yv[va], score, threshold)
                 thresholds.append(threshold)
+            oof[name][va] = score
             for key, value in metrics.items():
                 per_fold[key].append(value)
         entry = {"name": name, "kind": _kind(name),
@@ -293,6 +382,7 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
     best = max((m for m in models if m["kind"] == "proposed"),
                key=lambda m: m["cv"]["roc_auc"]["mean"] or -1)
     importance = churn_importance(X, yv, best["name"], seed)
+    best_oof = oof[best["name"]]
     return {
         "label_def": LABEL_DEF, "n": int(len(yv)), "pos_rate": float(yv.mean()),
         "n_features": int(X.shape[1]), "seed": int(seed),
@@ -304,6 +394,12 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
         "importance_method": importance["method"],
         "importance_model": best["name"],
         "importance_note": importance["note"],
+        # #215 — 확정 모델(best_proposed)의 검증 fold 예측으로 만든 표. 시험 데이터를 보지 않는다.
+        "threshold_table": {"model": best["name"], "rows": threshold_table(yv, best_oof), **THRESHOLD_SELECTION},
+        "calibration": {"model": best["name"], "basis": THRESHOLD_SELECTION["basis"],
+                        "class_weight_note": "class_weight 로 양성 가중을 했으므로 확률이 실제 비율보다 높게 "
+                                             "나올 수 있다 — 순서(ROC-AUC)와 별개로 본다",
+                        **calibration(yv, best_oof)},
     }
 
 
@@ -345,6 +441,92 @@ def churn_importance(X: pd.DataFrame, y: np.ndarray, name: str, seed: int, top: 
         note = f"SHAP 실패로 대체: {type(error).__name__}: {error}"[:300]
     return {"method": method, "note": note,
             "top": [{"feature": str(k), "mean_abs": float(v)} for k, v in mean_abs.head(top).items()]}
+
+
+#: 고객별 설명(SHAP Local)에 싣는 Feature 수 · 고객 수 상한 (#215).
+SHAP_LOCAL_TOP = 3
+SHAP_LOCAL_CUSTOMERS = 200
+
+
+def _tree_shap(model: "ChurnModel", X: pd.DataFrame) -> pd.DataFrame:
+    """확정 모델(`ChurnModel`)의 고객별 SHAP 값 — 원 Feature 이름으로 묶는다(결측 지시자는 원 Feature 에 합산).
+
+    값은 이탈(양성) 쪽 로그오즈 기여다. 다시 학습하지 않는다 — 배치될 모델 그 자체를 설명한다.
+    """
+    import shap
+
+    pipe = model.estimator
+    Xm = X[model.features].astype(float)
+    values = shap.TreeExplainer(pipe[-1]).shap_values(pipe[:-1].transform(Xm))
+    if isinstance(values, list):
+        values = values[1]
+    values = np.asarray(values)
+    if values.ndim == 3:  # (n, p, classes)
+        values = values[:, :, 1]
+    groups = np.asarray(_group_names(pipe, Xm))
+    frame = pd.DataFrame(values, index=X.index)
+    return frame.T.groupby(groups).sum().T
+
+
+def explain_local(model: "ChurnModel", X: pd.DataFrame, *, top: int = SHAP_LOCAL_TOP) -> list[dict]:
+    """SHAP Local (FR-16, #215) — 고객마다 이탈 확률을 가장 크게 움직인 Feature ``top`` 개와 방향.
+
+    ``direction`` 이 ``raises_risk`` 면 그 Feature 값이 이 고객의 이탈 위험을 높였다는 뜻이다. Feature 값이
+    결측이면 None 그대로 싣는다(0 으로 채우지 않는다).
+    """
+    grouped = _tree_shap(model, X)
+    proba = predict_churn_proba(model, X)
+    rows = []
+    for cid, contrib in grouped.iterrows():
+        order = contrib.abs().sort_values(ascending=False).index[:top]
+        rows.append({
+            "customer_id": str(cid), "churn_proba": float(proba.loc[cid]),
+            "top": [{"feature": str(f), "shap": float(contrib[f]),
+                     "value": (None if pd.isna(X.at[cid, f]) else float(X.at[cid, f])) if f in X.columns else None,
+                     "direction": "raises_risk" if contrib[f] > 0 else "lowers_risk"} for f in order],
+        })
+    return rows
+
+
+def explain_top_risk(model: "ChurnModel", X: pd.DataFrame, *, candidates=None,
+                     n: int = SHAP_LOCAL_CUSTOMERS, top: int = SHAP_LOCAL_TOP) -> dict:
+    """이탈 확률 상위 ``n`` 명의 SHAP Local — 대시보드 Target List 의 "왜 이 고객인가" (#215).
+
+    ``candidates`` 가 있으면(예: Eligible) 그 안에서만 고른다. 없거나 비면 ``X`` 전체에서 고르고 그렇게 적는다.
+    """
+    pool = X.index if candidates is None else X.index.intersection(pd.Index(list(candidates)))
+    scope = "candidates" if candidates is not None and len(pool) else "all_scored"
+    if scope == "all_scored":
+        pool = X.index
+    proba = predict_churn_proba(model, X.loc[pool])
+    chosen = proba.sort_values(ascending=False, kind="mergesort").index[:n]
+    return {"population": scope, "n_pool": int(len(pool)), "n": int(len(chosen)), "top_features": int(top),
+            "model": model.name, "rows": explain_local(model, X.loc[chosen], top=top)}
+
+
+def write_shap_summary(model: "ChurnModel", X: pd.DataFrame, path, *, seed: int,
+                       sample: int = SHAP_SAMPLE, max_display: int = 15) -> dict:
+    """``shap_summary.png`` (SRS · FR-16, #215) — 확정 모델의 SHAP 요약 그림(beeswarm)을 ``path`` 에 쓴다."""
+    import matplotlib
+
+    matplotlib.use("Agg")  # 화면 없이 그린다(CI · Docker)
+    import matplotlib.pyplot as plt
+    import shap
+    from pathlib import Path
+
+    picked = X.sample(min(sample, len(X)), random_state=seed)
+    grouped = _tree_shap(model, picked)
+    features = picked.reindex(columns=grouped.columns).astype(float)
+    shap.summary_plot(grouped.to_numpy(), features, feature_names=list(grouped.columns),
+                      max_display=max_display, show=False)
+    plt.title(f"Churn SHAP summary — {model.name} (n={len(picked)})")
+    plt.tight_layout()
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    plt.savefig(target, dpi=150)
+    plt.close("all")
+    return {"status": "ok", "file": target.name, "model": model.name, "n_sample": int(len(picked)),
+            "max_display": int(max_display), "method": "TreeExplainer · 확정 모델(재학습 없음)"}
 
 
 # ── 학습·예측 ───────────────────────────────────────────────────────────────
@@ -426,7 +608,7 @@ def evaluate_temporal_holdout(model_factory=None, X_train: pd.DataFrame | None =
         fitted = factory().fit(Xtr, ytr)
         if isinstance(fitted, RecencyRule):
             from sklearn.metrics import f1_score
-            metrics = _metrics(yte, _score(fitted, Xte), 0.0)
+            metrics = _not_probability(_metrics(yte, _score(fitted, Xte), 0.0))
             metrics["f1"] = float(f1_score(yte, (fitted._days(Xte) >= fitted.threshold_days_).astype(int),
                                            zero_division=0))
             threshold = fitted.threshold_days_

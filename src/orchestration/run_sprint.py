@@ -180,6 +180,9 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "write_feature_table": ("src.decision.feature_store", "write_table"),
     "feature_version": ("src.decision.versions", "feature_version"),
     "versions_record": ("src.decision.versions", "versions_record"),
+    # #215 — SHAP 요약 그림 · 고객별 설명
+    "write_shap_summary": ("src.decision.churn", "write_shap_summary"),
+    "explain_top_risk": ("src.decision.churn", "explain_top_risk"),
 }
 
 
@@ -1503,6 +1506,35 @@ def persist_features(root: Path, run_id: str, ctx: Mapping[str, Any]) -> dict[st
     return {"root": str(target), "feature_version": version, "tables": results}
 
 
+def shap_summary_file(model: Any, X: Any, out: Path, seed: int, extra_files: dict[str, Path]) -> dict[str, Any]:
+    """#215 — ``shap_summary.png`` 를 ``<out>/artifacts/`` 에 그리고 결과 폴더 사본 목록에 올린다.
+
+    그림이 실패해도 Churn 단계는 이어 간다(모델 · 지표는 그대로 유효) — 사유를 churn_eval 에 남긴다."""
+    try:
+        draw = decision_fn("write_shap_summary")
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    path = Path(out) / "artifacts" / "shap_summary.png"
+    try:
+        record = draw(model, X, path, seed=seed)
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    extra_files["shap_summary.png"] = path
+    return record
+
+
+def shap_local(model: Any, X: Any, candidates: Any) -> dict[str, Any]:
+    """#215 — 이탈 확률 상위 고객의 SHAP Local. Eligible(t2) 가 있으면 그 안에서 고른다."""
+    try:
+        explain = decision_fn("explain_top_risk")
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    try:
+        return {"status": "ok", **explain(model, X, candidates=candidates)}
+    except Exception as error:
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+
+
 def persistence_status(record: Mapping[str, Any]) -> str:
     """하위 결과 중 failed 가 하나라도 있으면 failed. 요청이 없었으면 not_requested."""
     statuses: list[str] = []
@@ -1548,6 +1580,7 @@ def run(config: SprintConfig) -> Path:
     ctx: dict[str, Any] = {"timeline": {}}
     assignments_dir = out / "assignments"
     assignment_files: dict[str, Any] = {"rct": None, "strategies": {}}
+    extra_outputs: dict[str, Path] = {}  # #215 — 결과 폴더에 함께 둘 파일(shap_summary.png)
     reader = EventReader()
     if reader.fallback_reason:
         _log(f"이벤트 읽기: 대체 경로 sim.events — {reader.fallback_reason}")
@@ -1715,6 +1748,9 @@ def run(config: SprintConfig) -> Path:
                 ctx["churn_train"] = (X, y)
                 if isinstance(evaluation, Mapping) and evaluation.get("best_proposed") is not None:
                     ctx["churn_best_name"] = evaluation["best_proposed"]
+            # #215 — SHAP 요약 그림: 확정 모델 · 학습 모집단 표본(불러온 실행은 이 실행의 T0 군)
+            churn_eval["shap_summary"] = shap_summary_file(ctx["churn_model"], ctx["churn_train"][0], out,
+                                                           config.seed, extra_outputs)
 
         # uplift — 전 군 -----------------------------------------------------
         with log.stage("uplift", requires=("training_set",)):
@@ -1868,6 +1904,8 @@ def run(config: SprintConfig) -> Path:
             else:
                 reasons["margin_rate"] = (ctx.get("margin_basis") or {}).get("reason", "기여이익률 근거 없음")
             ctx["score_missing"] = reasons
+            if "churn_model" in ctx:  # #215 — 위험 상위 고객의 SHAP Local, Eligible(t2) 안에서 고른다
+                churn_eval["shap_local"] = shap_local(ctx["churn_model"], X2, ctx.get("eligible_t2"))
             comparison["scores_available"] = sorted(scores)
             comparison["scores_missing"] = reasons
 
@@ -2068,23 +2106,38 @@ def run(config: SprintConfig) -> Path:
                 raise NotRun("S0 분기의 이벤트 결과가 없다")
             if ctx["S0_outcomes"].attrs.get("outcome_observation", {}).get("status") != "ok":
                 raise NotRun("S0 분기의 구매 라벨 관측 근거가 미충족이다")
+            labels_all = ctx["S0_outcomes"]["churn"].reindex(ctx["X2"].index).dropna()
+            if labels_all.empty:
+                raise NotRun("S0 분기의 유효한 churn 라벨이 없다")
+            # #215 — 학습 모집단(Eligible(t1) 중 RCT 무처치 T0 군)과 같은 정의로 평가한다: Eligible(t2) 이면서
+            # t1 실험에서 쿠폰 · 알림(T1~T4)을 받지 않은 고객. 전체 고객 기준은 참고로만 싣는다(멘토 피드백).
+            eligible = set(ctx.get("eligible_t2") or [])
+            if not eligible:
+                raise NotRun("Eligible(t2) 가 없다 — 학습 모집단과 같은 범위로 평가할 수 없다")
+            treated = {cid for cid, arm in (ctx.get("rct_assignment") or {}).items() if arm != "T0"}
+            in_scope = [cid for cid in labels_all.index if cid in eligible and cid not in treated]
+            holdout_y = labels_all.loc[in_scope]
+            if holdout_y.empty:
+                raise NotRun("Eligible(t2) · t1 무처치 고객 중 유효한 churn 라벨이 없다")
+            holdout_X = ctx["X2"].loc[holdout_y.index]
             audit = decision_fn("temporal_population_audit")(
-                *ctx["churn_train"], ctx["X2"], ctx["S0_outcomes"]["churn"],
+                *ctx["churn_train"], holdout_X, holdout_y,
                 training_treatment=ctx["treatment"], evaluation_prior_treatment=ctx["treatment"],
             )
             churn_eval["temporal_population_audit"] = audit
-            holdout_y = ctx["S0_outcomes"]["churn"].reindex(ctx["X2"].index).dropna()
-            if holdout_y.empty:
-                raise NotRun("S0 분기의 유효한 churn 라벨이 없다")
-            holdout_X = ctx["X2"].loc[holdout_y.index]
             X_train, y_train = ctx["churn_train"]
             pool = {"model": ctx["churn_model"], "X_train": X_train, "y_train": y_train,
                     "X_test": holdout_X, "y_test": holdout_y, "seed": config.seed}
             if "churn_best_name" in ctx:
                 pool["model_factory"] = ctx["churn_best_name"]
             holdout = call_by_name(decision_fn("evaluate_temporal_holdout"), pool)
-            holdout = {**holdout, "population_audit": audit}
-            churn_eval["temporal_holdout"] = holdout
+            holdout = {**holdout, "population_audit": audit,
+                       "population": "Eligible(t2) ∩ t1 실험 무처치(T0 · 미배정) — 학습 모집단과 같은 정의",
+                       "n_labeled_all": int(len(labels_all)),
+                       "n_excluded_not_eligible": int(sum(1 for cid in labels_all.index if cid not in eligible)),
+                       "n_excluded_rct_treated": int(sum(1 for cid in labels_all.index
+                                                         if cid in eligible and cid in treated))}
+            churn_eval["temporal_holdout"] = holdout  # 확정 모델 1회 평가 — 전체 고객으로 다시 재지 않는다
             # 대시보드 ChurnModel.temporal_holdout — 같은 이름의 모델 행에 지표만 붙인다
             meta_keys = {"name", "scheme", "n_train", "n_test", "pos_rate_train", "pos_rate_test", "threshold"}
             models = churn_eval.get("models")
@@ -2122,6 +2175,7 @@ def run(config: SprintConfig) -> Path:
 
         events_frame = ctx.get("events_t2", ctx.get("events_t1"))
         realism, extra_files = realism_copy(Path(config.realism_report))
+        extra_files = {**extra_files, **extra_outputs}
         budget_record = ctx.get("budget") or {
             "status": "not_run", "reason": "S1 단계에 도달하지 않아 S2~S5 예산을 정하지 않았다",
             "explicit_budget_krw": config.budget_krw,

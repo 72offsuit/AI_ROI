@@ -126,7 +126,9 @@ def evaluate_churn_gru(seqs: np.ndarray, y, seed: int) -> dict:
     from src.decision.churn import _best_f1_threshold, _metrics, _summary, fold_indices
 
     yv = np.asarray(y).astype(int)
-    per_fold: dict[str, list[float]] = {"roc_auc": [], "pr_auc": [], "f1": [], "lift_at_10": []}
+    # #215 — `_metrics` 가 보정 지표(brier · ece)도 낸다. GRU 출력은 확률이므로 그대로 싣는다.
+    per_fold: dict[str, list[float]] = {"roc_auc": [], "pr_auc": [], "f1": [], "lift_at_10": [],
+                                        "brier": [], "ece": []}
     runs = []
     for k, (tr, va) in enumerate(fold_indices(yv, seed)):
         net, info = fit_gru(seqs[tr], yv[tr], seed + k)
