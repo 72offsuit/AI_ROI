@@ -1385,7 +1385,12 @@ def load_saved_models(path: Path) -> tuple[dict[str, tuple[Any, dict[str, Any]]]
     저장 당시 feature_version 이 지금 코드와 다르면 멈춘다(`model_store.load_models`)."""
     try:
         expected = decision_fn("feature_version")()
+        if expected is None:  # PR #279 리뷰 R2 — 대조를 건너뛰지 않는다
+            raise ModelLoadError("지금 코드의 feature_version 을 잴 수 없다(정의 소스를 읽지 못했다) — 저장 모델과 "
+                                 "호환되는지 확인할 수 없어 불러오지 않는다")
         loaded, manifest = decision_fn("load_models")(Path(path), expected_feature_version=expected)
+    except ModelLoadError:
+        raise
     except NotRun as reason:
         raise ModelLoadError(f"모델 불러오기 함수를 쓸 수 없다 — {reason}") from reason
     except Exception as error:  # ModelStoreError · unpickle 오류 — 사유를 그대로 올린다
@@ -1402,12 +1407,9 @@ def _loaded_record(path: Path, meta: Mapping[str, Any], manifest: Mapping[str, A
 
 
 def _fitted_evaluation(key: str, *args: Any) -> dict[str, Any]:
-    """불러온 모델 평가만 — 함수가 없으면 not_run, 평가 중 오류는 단계 실패로 올린다(삼키지 않는다)."""
-    try:
-        fn = decision_fn(key)
-    except NotRun as reason:
-        return {"status": "not_run", "reason": str(reason)}
-    return {"status": "ok", **fn(*args)}
+    """불러온 모델 평가만. 함수가 없으면 ``NotRun`` 을 올려 **단계가 not_run** 이 된다(PR #279 리뷰 N2 — 평가 없이
+    ok 로 끝나지 않게). 평가 중 오류는 단계 실패로 올린다(삼키지 않는다)."""
+    return {"status": "ok", **decision_fn(key)(*args)}
 
 
 def _pick(row: Any, keys: tuple[str, ...]) -> dict[str, Any] | None:
@@ -1438,7 +1440,9 @@ def model_scores(kind: str, evaluation: Mapping[str, Any], name: Any) -> tuple[A
         test = _pick(row, ("qini", "auuc", "uplift_at_k"))
         return cv, test, {
             "cv_score": "학습 데이터 안 검증 분할의 Qini — 방법 선택 근거",
-            "test_score": "탐색 RCT 의 test 분할(학습 · 선택에 쓰지 않음)" if test else "test 분할 점수가 없다 — null",
+            "test_score": ("분할 모델의 test 추정치(탐색 RCT test 분할 — 그 분할 모델의 학습 · 선택에 쓰지 않음). 저장한 "
+                           "객체는 전체 RCT 로 다시 학습했으므로 이 점수가 저장 객체의 미학습 점수는 아니다"
+                           if test else "test 분할 점수가 없다 — null"),
         }
     cv = _pick(row, ("mae", "rmse", "spearman", "top20_hit"))
     return cv, None, {
@@ -2204,6 +2208,13 @@ def run(config: SprintConfig) -> Path:
                        "n_excluded_not_eligible": int(sum(1 for cid in labels_all.index if cid not in eligible)),
                        "n_excluded_rct_treated": int(sum(1 for cid in labels_all.index
                                                          if cid in eligible and cid in treated))}
+            if config.load_models is not None and "churn" in loaded_models:  # PR #279 리뷰 N1
+                holdout["training_cohort"] = {
+                    "source": "불러온 모델 — 학습은 원래 실행에서 했다(재학습 없음)",
+                    "trained_run": (loaded_manifest.get("run") or {}).get("run_id"),
+                    "training_rows": loaded_models["churn"][1].get("training_rows"),
+                }
+                holdout["n_train_meaning"] = "이 실행의 t1 T0 비교 군(모집단 감사용) — 불러온 모델의 학습 군이 아니다"
             churn_eval["temporal_holdout"] = holdout  # 확정 모델 1회 평가 — 전체 고객으로 다시 재지 않는다
             # 대시보드 ChurnModel.temporal_holdout — 같은 이름의 모델 행에 지표만 붙인다
             meta_keys = {"name", "scheme", "n_train", "n_test", "pos_rate_train", "pos_rate_test", "threshold",
@@ -2214,6 +2225,8 @@ def run(config: SprintConfig) -> Path:
                     model["temporal_holdout"] = {k: v for k, v in holdout.items()
                                                  if k not in meta_keys and isinstance(v, (int, float))}
             churn_eval["temporal_holdout_design"] = (
+                "불러온 모델(재학습 없음) → Feature(t2) · S0 분기(무처치) 42일 churn 으로 1회 평가"
+                if config.load_models is not None else
                 "t1 T0군으로 학습(best_proposed) → Feature(t2) · S0 분기(무처치) 42일 churn 으로 1회 평가"
             )
     finally:

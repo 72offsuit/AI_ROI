@@ -197,32 +197,76 @@ def read_manifest(root: Path) -> dict[str, Any]:
     return manifest
 
 
-def load_model(root: Path, kind: str) -> tuple[Any, dict[str, Any]]:
-    """메타데이터의 SHA-256 과 파일이 같을 때만 불러온다."""
-    root = Path(root)
+#: manifest 와 개별 메타데이터가 같아야 하는 키 — 다른 실행의 파일 쌍이 섞이면 여기서 드러난다(PR #279 리뷰 R1).
+LINK_KEYS = ("file", "sha256", "model_version", "feature_version", "dataset_version")
+
+
+def _read_meta(root: Path, kind: str) -> dict[str, Any]:
+    path = Path(root) / f"{kind}.json"
     try:
-        meta = json.loads((root / f"{kind}.json").read_text(encoding="utf-8"))
+        return json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError as error:
-        raise ModelStoreError(f"{root / f'{kind}.json'} 가 없다") from error
+        raise ModelStoreError(f"{path} 가 없다") from error
+    except json.JSONDecodeError as error:
+        raise ModelStoreError(f"{path} 를 읽을 수 없다: {error}") from error
+
+
+def check_links(kind: str, meta: Mapping[str, Any], entry: Mapping[str, Any] | None,
+                run: Mapping[str, Any] | None = None) -> None:
+    """unpickle **전에** manifest 항목 · 실행 기록과 개별 메타데이터를 맞춰 본다. 다르면 ``ModelStoreError``.
+
+    정상 저장 API 는 덮어쓰지 않지만, 파일을 옮기거나 복구하다 다른 실행의 ``{kind}.pkl`` · ``{kind}.json`` 쌍이
+    섞이면 각 쌍의 해시는 맞아도 묶음과는 어긋난다 — 의도한 동결 모델과 다른 모델을 평가하게 된다.
+    """
+    if entry is None:
+        raise ModelStoreError(f"{kind}: manifest 에 항목이 없다 — 이 묶음의 모델이 아니다")
+    diff = {k: (entry.get(k), meta.get(k)) for k in LINK_KEYS if entry.get(k) != meta.get(k)}
+    if diff:
+        raise ModelStoreError(f"{kind}: manifest 와 개별 메타데이터가 다르다 {sorted(diff)} — 다른 실행의 파일이 "
+                              "섞였을 수 있다. 불러오지 않는다")
+    run_id = (run or {}).get("run_id")
+    if run_id is not None and meta.get("run_id") is not None and meta["run_id"] != run_id:
+        raise ModelStoreError(f"{kind}: 모델의 run_id {meta['run_id']!r} ≠ 묶음의 run_id {run_id!r} — 계보가 어긋난다")
+
+
+def load_model(root: Path, kind: str, *, expected: Mapping[str, Any] | None = None,
+               run: Mapping[str, Any] | None = None) -> tuple[Any, dict[str, Any]]:
+    """메타데이터의 SHA-256 과 파일이 같을 때만 불러온다. ``expected``(manifest 항목)가 오면 연결도 먼저 대조한다."""
+    root = Path(root)
+    meta = _read_meta(root, kind)
+    if expected is not None:
+        check_links(kind, meta, expected, run)
     try:
         data = (root / meta["file"]).read_bytes()
     except (KeyError, FileNotFoundError) as error:
         raise ModelStoreError(f"{kind} 모델 파일이 없다: {error}") from error
     if _sha256(data) != meta.get("sha256"):
         raise ModelStoreError(f"{kind} 모델 파일의 SHA-256 이 메타데이터와 다르다 — 불러오지 않는다")
-    return pickle.loads(data), meta  # noqa: S301 — 위에서 이 저장소가 쓴 바이트인지 대조했다
+    return pickle.loads(data), meta  # noqa: S301 — 위에서 이 저장소가 쓴 바이트 · 묶음인지 대조했다
 
 
 def load_models(root: Path, kinds: tuple[str, ...] = KINDS, *,
                 expected_feature_version: str | None = None) -> tuple[dict[str, tuple[Any, dict[str, Any]]], dict[str, Any]]:
-    """manifest 에 있는 모델만 불러온다. feature_version 이 다르면 아무것도 불러오지 않고 멈춘다."""
+    """manifest 에 있는 모델만 불러온다. **하나라도** 어긋나면 아무것도 unpickle 하지 않고 멈춘다.
+
+    대조 순서(모두 unpickle 전): manifest 항목 ↔ 개별 메타데이터(``LINK_KEYS``) · 실행 run_id →
+    개별 메타데이터의 feature_version ↔ 지금 코드(``expected_feature_version``, 주어졌을 때).
+    """
     manifest = read_manifest(root)
     listed = manifest.get("models") or {}
+    run = manifest.get("run") or {}
+    metas: dict[str, dict[str, Any]] = {}
+    for kind in kinds:
+        if kind not in listed:
+            continue
+        meta = _read_meta(root, kind)
+        check_links(kind, meta, listed[kind], run)
+        metas[kind] = meta
     if expected_feature_version is not None:
-        stale = {k: v.get("feature_version") for k, v in listed.items()
-                 if k in kinds and v.get("feature_version") != expected_feature_version}
+        stale = {k: m.get("feature_version") for k, m in metas.items()
+                 if m.get("feature_version") != expected_feature_version}
         if stale:
             raise ModelStoreError(f"저장 당시 feature_version {stale} ≠ 지금 {expected_feature_version!r} — "
                                   "Feature 정의가 바뀐 뒤의 모델은 불러오지 않는다")
-    loaded = {kind: load_model(root, kind) for kind in kinds if kind in listed}
+    loaded = {kind: load_model(root, kind, expected=listed[kind], run=run) for kind in metas}
     return loaded, manifest
