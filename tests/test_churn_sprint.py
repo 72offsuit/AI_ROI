@@ -87,7 +87,11 @@ class TestChurnEvaluation(unittest.TestCase):
         self.assertEqual(len(self.X), r["n"])
         self.assertAlmostEqual(float(self.y["churn"].mean()), r["pos_rate"])
         names = [m["name"] for m in r["models"]]
-        self.assertEqual(["rule_recency", "logistic_regression", "random_forest", "hist_gb"], names)
+        # #215 — XGBoost · LightGBM 은 설치돼 있을 때만 비교에 들어오고, 없으면 사유가 남는다(조용히 빠지지 않는다).
+        from src.decision.churn import model_unavailable
+        boosting = [n for n in ("xgboost", "lightgbm") if model_unavailable(n) is None]
+        self.assertEqual(["rule_recency", "logistic_regression", "random_forest", "hist_gb", *boosting], names)
+        self.assertEqual({"xgboost", "lightgbm"} - set(boosting), {m["name"] for m in r["models_unavailable"]})
         kinds = {m["name"]: m["kind"] for m in r["models"]}
         self.assertEqual("baseline", kinds["rule_recency"])
         self.assertEqual("baseline", kinds["logistic_regression"])

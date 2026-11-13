@@ -19,11 +19,12 @@ F1 · Lift@10% 를 구해 mean/std. 하이퍼파라미터 · fold 수도 그 파
 
 from __future__ import annotations
 
+import functools
 import math
 import hashlib
 import json
 from dataclasses import dataclass, field
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 import numpy as np
 import pandas as pd
@@ -32,13 +33,28 @@ from src.decision.config import load_model_config
 from src.decision.features.sprint_table import LABEL_DEF, make_preprocessor, model_columns
 
 BASELINES = ("rule_recency", "logistic_regression")
-PROPOSED = ("random_forest", "hist_gb")
+#: #215 — XGBoost · LightGBM 추가(SRS FR-14). 모두 같은 전처리 파이프라인 안에서 학습한다.
+PROPOSED = ("random_forest", "hist_gb", "xgboost", "lightgbm")
 MODEL_NAMES = BASELINES + PROPOSED
 #: config/model_config.yaml `churn` (#206). 값은 그 파일 한 곳에만 있다 — 여기에 숫자를 다시 쓰지 않는다.
 CONFIG = load_model_config().churn
 N_SPLITS = CONFIG.cv_folds
 INNER_SPLITS = CONFIG.threshold_inner_folds
 SHAP_SAMPLE = CONFIG.shap_sample
+#: OpenMP 스레드 상한(#215) — `uplift.py` 와 같은 이유: 작은 모델을 여러 번 학습할 때 스레드 경합으로 몇 배씩
+#: 느려진다(uplift 2,500건 27 s → 3.5 s 실측, churn 은 hist_gb 1회 학습 750행 5 s). 결과 값은 스레드 수와 무관하다.
+N_THREADS: int | None = 1
+
+
+def _limited_threads(fn):
+    """학습 · 평가 진입점을 OpenMP 스레드 상한 안에서 돌린다. threadpoolctl 은 scikit-learn 의 필수 의존성이다."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        from threadpoolctl import threadpool_limits
+
+        with threadpool_limits(limits=N_THREADS, user_api="openmp"):
+            return fn(*args, **kwargs)
+    return wrapper
 
 
 # ── 모델 ────────────────────────────────────────────────────────────────────
@@ -77,10 +93,11 @@ class RecencyRule:
         return np.column_stack([1 - p, p])
 
 
-def make_model(name: str, seed: int):
+def make_model(name: str, seed: int, overrides: Mapping[str, Any] | None = None):
     """이름 → 미학습 추정기. 대치·절단은 파이프라인 안(학습 데이터로만 fit).
 
     하이퍼파라미터는 ``CONFIG.models[name]``(config/model_config.yaml), ``random_state`` 는 ``seed`` 다.
+    ``overrides`` 는 Validation 튜닝이 고른 값(#215) — config 격자 안의 값만 들어온다.
     """
     from sklearn.ensemble import HistGradientBoostingClassifier, RandomForestClassifier
     from sklearn.linear_model import LogisticRegression
@@ -89,17 +106,38 @@ def make_model(name: str, seed: int):
 
     if name == "rule_recency":
         return RecencyRule()
-    params = CONFIG.models
+    if name not in CONFIG.models:
+        raise ValueError(f"알 수 없는 모델: {name!r} (허용: {MODEL_NAMES})")
+    params = {**CONFIG.models[name], **(overrides or {})}
     if name == "logistic_regression":
-        return make_pipeline(make_preprocessor(), StandardScaler(),
-                             LogisticRegression(**params["logistic_regression"]))
+        return make_pipeline(make_preprocessor(), StandardScaler(), LogisticRegression(**params))
     if name == "random_forest":
-        return make_pipeline(make_preprocessor(), RandomForestClassifier(
-            **params["random_forest"], random_state=seed))
+        return make_pipeline(make_preprocessor(), RandomForestClassifier(**params, random_state=seed))
     if name == "hist_gb":
-        return make_pipeline(make_preprocessor(), HistGradientBoostingClassifier(
-            **params["hist_gb"], random_state=seed))
+        return make_pipeline(make_preprocessor(), HistGradientBoostingClassifier(**params, random_state=seed))
+    if name == "xgboost":
+        from xgboost import XGBClassifier
+
+        return make_pipeline(make_preprocessor(), XGBClassifier(**params, random_state=seed))
+    if name == "lightgbm":
+        from lightgbm import LGBMClassifier
+
+        return make_pipeline(make_preprocessor(), LGBMClassifier(**params, random_state=seed))
     raise ValueError(f"알 수 없는 모델: {name!r} (허용: {MODEL_NAMES})")
+
+
+#: 별도 패키지가 필요한 모델 → import 이름 (#215). 설치돼 있지 않으면 그 모델만 비교에서 빠지고 사유가 남는다.
+OPTIONAL_PACKAGES = {"xgboost": "xgboost", "lightgbm": "lightgbm"}
+
+
+def model_unavailable(name: str) -> str | None:
+    """모델을 만들 수 없는 사유(패키지 미설치) — 있으면 문자열, 없으면 None. 조용히 건너뛰지 않고 결과에 적는다."""
+    import importlib.util
+
+    package = OPTIONAL_PACKAGES.get(name)
+    if package and importlib.util.find_spec(package) is None:
+        return f"{package} 미설치 — pip install -r requirements.txt (requirements.txt 에 고정돼 있다)"
+    return None
 
 
 def _kind(name: str) -> str:
@@ -338,21 +376,117 @@ def fold_indices(y: np.ndarray, seed: int) -> list[tuple[np.ndarray, np.ndarray]
     return list(splitter.split(np.zeros(len(y)), y))
 
 
+# ── Validation 튜닝 · 시간 순서 검증 (#215) ─────────────────────────────────
+
+#: config/model_config.yaml `churn.tuning` — {enabled, metric, grids}.
+TUNING = CONFIG.tuning
+
+
+def _score_fn(metric: str):
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    return roc_auc_score if metric == "roc_auc" else average_precision_score
+
+
+def _validation_score(name: str, overrides: Mapping[str, Any], X: pd.DataFrame, y: np.ndarray, seed: int,
+                      prior: tuple[pd.DataFrame, np.ndarray] | None, metric: str) -> float:
+    """한 조합의 **검증** 점수. 시험 · 홀드아웃은 보지 않는다.
+
+    ``prior`` 가 있으면 시간 순서 검증 — 앞 기준일 데이터로 학습하고 (X, y)(t1 학습 모집단)로 잰다.
+    없으면 (X, y) 안의 ``INNER_SPLITS``-fold 교차검증 평균.
+    """
+    score = _score_fn(metric)
+    if prior is not None:
+        Xp, yp = prior
+        model = make_model(name, seed, overrides).fit(Xp, yp)
+        return float(score(y, _score(model, X[list(Xp.columns)])))
+    from sklearn.model_selection import StratifiedKFold
+
+    values = []
+    for tr, va in StratifiedKFold(INNER_SPLITS, shuffle=True, random_state=seed).split(X, y):
+        model = make_model(name, seed, overrides).fit(X.iloc[tr], y[tr])
+        values.append(score(y[va], _score(model, X.iloc[va])))
+    return float(np.mean(values))
+
+
+def tune_model(name: str, X: pd.DataFrame, y: np.ndarray, seed: int,
+               prior: tuple[pd.DataFrame, np.ndarray] | None = None) -> dict:
+    """Grid 튜닝 (#215, ML-005) — config 격자의 모든 조합을 검증 점수로 비교해 가장 높은 조합을 고른다.
+
+    같은 점수면 격자에 먼저 적힌 조합을 고른다(재현성). 격자 전체 점수를 남긴다 — 고른 값만 남기면
+    "다른 값은 해 보지 않았다"와 구분되지 않는다.
+    """
+    import itertools
+
+    grid = (TUNING.get("grids") or {}).get(name)
+    if not TUNING.get("enabled") or not grid:
+        return {"status": "not_run", "reason": "튜닝이 꺼져 있거나 이 모델의 격자가 없다 — config 기본값", "params": {}}
+    keys = list(grid)
+    rows = []
+    for combo in itertools.product(*(grid[k] for k in keys)):
+        overrides = dict(zip(keys, combo))
+        rows.append({"params": overrides,
+                     "score": _validation_score(name, overrides, X, y, seed, prior, TUNING["metric"])})
+    best = max(range(len(rows)), key=lambda i: (rows[i]["score"], -i))
+    return {"status": "ok", "metric": TUNING["metric"],
+            "basis": "temporal_validation" if prior is not None else f"inner_cv_{INNER_SPLITS}fold",
+            "params": rows[best]["params"], "grid": rows}
+
+
+def temporal_validation(name: str, overrides: Mapping[str, Any] | None, X: pd.DataFrame, y: np.ndarray,
+                        seed: int, prior: tuple[pd.DataFrame, np.ndarray]) -> dict:
+    """시간 순서 검증 (#215, 멘토 피드백) — 앞 기준일(t1 − 42일) 데이터로 학습, t1 학습 모집단으로 평가.
+
+    두 기준일 모두 처치 전 · 같은 Eligible 정의다. 임계도 앞 기준일 학습 데이터 안에서만 정한다.
+    """
+    Xp, yp = prior
+    Xv = X[list(Xp.columns)]
+    factory = (lambda: make_model(name, seed, overrides))
+    model = factory().fit(Xp, yp)
+    if name == "rule_recency":
+        from sklearn.metrics import f1_score
+
+        metrics = _not_probability(_metrics(y, _score(model, Xv), 0.0))
+        metrics["f1"] = float(f1_score(y, (model._days(Xv) >= model.threshold_days_).astype(int), zero_division=0))
+    else:
+        metrics = _metrics(y, _score(model, Xv), _threshold_from_train(factory, Xp, yp, seed))
+    return {"scheme": "temporal_validation", "n_train": int(len(yp)), "n_valid": int(len(y)),
+            "pos_rate_train": float(np.mean(yp)), "pos_rate_valid": float(np.mean(y)), **metrics}
+
+
 # ── 평가 ────────────────────────────────────────────────────────────────────
 
-def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
-    """Baseline 2 + 제안 2 를 같은 Stratified K-Fold(``N_SPLITS``)로 평가한다. 형식은 모듈 설명 참조."""
+@_limited_threads
+def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.DataFrame, Any] | None = None) -> dict:
+    """Baseline 2 + 제안 4 를 같은 Stratified K-Fold(``N_SPLITS``)로 평가한다. 형식은 모듈 설명 참조.
+
+    #215 — 제안 모델은 먼저 Validation 튜닝(``tune_model``)을 거친다. ``prior``(앞 기준일 Feature · 라벨)가
+    오면 튜닝 · 모델 선택을 **시간 순서 검증**으로 하고, 없으면 무작위 교차검증으로 고른다(그 사실을 적는다).
+    """
     X, yv = _prepare(X, y)
+    prior_data: tuple[pd.DataFrame, np.ndarray] | None = None
+    prior_status: dict[str, Any] = {"status": "not_run", "reason": "앞 기준일 데이터를 받지 않았다"}
+    if prior is not None:
+        Xp, yp = _prepare(*prior)
+        if 0 < int(yp.sum()) < len(yp):
+            prior_data = (Xp, yp)
+            prior_status = {"status": "ok", "n": int(len(yp)), "pos_rate": float(yp.mean())}
+        else:
+            prior_status = {"status": "not_run", "reason": "앞 기준일 라벨이 한 값뿐이다 — 시간 순서 검증 불가"}
+    unavailable = {name: why for name in MODEL_NAMES if (why := model_unavailable(name))}
+    usable = [name for name in MODEL_NAMES if name not in unavailable]
+    tuning = {name: tune_model(name, X, yv, seed, prior_data) for name in PROPOSED if name in usable}
+    overrides = {name: tuning[name]["params"] for name in tuning}
     folds = fold_indices(yv, seed)
     models = []
     oof: dict[str, np.ndarray] = {}  # 검증 fold 예측 — 임계값 비교표 · 보정표(#215)
-    for name in MODEL_NAMES:
+    for name in usable:
         per_fold: dict[str, list[float]] = {"roc_auc": [], "pr_auc": [], "f1": [], "lift_at_10": [],
                                             "brier": [], "ece": []}
         thresholds = []
         oof[name] = np.full(len(yv), np.nan)
         for k, (tr, va) in enumerate(folds):
-            factory = (lambda n=name, s=seed + k: make_model(n, s))
+            factory = (lambda n=name, s=seed + k: make_model(n, s, overrides.get(n)))
             model = factory().fit(X.iloc[tr], yv[tr])
             if name == "rule_recency":
                 # 규칙의 판정 임계는 경과일 그 자체(학습 fold 에서 F1 최대)
@@ -377,11 +511,23 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
                  "threshold": {"rule": ("학습 fold F1 최대 경과일(days)" if name == "rule_recency"
                                         else f"학습 fold 내부 {INNER_SPLITS}-fold OOF F1 최대 확률"),
                                "per_fold": [float(t) for t in thresholds]}}
+        if name in tuning:  # #215 — 튜닝한 값과 격자 전체 점수
+            entry["params"] = dict(overrides[name])
+            entry["tuning"] = tuning[name]
+        if prior_data is not None:  # #215 — 시간 순서 검증
+            entry["temporal_validation"] = temporal_validation(name, overrides.get(name), X, yv, seed, prior_data)
         models.append(entry)
 
-    best = max((m for m in models if m["kind"] == "proposed"),
-               key=lambda m: m["cv"]["roc_auc"]["mean"] or -1)
-    importance = churn_importance(X, yv, best["name"], seed)
+    # #215 — 고르는 기준: 시간 순서 검증이 있으면 그 점수, 없으면 무작위 교차검증 평균(튜닝 지표와 같은 지표).
+    metric = TUNING.get("metric", "roc_auc")
+    basis = "temporal_validation" if prior_data is not None else "random_cv"
+
+    def selection_score(m: dict) -> float:
+        value = m["temporal_validation"].get(metric) if basis == "temporal_validation" else m["cv"][metric]["mean"]
+        return -1.0 if value is None or (isinstance(value, float) and math.isnan(value)) else float(value)
+
+    best = max((m for m in models if m["kind"] == "proposed"), key=selection_score)
+    importance = churn_importance(X, yv, best["name"], seed, overrides.get(best["name"]))
     best_oof = oof[best["name"]]
     return {
         "label_def": LABEL_DEF, "n": int(len(yv)), "pos_rate": float(yv.mean()),
@@ -390,6 +536,17 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int) -> dict:
         "imbalance": "class_weight (balanced / balanced_subsample), rule 은 F1 임계",
         "models": models,
         "best_proposed": best["name"],
+        # #215 — 확정 모델의 튜닝 값과 고른 기준. fit_best_churn 이 같은 값으로 학습한다.
+        "best_params": dict(overrides.get(best["name"]) or {}),
+        "models_unavailable": [{"name": n, "reason": why} for n, why in unavailable.items()],
+        "selection_basis": basis,
+        "selection_metric": metric,
+        "temporal_validation_data": prior_status,
+        "selection_note": ("시간 순서 검증(앞 기준일 학습 → t1 학습 모집단 평가)으로 튜닝 · 선택했다. 같은 t1 데이터의 "
+                           "무작위 교차검증 점수는 선택에 쓰인 데이터라 낙관적이다 — 학습에 안 쓴 성능은 시간 홀드아웃(t2)"
+                           if basis == "temporal_validation" else
+                           "앞 기준일 데이터가 없어 무작위 교차검증으로 튜닝 · 선택했다 — 같은 데이터의 교차검증 점수는 "
+                           "낙관적이다. 학습에 안 쓴 성능은 시간 홀드아웃(t2)"),
         "shap_top": importance["top"],
         "importance_method": importance["method"],
         "importance_model": best["name"],
@@ -412,9 +569,10 @@ def _group_names(model, X: pd.DataFrame) -> list[str]:
     return names
 
 
-def churn_importance(X: pd.DataFrame, y: np.ndarray, name: str, seed: int, top: int = 15) -> dict:
+def churn_importance(X: pd.DataFrame, y: np.ndarray, name: str, seed: int,
+                     overrides: Mapping[str, Any] | None = None, top: int = 15) -> dict:
     """SHAP(Tree) 상위 Feature. 실패하면 permutation importance 로 대체하고 그 사실을 남긴다."""
-    model = make_model(name, seed).fit(X, y)
+    model = make_model(name, seed, overrides).fit(X, y)
     sample = X.sample(min(SHAP_SAMPLE, len(X)), random_state=seed)
     try:
         import shap
@@ -538,17 +696,23 @@ class ChurnModel:
     threshold: float
     features: list[str] = field(default_factory=list)
     threshold_rule: str = ""
+    #: #215 — Validation 튜닝이 고른 하이퍼파라미터(config 기본값 위에 덮은 것). 비어 있으면 config 기본값.
+    params: dict = field(default_factory=dict)
 
 
+@_limited_threads
 def fit_best_churn(X: pd.DataFrame, y, seed: int, *, eval_result: dict | None = None) -> ChurnModel:
-    """확정 모델 학습. `eval_result`(= `evaluate_churn_models` 결과)가 있으면 CV ROC-AUC 평균이
-    가장 높은 **제안** 모델을, 없으면 `hist_gb` 를 쓴다. 임계는 학습 데이터 내부 OOF F1 최대."""
+    """확정 모델 학습. `eval_result`(= `evaluate_churn_models` 결과)가 있으면 그것이 고른 **제안** 모델
+    (`best_proposed` — 시간 순서 검증 또는 CV 기준, `selection_basis`)을 튜닝 값(`best_params`)으로, 없으면
+    `hist_gb` 기본값을 쓴다. 임계는 학습 데이터 내부 OOF F1 최대."""
     X, yv = _prepare(X, y)
     name = eval_result["best_proposed"] if eval_result else "hist_gb"
-    factory = lambda: make_model(name, seed)  # noqa: E731
+    params = dict((eval_result or {}).get("best_params") or {})  # #215 — 튜닝이 고른 값으로 학습
+    factory = lambda: make_model(name, seed, params)  # noqa: E731
     threshold = _threshold_from_train(factory, X, yv, seed)
     return ChurnModel(name=name, estimator=factory().fit(X, yv), threshold=threshold,
-                      features=list(X.columns), threshold_rule=f"학습 데이터 내부 {INNER_SPLITS}-fold OOF F1 최대")
+                      features=list(X.columns), threshold_rule=f"학습 데이터 내부 {INNER_SPLITS}-fold OOF F1 최대",
+                      params=params)
 
 
 def predict_churn_proba(model: ChurnModel, X: pd.DataFrame) -> pd.Series:
@@ -575,6 +739,7 @@ def evaluate_fitted_churn(model: ChurnModel, X: pd.DataFrame, y) -> dict:
             **_metrics(yv, score, model.threshold)}
 
 
+@_limited_threads
 def evaluate_temporal_holdout(model_factory=None, X_train: pd.DataFrame | None = None, y_train=None,
                               X_test: pd.DataFrame | None = None, y_test=None, *, model=None,
                               seed: int = 0) -> dict:
