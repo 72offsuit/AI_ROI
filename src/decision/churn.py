@@ -131,12 +131,25 @@ OPTIONAL_PACKAGES = {"xgboost": "xgboost", "lightgbm": "lightgbm"}
 
 
 def model_unavailable(name: str) -> str | None:
-    """모델을 만들 수 없는 사유(패키지 미설치) — 있으면 문자열, 없으면 None. 조용히 건너뛰지 않고 결과에 적는다."""
+    """모델을 만들 수 없는 사유 — 있으면 문자열, 없으면 None. 조용히 건너뛰지 않고 결과에 적는다.
+
+    ① 패키지 미설치(``find_spec``)뿐 아니라 ② **설치됐지만 불러오지 못함**도 사유다 — 예: macOS 에 OpenMP 런타임
+    (libomp)이 없으면 ``import xgboost`` 는 ``XGBoostError``, ``import lightgbm`` 은 ``OSError`` 로 실패한다(PR #281
+    리뷰 R1). **import 시점의 실패만** 환경 사유로 분류한다 — 학습 · 예측 중 오류는 삼키지 않고 그대로 올라간다.
+    """
+    import importlib
     import importlib.util
 
     package = OPTIONAL_PACKAGES.get(name)
-    if package and importlib.util.find_spec(package) is None:
+    if not package:
+        return None
+    if importlib.util.find_spec(package) is None:
         return f"{package} 미설치 — pip install -r requirements.txt (requirements.txt 에 고정돼 있다)"
+    try:
+        importlib.import_module(package)
+    except Exception as error:  # 공유 라이브러리 로드 실패 등 — import 시점만(위 docstring)
+        return (f"{package} 를 불러오지 못한다({type(error).__name__}: {error}) — 설치는 됐다. "
+                "macOS 는 OpenMP 런타임이 필요하다: brew install libomp")[:400]
     return None
 
 
@@ -388,25 +401,41 @@ def _score_fn(metric: str):
     return roc_auc_score if metric == "roc_auc" else average_precision_score
 
 
+def inner_folds(y: np.ndarray) -> int:
+    """내부 교차검증 fold 수 — ``INNER_SPLITS`` 와 소수 클래스 수 중 작은 쪽(임계 선택과 같은 규칙). 2 미만이면 불가."""
+    return min(INNER_SPLITS, int(np.bincount(np.asarray(y).astype(int), minlength=2).min()))
+
+
 def _validation_score(name: str, overrides: Mapping[str, Any], X: pd.DataFrame, y: np.ndarray, seed: int,
-                      prior: tuple[pd.DataFrame, np.ndarray] | None, metric: str) -> float:
-    """한 조합의 **검증** 점수. 시험 · 홀드아웃은 보지 않는다.
+                      prior: tuple[pd.DataFrame, np.ndarray] | None, metric: str) -> float | None:
+    """한 조합의 **검증** 점수 — 유한한 값이 없으면 None(계산 불가). 시험 · 홀드아웃은 보지 않는다.
 
     ``prior`` 가 있으면 시간 순서 검증 — 앞 기준일 데이터로 학습하고 (X, y)(t1 학습 모집단)로 잰다.
-    없으면 (X, y) 안의 ``INNER_SPLITS``-fold 교차검증 평균.
+    없으면 (X, y) 안의 ``inner_folds(y)``-fold 교차검증(소수 클래스 수로 제한) 중 **유한한 fold 점수의 평균**.
+    한 클래스 fold · NaN 은 평균에 넣지 않는다(PR #281 리뷰 R2).
     """
     score = _score_fn(metric)
     if prior is not None:
         Xp, yp = prior
+        if len(np.unique(y)) < 2:
+            return None
         model = make_model(name, seed, overrides).fit(Xp, yp)
-        return float(score(y, _score(model, X[list(Xp.columns)])))
+        value = float(score(y, _score(model, X[list(Xp.columns)])))
+        return value if math.isfinite(value) else None
     from sklearn.model_selection import StratifiedKFold
 
+    folds = inner_folds(y)
+    if folds < 2:
+        return None
     values = []
-    for tr, va in StratifiedKFold(INNER_SPLITS, shuffle=True, random_state=seed).split(X, y):
+    for tr, va in StratifiedKFold(folds, shuffle=True, random_state=seed).split(X, y):
+        if len(np.unique(y[va])) < 2 or len(np.unique(y[tr])) < 2:
+            continue
         model = make_model(name, seed, overrides).fit(X.iloc[tr], y[tr])
-        values.append(score(y[va], _score(model, X.iloc[va])))
-    return float(np.mean(values))
+        value = float(score(y[va], _score(model, X.iloc[va])))
+        if math.isfinite(value):
+            values.append(value)
+    return float(np.mean(values)) if values else None
 
 
 def tune_model(name: str, X: pd.DataFrame, y: np.ndarray, seed: int,
@@ -422,15 +451,23 @@ def tune_model(name: str, X: pd.DataFrame, y: np.ndarray, seed: int,
     if not TUNING.get("enabled") or not grid:
         return {"status": "not_run", "reason": "튜닝이 꺼져 있거나 이 모델의 격자가 없다 — config 기본값", "params": {}}
     keys = list(grid)
+    folds = None if prior is not None else inner_folds(y)
+    basis = "temporal_validation" if prior is not None else f"inner_cv_{folds}fold"
     rows = []
     for combo in itertools.product(*(grid[k] for k in keys)):
         overrides = dict(zip(keys, combo))
         rows.append({"params": overrides,
                      "score": _validation_score(name, overrides, X, y, seed, prior, TUNING["metric"])})
-    best = max(range(len(rows)), key=lambda i: (rows[i]["score"], -i))
-    return {"status": "ok", "metric": TUNING["metric"],
-            "basis": "temporal_validation" if prior is not None else f"inner_cv_{INNER_SPLITS}fold",
-            "params": rows[best]["params"], "grid": rows}
+    valid = [i for i, row in enumerate(rows) if row["score"] is not None]
+    common = {"metric": TUNING["metric"], "basis": basis, "n_folds": folds, "grid": rows,
+              "n_invalid": len(rows) - len(valid)}
+    if not valid:  # PR #281 리뷰 R2 — 유효한 검증 없이 첫 후보를 고르지 않는다
+        reason = (f"유효한 검증 점수가 없다(소수 클래스 {int(np.bincount(np.asarray(y).astype(int), minlength=2).min())}명"
+                  f" · fold {folds})" if prior is None else "유효한 검증 점수가 없다(검증 데이터가 한 클래스 등)")
+        return {"status": "not_run", "reason": reason + " — config 기본값을 쓴다", "params": {},
+                "used_defaults": True, **common}
+    best = max(valid, key=lambda i: (rows[i]["score"], -i))
+    return {"status": "ok", "params": rows[best]["params"], "used_defaults": False, **common}
 
 
 def temporal_validation(name: str, overrides: Mapping[str, Any] | None, X: pd.DataFrame, y: np.ndarray,
