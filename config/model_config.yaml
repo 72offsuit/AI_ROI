@@ -110,6 +110,25 @@ clv:
     discount_sensitivity: [0.8, 1.2]   # 할인율 ±20% (이슈 #217)
     high_value_share: 0.2         # SRS CLV-003 상위 20%
 
+# Uplift 메타러너(S/T/X) — src/decision/uplift.py. DR-206 이 미룬 상수 4개를 #217 3부에서 옮겼다(값은 그대로).
+# 튜닝 격자 · 선택 규칙은 결과 전에 고정했다(DR-217-uplift-tuning) — 결과를 보고 바꾸지 않는다.
+uplift:
+  min_arm_n: 30                 # 처치군 · 대조군 최소 표본. 미만이면 그 처치의 CATE 는 계산 불가(NaN)
+  primary_arm: T3               # PRD §15.1 — Uplift MVP 는 T0 vs T3. 평가 · 선택의 대표 처치군
+  validation_size: 0.25         # train 안 Validation 비율 — 메타러너 · 규제 선택
+  base_learner:                 # HistGradientBoostingRegressor 인자(= 튜닝 격자의 현행값). random_state 는 seed
+    max_iter: 200
+    learning_rate: 0.03
+    max_depth: 3
+    min_samples_leaf: 80
+    l2_regularization: 3.0
+  tuning:
+    enabled: true
+    metric: qini                # 대표 처치군 Validation Qini 최대. 동점은 앞선 후보(현행값 먼저)
+    grid:                       # base_learner 위에 덮어쓰는 축 — 곱집합
+      max_depth: [2, 3]
+      min_samples_leaf: [40, 80, 200]
+
 # 세그먼트 · 4분면 경계 — 분위수(데이터 단위에 무관). segments.assign_segments · assign_quadrants.
 segmentation:
   clv_high_q: 0.8      # CLV 상위 20% = 고가치 (SRS AT-CLV-01 Top20% 와 같은 경계)

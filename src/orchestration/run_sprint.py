@@ -1578,6 +1578,20 @@ def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any
     return record
 
 
+def uplift_fit_kwargs(fit: Callable[..., Any], evaluation: Mapping[str, Any], seed: int) -> dict[str, Any]:
+    """최종 Uplift 학습(전체 탐색 RCT)의 키워드 인자 — seed 와, #217 3부부터 Validation 으로 고른 기저 학습기 규제.
+
+    ``fit`` 이 받지 않는 인자는 넘기지 않는다(합의된 시그니처의 가짜 · 이전 판). 고른 규제가 없으면 넘기지 않고
+    ``fit`` 의 기본값(현행값)을 쓴다(DR-217-uplift-tuning).
+    """
+    accepted = inspect.signature(fit).parameters
+    kwargs: dict[str, Any] = {"seed": seed} if "seed" in accepted else {}
+    chosen = (evaluation.get("best_method_selection") or {}).get("base_learner")
+    if chosen is not None and "params" in accepted:
+        kwargs["params"] = dict(chosen)
+    return kwargs
+
+
 CLV_FILE = "clv_predictions.csv"
 LIFETIME_MODEL_NAME = "bgnbd_gamma_gamma"
 
@@ -1983,6 +1997,7 @@ def run(config: SprintConfig) -> Path:
                 uplift_eval.update(_loaded_record(config.load_models, meta, loaded_manifest))
                 uplift_eval["fitted_method"] = getattr(model, "method", None)
                 uplift_eval["fitted_method_source"] = "불러온 모델 (재학습 없음)"
+                uplift_eval["fitted_base_learner"] = getattr(model, "base_learner", None)  # #217 3부 전 객체는 None
                 uplift_eval["fitted_evaluation"] = _fitted_evaluation(
                     "evaluate_fitted_uplift", model, ctx["X_rct"], ctx["treatment"], retention)
                 ctx["uplift_model"] = model
@@ -1998,7 +2013,8 @@ def run(config: SprintConfig) -> Path:
                 uplift_eval.update(evaluation)  # n · arms · ate · models … (대시보드 UpliftEval)
                 fit = decision_fn("fit_uplift")
                 params = inspect.signature(fit).parameters
-                kwargs: dict[str, Any] = {"seed": config.seed} if "seed" in params else {}
+                kwargs = uplift_fit_kwargs(fit, evaluation, config.seed)
+                uplift_eval["fitted_base_learner"] = kwargs.get("params")
                 method = _pick_method(evaluation)
                 if method is None:
                     if "method" in params and params["method"].default is inspect.Parameter.empty:
