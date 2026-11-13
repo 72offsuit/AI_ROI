@@ -125,7 +125,8 @@ Merge 기준:
 
 ### 5.1 병합은 `scripts/safe_merge.py` 로만 한다 (#172)
 
-이 저장소는 private + GitHub Free 라 **브랜치 보호(필수 체크 · 필수 리뷰)를 켤 수 없다.** 서버가 막아 주지 않아 `#141` 이 `Tests (with deps)` **실패 상태로 병합됐다.** GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 늘 빈 값이다. 그래서 `gh pr merge` 를 직접 부르지 않고 아래 스크립트를 거친다.
+이 저장소는 private + GitHub Free 라 **브랜치 보호(필수 체크 · 필수 리뷰)를 켤 수 없었다.** 2026-11-14 public 전환으로 이제 켤 수 있지만
+**아직 켜지 않았다**(같은 날 `branches/main/protection` 404 · ruleset 0개 확인 — 켜는 것은 리드 승인 뒤). 켜기 전까지는 아래 규칙이 그대로다. 서버가 막아 주지 않아 `#141` 이 `Tests (with deps)` **실패 상태로 병합됐다.** GitHub 의 `reviewDecision` 도 보호 규칙이 없으면 계산되지 않아 늘 빈 값이다. 그래서 `gh pr merge` 를 직접 부르지 않고 아래 스크립트를 거친다.
 
 ```bash
 python3 scripts/safe_merge.py <PR 번호> --dry-run   # 판정만 — 무엇이 막혔는지 출력

@@ -11,7 +11,11 @@
 - 의도된 통합 플로우: **서비스에 시뮬레이터를 돌려 잡힌 결과를 대시보드에서 확인·검증하고 시스템을 활용**한다.
 
 > PRD §88 / SRS §31의 단일 `project/` 구조와 SRS §37 제출 요구사항(public 전환 등)은 **기존 과제 기준**이다.
-> **저장소를 public으로 전환할 계획이 없다** (2026-09-05 결정). private `Plan` 서브모듈은 문제가 되지 않는다.
+> **저장소는 2026-11-14 public 으로 전환했다** — 2026-09-05 "전환 계획 없음" 결정의 번복(리드 결정). 이유: 조직 Free 요금제의
+> Actions 무료 시간(월 2,000분)이 바닥나 CI 가 시작되지 않았고, 비공개로 지킬 상업적 이유가 없다.
+> 그래서 이슈 · PR · 코멘트 · 커밋(작성자 이메일 포함)이 **모두 공개**다 — 개인정보 · 멘토 정보 · 비밀값을 올리지 않는다.
+> **자체 호스팅 러너를 등록하지 않는다**(public 저장소에서는 누구나 PR 로 그 기기에서 코드를 돌릴 수 있다).
+> 라이선스 파일은 두지 않는다 — 열람은 자유지만 저작권은 팀에 있다. private `Plan` 서브모듈은 그대로 private 이고 CI 는 체크아웃하지 않는다.
 
 ## 먼저 읽을 것
 
@@ -113,7 +117,7 @@ python3 -m unittest tests.test_isolation -v
   - 여기에 **건수를 적지 않는다.** 이전 판은 `407건` 이라고 적었고 테스트를 추가한 바로 다음 커밋에 낡았다 — 아무도 대조하지 않는 숫자를 문서에 두는 것이 이슈 `#59` 가 닫은 결함의 모양이다. 건수는 명령을 실행하면 나온다.
 - 저장소 보안 설정 (이슈 `#66` · 보안 F4, 2026-09-14):
   - **Dependabot alerts — 활성화됨.** `gh api -X PUT repos/…/vulnerability-alerts`. 되돌리려면 같은 경로에 `DELETE`.
-  - **Secret scanning — `BLOCKED`.** `HTTP 422 Secret scanning is not available for this repository` — private 저장소의 플랜 제한(GitHub Advanced Security 필요)이라 설정으로 열 수 없다. **켜지 않은 것을 켠 것으로 적지 않는다.** 커밋된 비밀값 감시는 여전히 **사람이 본다**.
+  - **Secret scanning — 꺼져 있다(켤 수 있게 됨).** 2026-09-14 에는 private 저장소의 플랜 제한(`HTTP 422 Secret scanning is not available for this repository`)으로 `BLOCKED` 였다. 2026-11-14 public 전환 뒤 `security_and_analysis.secret_scanning` · `secret_scanning_push_protection` 이 `disabled` 인 것을 확인했다 — 켜는 것은 리드 승인 뒤. **켜지 않은 것을 켠 것으로 적지 않는다.** 전환 전 비밀값 패턴 점검(시스템 팀이 읽을 수 있는 경로 · 모든 브랜치의 커밋 기록)은 0건이었고, 시뮬레이터 팀 경로는 그 팀이 본다. 그때까지 커밋된 비밀값 감시는 **사람이 본다**.
   - CI 서드파티 액션은 커밋 SHA 로 고정돼 있다. 갱신 시 `uses:` 옆 주석의 태그를 함께 고친다.
 - ★ **로컬 검증은 의존성 두 벌을 다 설치하고 돌린다.**
   ```bash
