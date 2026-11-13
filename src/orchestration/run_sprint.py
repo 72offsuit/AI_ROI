@@ -1513,9 +1513,12 @@ def persist_features(root: Path, run_id: str, ctx: Mapping[str, Any]) -> dict[st
 def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any]:
     """#215 — 시간 순서 검증용 **앞 기준일**(t1 − 42일) 데이터: 그 시점 Eligible 고객의 Feature 와 [t1−42, t1) 라벨.
 
-    두 기준일 모두 처치 전(워밍업 안)이고 Eligible 정의가 같다. 시뮬레이터를 더 부르지 않는다 — t2 까지 읽은
-    이벤트 · t1 가입일 명부(그 시점 Eligible 판정에 충분하다) · 본선 이력 metrics(구매 관측 근거) · 워밍업 실행
-    기록(라벨 창을 덮는다)을 다시 쓴다. 못 만들면 not_run 과 사유 — 무작위 교차검증으로 대신했다고 적힌다.
+    두 기준일 모두 처치 전(워밍업 안)이고 Eligible 정의가 같다. 새로 시뮬레이션하지 않는다 — t2 까지 읽은
+    이벤트 · t1 가입일 명부(그 시점 Eligible 판정에 충분하다) · 워밍업 실행 기록(라벨 창을 덮는다)을 다시 쓰고,
+    라벨의 구매 관측 근거는 **그 창 [t1−42, t1) 의 metrics**(``ctx["prior_label_metrics"]``)다 — 본선 라벨이
+    [t1, t2) 창을 따로 조회하는 것과 같은 규칙이다. 공개 계약(docs/simulator_api.md ``metrics``)은 창 단위
+    ``[start, end)`` 이고 상태가 판 단위라는 명시는 없다 — 이력 창의 상태로 대신하지 않는다(PR #281 리뷰 Q1).
+    못 만들면 not_run 과 사유 — 무작위 교차검증으로 대신했다고 적힌다.
     """
     t_prior = ctx["t1"] - timedelta(days=LABEL_WINDOW_DAYS)
     record: dict[str, Any] = {"index_time": t_prior, "label_window": {"start": t_prior, "end": ctx["t1"]}}
@@ -1535,7 +1538,7 @@ def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any
             raise NotRun(f"앞 기준일의 Eligible 고객이 0명이다 — {judged['counts']}")
         X_prior = decision_fn("build_feature_table")(events, t_prior)
         X_prior.attrs["event_read_evidence"] = (ctx.get("event_read_evidence") or {}).get("t2")
-        observation = outcome_observation(ctx["warmup_summary"], main_root, ctx.get("main_metrics"),
+        observation = outcome_observation(ctx["warmup_summary"], main_root, ctx.get("prior_label_metrics"),
                                           (ctx.get("event_read_evidence") or {}).get("t1"))
         Y_prior = decision_fn("build_outcomes")(events, t_prior, window_days=LABEL_WINDOW_DAYS,
                                                 observation=observation, allow_incomplete=True)
@@ -1640,9 +1643,21 @@ def shap_local(model: Any, X: Any, candidates: Any) -> dict[str, Any]:
     except NotRun as reason:
         return {"status": "not_run", "reason": str(reason)}
     try:
-        return {"status": "ok", **explain(model, X, candidates=candidates)}
+        result = explain(model, X, candidates=candidates)
     except Exception as error:
         return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    if candidates is not None and not result.get("n_pool"):  # #280 리뷰 N1 — 빈 Eligible 을 넓히지 않는다
+        return {"status": "not_run", "reason": "Eligible(t2) 후보가 0명 — 전체 고객으로 넓혀 설명하지 않는다", **result}
+    return {"status": "ok", **result}
+
+
+def deployed_threshold(model: Any) -> dict[str, Any]:
+    """#280 리뷰 R1 — 배치 객체의 임계와 그 근거. ``threshold_table``(고른 모델 종류의 바깥 CV OOF)과 근거가 다르다."""
+    value = getattr(model, "threshold", None)
+    return {"value": float(value) if isinstance(value, (int, float)) else None,
+            "rule": getattr(model, "threshold_rule", None) or None,
+            "note": "predicted_label 에 쓰는 임계 — churn_eval.threshold_table 은 같은 F1 최대 규칙을 다른 OOF 에 적용한 "
+                    "비교표라 값이 다를 수 있다"}
 
 
 def persistence_status(record: Mapping[str, Any]) -> str:
@@ -1781,7 +1796,6 @@ def run(config: SprintConfig) -> Path:
             except Exception as error:  # noqa: BLE001 — 사유를 남기고 구매 관측 불명으로 다룬다
                 main_metrics = None
                 _log(f"  본선 이력 sim.metrics 실패: {type(error).__name__}: {error}")
-            ctx["main_metrics"] = main_metrics  # #215 — 앞 기준일(t1 − 42일) 라벨의 구매 관측 근거
             ctx["purchase_generated"], ctx["purchase_detail"] = purchase_generated(main_metrics)
             ctx["margin_rate"], ctx["margin_basis"] = margin_rate_basis(main_metrics)
             # 라벨 구매 상태는 해당 42일 창의 별도 원본으로 확인한다. 이력 창에 덮어쓰지 않는다.
@@ -1790,12 +1804,23 @@ def run(config: SprintConfig) -> Path:
             except Exception as error:  # noqa: BLE001 — 라벨만 미확정으로 남긴다
                 label_metrics = None
                 _log(f"  본선 라벨 sim.metrics 실패: {type(error).__name__}: {error}")
+            # #215 · PR #281 리뷰 Q1 — 앞 기준일(t1 − 42일) 라벨도 그 42일 창의 별도 원본으로 확인한다.
+            t_prior = ctx["t1"] - timedelta(days=LABEL_WINDOW_DAYS)
+            try:
+                prior_label_metrics = (sim.metrics(t_prior, ctx["t1"])
+                                       if t_prior >= ctx["timeline"]["start"] else None)
+            except Exception as error:  # noqa: BLE001 — 앞 기준일 라벨만 미확정으로 남긴다
+                prior_label_metrics = None
+                _log(f"  앞 기준일 라벨 sim.metrics 실패: {type(error).__name__}: {error}")
+            ctx["prior_label_metrics"] = prior_label_metrics
             ctx["main_metric_windows"] = {
                 "history": {"start": ctx["timeline"]["start"], "end": ctx["t2"],
                             "uses": ["margin_rate", "s1_purchase_gate"],
                             "purchase_generated": ctx["purchase_generated"]},
                 "label": {"start": ctx["t1"], "end": ctx["t2"], "uses": ["Y1_purchase_observation"],
                           "purchase_generated": purchase_generated(label_metrics)[0]},
+                "prior_label": {"start": t_prior, "end": ctx["t1"], "uses": ["churn_prior_origin_label_observation"],
+                                "purchase_generated": purchase_generated(prior_label_metrics)[0]},
             }
             ctx["outcome_observation"] = outcome_observation(
                 ctx["rct_summary"], main_root, label_metrics, ctx["events_t2"].attrs.get("run_read_evidence"))
@@ -1866,6 +1891,7 @@ def run(config: SprintConfig) -> Path:
                 ctx["churn_train"] = (X, y)
                 if isinstance(evaluation, Mapping) and evaluation.get("best_proposed") is not None:
                     ctx["churn_best_name"] = evaluation["best_proposed"]
+            churn_eval["deployed_threshold"] = deployed_threshold(ctx["churn_model"])
             # #215 — SHAP 요약 그림: 확정 모델 · 학습 모집단 표본(불러온 실행은 이 실행의 T0 군)
             churn_eval["shap_summary"] = shap_summary_file(ctx["churn_model"], ctx["churn_train"][0], out,
                                                            config.seed, extra_outputs)
