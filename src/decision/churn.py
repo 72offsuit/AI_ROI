@@ -279,6 +279,11 @@ def threshold_table(y, score) -> list[dict]:
 
     행: F1 최대(기본 — ``predicted_label`` 에 쓰는 규칙) · 확률 0.5 · 상위 10/20/30% · 재현율 80%.
     **학습 데이터 안의 검증 예측(OOF)** 으로만 계산한다 — 시험 데이터로 임계를 고르지 않는다.
+
+    열은 SRS ML-006 최소 비교 항목 ``threshold · precision · recall · f1 · target_count · expected_campaign_cost``
+    (+ ``flagged_share``). ``target_count`` 는 **넘긴 점수의 모집단**(실행 루프: 학습 T0 군 CV OOF)에서 임계 이상인
+    고객 수 — t2 캠페인 대상 수가 아니다. ``expected_campaign_cost`` 는 None — 이 표에는 처치 · 단가 근거가 없다
+    (0 이나 임의 단가로 채우지 않는다, #280 리뷰 R2). 사유는 ``THRESHOLD_COLUMNS_NOTE``.
     """
     y = np.asarray(y).astype(int)
     s = np.asarray(score, dtype=float)
@@ -293,7 +298,8 @@ def threshold_table(y, score) -> list[dict]:
         f1 = (2 * precision * recall / (precision + recall)
               if n_flagged and positives and (precision + recall) > 0 else 0.0)
         return {"rule": rule, "threshold": float(threshold), "flagged_share": n_flagged / len(y) if len(y) else None,
-                "precision": precision, "recall": recall, "f1": float(f1)}
+                "precision": precision, "recall": recall, "f1": float(f1),
+                "target_count": n_flagged, "expected_campaign_cost": None}
 
     rows = [row("f1_max", _best_f1_threshold(y, s)), row("probability_0.5", 0.5)]
     for share in THRESHOLD_TOP_SHARES:
@@ -314,6 +320,27 @@ THRESHOLD_SELECTION = {
                "비율(재현율 목표)에 따른 대안을 이 표로 함께 낸다"),
     "basis": "학습 데이터 교차검증의 검증 fold 예측(OOF) — 시험 · 홀드아웃 데이터 미사용",
 }
+
+#: 임계값표의 대상 수 · 비용 열 설명과 SRS ML-006 충족 범위(#280 리뷰 R2) — churn_eval.threshold_table 에 싣는다.
+THRESHOLD_COLUMNS_NOTE = {
+    "target_count_population": ("넘긴 학습 데이터(실행 루프: 탐색 RCT T0 군)의 교차검증 OOF 에서 임계 이상인 고객 수 — "
+                                "t2 캠페인 대상 수가 아니다"),
+    "expected_campaign_cost": ("null — 이 표에는 처치 · 단가 근거가 없다. 누구에게 어떤 처치를 줄지는 전략(S2~S5)이 예산 "
+                               "안에서 정하고, 그 계획 비용은 측정 계층 단가로 strategy_comparison 에 계산된다. 0 이나 "
+                               "임의 단가로 채우지 않는다"),
+    "srs_ml006": ("부분 충족 — threshold · precision · recall · f1 · target_count 는 채우고 expected_campaign_cost 는 null"
+                  "(위 사유). 남은 범위: 임계별 비용은 처치 · 단가가 정해지는 전략 단계(S2 계획 비용)와 연결할 때 채운다"),
+}
+
+#: TreeExplainer 기본 출력(model_output="raw")의 단위 — 기여 합 + 기대값이 무엇을 복원하나(#280 리뷰 N2).
+#: 실측(shap 0.54.1 · sklearn 1.9): random_forest = 양성 확률(오차 ~1e-15), hist_gb = 양성 로그오즈(~1e-14).
+#: 표에 없는 모델은 None — 확인하지 않은 단위를 적지 않는다.
+SHAP_UNITS = {"random_forest": "probability", "hist_gb": "log_odds"}
+
+
+def shap_unit(name: str) -> str | None:
+    """SHAP 기여값의 단위(``SHAP_UNITS``) — 크기를 해석하는 화면이 모델마다 다르게 읽어야 한다."""
+    return SHAP_UNITS.get(name)
 
 
 def _metrics(y: np.ndarray, score: np.ndarray, threshold: float) -> dict[str, float]:
@@ -588,8 +615,13 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
         "importance_method": importance["method"],
         "importance_model": best["name"],
         "importance_note": importance["note"],
-        # #215 — 확정 모델(best_proposed)의 검증 fold 예측으로 만든 표. 시험 데이터를 보지 않는다.
-        "threshold_table": {"model": best["name"], "rows": threshold_table(yv, best_oof), **THRESHOLD_SELECTION},
+        # #215 — 고른 모델 **종류**(best_proposed)의 바깥 CV 검증 fold 예측으로 만든 표. 시험 데이터를 보지 않는다.
+        # 배치 객체의 임계는 fit_best_churn 이 전체 학습 데이터 내부 OOF 로 따로 정한다(#280 리뷰 R1 — 근거가 다르다).
+        "threshold_table": {"model": best["name"], "rows": threshold_table(yv, best_oof), **THRESHOLD_SELECTION,
+                            "basis_model": (f"{best['name']} 종류의 바깥 {len(folds)}-fold CV 검증 예측(OOF) — 배치 "
+                                            f"객체의 임계는 fit_best_churn 이 전체 학습 데이터 내부 {INNER_SPLITS}-fold "
+                                            "OOF 로 따로 정한다(같은 F1 최대 규칙, 다른 OOF — 값이 다를 수 있다)"),
+                            **THRESHOLD_COLUMNS_NOTE},
         "calibration": {"model": best["name"], "basis": THRESHOLD_SELECTION["basis"],
                         "class_weight_note": "class_weight 로 양성 가중을 했으므로 확률이 실제 비율보다 높게 "
                                              "나올 수 있다 — 순서(ROC-AUC)와 별개로 본다",
@@ -646,7 +678,8 @@ SHAP_LOCAL_CUSTOMERS = 200
 def _tree_shap(model: "ChurnModel", X: pd.DataFrame) -> pd.DataFrame:
     """확정 모델(`ChurnModel`)의 고객별 SHAP 값 — 원 Feature 이름으로 묶는다(결측 지시자는 원 Feature 에 합산).
 
-    값은 이탈(양성) 쪽 로그오즈 기여다. 다시 학습하지 않는다 — 배치될 모델 그 자체를 설명한다.
+    값은 이탈(양성) 쪽 기여이고 **단위는 모델마다 다르다** — ``SHAP_UNITS``(RF 는 확률, HistGB 는 로그오즈).
+    다시 학습하지 않는다 — 배치될 모델 그 자체를 설명한다.
     """
     import shap
 
@@ -687,16 +720,21 @@ def explain_top_risk(model: "ChurnModel", X: pd.DataFrame, *, candidates=None,
                      n: int = SHAP_LOCAL_CUSTOMERS, top: int = SHAP_LOCAL_TOP) -> dict:
     """이탈 확률 상위 ``n`` 명의 SHAP Local — 대시보드 Target List 의 "왜 이 고객인가" (#215).
 
-    ``candidates`` 가 있으면(예: Eligible) 그 안에서만 고른다. 없거나 비면 ``X`` 전체에서 고르고 그렇게 적는다.
+    ``candidates`` 가 있으면(예: Eligible) 그 안에서만 고른다. ``None`` 이면(후보를 정하지 않음) ``X`` 전체에서 고르고
+    그렇게 적는다. **후보가 비면(빈 목록 · X 와 교집합 0) 넓히지 않고 빈 결과**다 — Eligible 밖 고객을 설명하지 않는다
+    (#280 리뷰 N1). ``shap_unit`` 은 기여값의 단위(``SHAP_UNITS``).
     """
-    pool = X.index if candidates is None else X.index.intersection(pd.Index(list(candidates)))
-    scope = "candidates" if candidates is not None and len(pool) else "all_scored"
-    if scope == "all_scored":
-        pool = X.index
+    if candidates is None:
+        pool, scope = X.index, "all_scored"
+    else:
+        pool, scope = X.index.intersection(pd.Index(list(candidates))), "candidates"
+    head = {"population": scope, "n_pool": int(len(pool)), "top_features": int(top), "model": model.name,
+            "shap_unit": shap_unit(model.name)}
+    if not len(pool):
+        return {**head, "n": 0, "rows": [], "note": "후보가 비어 있다 — 전체 고객으로 넓히지 않는다"}
     proba = predict_churn_proba(model, X.loc[pool])
     chosen = proba.sort_values(ascending=False, kind="mergesort").index[:n]
-    return {"population": scope, "n_pool": int(len(pool)), "n": int(len(chosen)), "top_features": int(top),
-            "model": model.name, "rows": explain_local(model, X.loc[chosen], top=top)}
+    return {**head, "n": int(len(chosen)), "rows": explain_local(model, X.loc[chosen], top=top)}
 
 
 def write_shap_summary(model: "ChurnModel", X: pd.DataFrame, path, *, seed: int,
@@ -721,7 +759,8 @@ def write_shap_summary(model: "ChurnModel", X: pd.DataFrame, path, *, seed: int,
     plt.savefig(target, dpi=150)
     plt.close("all")
     return {"status": "ok", "file": target.name, "model": model.name, "n_sample": int(len(picked)),
-            "max_display": int(max_display), "method": "TreeExplainer · 확정 모델(재학습 없음)"}
+            "max_display": int(max_display), "method": "TreeExplainer · 확정 모델(재학습 없음)",
+            "shap_unit": shap_unit(model.name)}
 
 
 # ── 학습·예측 ───────────────────────────────────────────────────────────────

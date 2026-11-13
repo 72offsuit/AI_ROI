@@ -43,9 +43,19 @@
         "data/hidden/**",
         "data/ground_truth/**",
         "src/simulator/**",
-        "src/diagnostics/**"
+        "src/diagnostics/**",
+        "docs/persona*.md",
+        "config/persona*.yaml",
+        "config/simulator*.yaml",
+        "docs/decisions/DR-S2-*.md",
+        "docs/decisions/DR-183-churn-config.md",
+        "docs/decisions/DR-183-purchase-calibration.md",
+        "docs/decisions/DR-183-repeat-exposure.md",
+        "docs/decisions/DR-196-sleeping-dog-path.md",
+        "docs/decisions/DR-208-gate1-acceptance-criteria.md",
+        "docs/research/sim_mechanism_evidence.md"
       ],
-      "must_not_read_why": "시뮬레이터가 행동을 어떻게 만드는지 알면 그 구조에 맞춘 Feature 를 만들게 되고, 그것은 실제 데이터에서 통하지 않는다. api.py 도 예외가 아니다."
+      "must_not_read_why": "시뮬레이터가 행동을 어떻게 만드는지 알면 그 구조에 맞춘 Feature 를 만들게 되고, 그것은 실제 데이터에서 통하지 않는다. api.py 도 예외가 아니다. 생성 규칙 · 보정값 · 가드레일 실측값(참 효과 크기)이 든 시뮬레이터 문서도 같다 — 정답 분포를 보고 모델 · 전략을 맞출 수 있다(인성(리드) · 2026-11-13 · #163). 공유 계약이 섞인 문서(DR-S1 · DR-S3 · DR-183-experiment-config · DR-194 · DR-198 · realism_report)는 시뮬 팀이 계약/내부로 나눈 뒤 더한다. DR-S8 은 두 팀 공용이라 넣지 않는다."
     }
   },
   "owned": {

@@ -43,11 +43,13 @@ GATE 3 모델 동결(11/27)에 "왜 이 모델인가"를 말할 근거가 ROC-AU
 
 1. **보정 = 안 A.** `churn._metrics` 에 `brier` · `ece` 를 더해 모든 교차검증 · 시간 홀드아웃 · 불러온 모델 평가에 같이 나온다. 확정 모델의 검증 fold 예측(OOF)으로 구간표 `churn_eval.calibration` 을 낸다. 규칙 기준선(`rule_recency`)의 점수는 확률이 아니라 순위라 보정 지표를 매기지 않는다(null).
 2. **임계 = 안 A.** `predicted_label` 은 계속 **F1 최대**(학습 데이터 내부 OOF). `churn_eval.threshold_table` 에 F1 최대 · 확률 0.5 · 상위 10/20/30% · 재현율 80% 행의 임계 · 대상 비율 · 정밀도 · 재현율 · F1 을 싣는다. 표는 **학습 데이터 교차검증의 검증 fold 예측**으로만 만든다 — 시험 · 홀드아웃을 보지 않는다.
+   **PR #280 리뷰 반영(2026-11-14).** ① 행마다 SRS ML-006 최소 비교 항목 `target_count`(임계 이상 고객 수 — **넘긴 학습 데이터의 CV OOF 기준**, t2 캠페인 대상 수가 아니다)와 `expected_campaign_cost` 를 싣는다. 비용은 이 표에 처치 · 단가 근거가 없어 **null + 사유**다(0 이나 임의 단가 없음) — **ML-006 은 부분 충족**이고, 남은 범위(임계별 비용)는 처치 · 단가가 정해지는 전략 단계와 연결할 때 채운다(`threshold_table.srs_ml006`). ② 표는 **고른 모델 종류의 바깥 CV OOF** 이고, 배치 객체의 임계는 `fit_best_churn` 이 전체 학습 데이터 **내부 OOF** 로 따로 정한다 — 같은 F1 최대 규칙을 다른 OOF 에 적용하므로 값이 다를 수 있다. 표에 `basis_model` 로 적고, 실행 루프가 배치 객체의 임계 · 규칙을 `churn_eval.deployed_threshold` 로 함께 남긴다.
    **근거(결과 파일에 같은 문장):** 이진 판정은 보고 · 위험 분포 표시에만 쓰이고, 실제 대상은 전략(S2~S5)이 예산 안에서 점수 순서로 고른다. 임계가 지출을 바꾸지 않으므로 정밀도와 재현율을 함께 보는 F1 최대를 기본으로 두고, 마케팅 수용량(상위 비율) · 놓치면 안 되는 비율(재현율)에 따른 대안을 표로 보인다.
 3. **시간 홀드아웃 = 안 A.** 평가 고객 = Eligible(t2) 이면서 t1 실험에서 T1~T4 를 받지 않은 고객(T0 · 미배정). 라벨이 있는 전체 수와 제외 수(`n_labeled_all` · `n_excluded_not_eligible` · `n_excluded_rct_treated`)를 싣는다. 전체 고객으로 **다시 재지 않는다** — 확정 모델은 갈래마다 한 번만 평가한다(기존 계약 시험 `test_real_runner_uses_separate_main_windows_and_one_call_per_branch`). Eligible(t2) 가 없으면 not_run(전체로 대신하지 않는다).
 4. **SHAP.** 다시 학습하지 않고 **배치될 확정 모델**(`fit_best_churn` 결과 · 불러온 모델)을 설명한다.
    - `shap_summary.png` — 학습 모집단 표본(최대 `shap_sample`)의 beeswarm, 결과 폴더에 함께 둔다. 실패해도 churn 단계는 이어 가고 `churn_eval.shap_summary` 에 사유를 남긴다.
-   - SHAP Local — t2 점수 시점에 Eligible(t2) 안에서 이탈 확률 상위 200명, 고객마다 영향이 큰 Feature 3개와 방향(`raises_risk` · `lowers_risk`) → `churn_eval.shap_local`.
+   - SHAP Local — t2 점수 시점에 Eligible(t2) 안에서 이탈 확률 상위 200명, 고객마다 영향이 큰 Feature 3개와 방향(`raises_risk` · `lowers_risk`) → `churn_eval.shap_local`. **Eligible(t2) 가 0명이면 전체 고객으로 넓히지 않고 not_run**(PR #280 리뷰 N1). 후보를 정하지 않은 경우(None — purchase 를 만들지 않는 판)만 전체 점수 고객에서 고르고 `population: all_scored` 로 적는다.
+   - **기여값의 단위는 모델마다 다르다**(PR #280 리뷰 N2) — TreeExplainer 기본 출력에서 기여 합 + 기대값이 RandomForest 는 **확률**, HistGB 는 **로그오즈**를 복원한다(실측, 시험 `test_shap_units_are_what_the_contributions_add_up_to`). 결과에 `shap_unit` 으로 싣는다 — 크기를 해석하는 화면은 이 값을 본다.
    - 그림에 `matplotlib==3.11.2`(개발 venv 판)를 `requirements.txt` 에 고정했다.
 5. **모델 채택 기준(멘토 피드백, GATE 3 에 쓴다).** 아래 셋을 **모두** 만족할 때 채택한다. 하나라도 못 하면 단순 기준(규칙 · 로지스틱)을 쓴다.
    1. 무작위 실험(RCT)에서 처치 효과가 확인된다 — 이탈 모델이 쓰일 전략(S2~)의 전제다(`ab_test`).
