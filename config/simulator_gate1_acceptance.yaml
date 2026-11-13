@@ -6,8 +6,6 @@
 # 생성에 쓰지 않는다(시뮬레이터 다이제스트와 무관).
 version: gate1-acceptance-v1
 fixed_before_measurement: true
-# ★ 처치 지표(eligible_spec41) 판정 모집단은 리드(인성) 확인 대기다. 확인되면 이 줄과 pending 키를 지운다.
-pending: lead_confirmation_treatment_population
 
 # 실측 인터프리터 — realism_check.py 가 numpy · pandas 를 쓰고, pyarrow 유무로 이벤트 저장 형식(parquet / gzip JSONL)이 바뀐다.
 # 의존성 없는 3.12 에서는 실측하지 않는다. #209 ③ 재현도 같은 환경에서 한다.
@@ -49,7 +47,7 @@ verdict:
     source: guardrail_report
     checks:
       - {fact: F12, name: churn_rate,         population: active42,      band_from: guardrails.churn_rate_bp}
-      # ate_T3: DR-196 확인 seed 47~51 평균 6.8%p 로 이미 띠 밖 — 실패 예상을 알고 유지한 기준(DR-208)
+      # ate_T3: DR-196 확인 seed 에서 이미 띠 위 — 실패 예상을 알고 유지한 기준. 리드 결정(2026-11-13): 기준 유지 · 봉인 전 재보정(DR-208)
       - {fact: F14, name: ate_T3,             population: eligible_spec41, band_from: guardrails.ate_bp}
       - {fact: F15, name: coupon_use_T2,      population: eligible_spec41, band_from: guardrails.coupon_use_bp}
       - {fact: F15, name: coupon_use_T3,      population: eligible_spec41, band_from: guardrails.coupon_use_bp}
