@@ -71,6 +71,19 @@ def _scores(actual: np.ndarray, pred: np.ndarray) -> dict[str, float]:
             "spearman": float(rho), "top20_hit": float(top_hit(actual, pred, 0.2))}
 
 
+def evaluate_fitted_clv(model, X: pd.DataFrame, future_value) -> dict:
+    """저장해 둔 **학습된** CLV 모델을 새 데이터로 **평가만** 한다 (#214 — GATE 4 전제). 다시 학습하지 않는다.
+
+    미래 매출이 결손인 고객은 빼고 건수를 남긴다(0 으로 채우지 않는다).
+    """
+    y = pd.Series(future_value).reindex(X.index).astype(float)
+    keep = y.notna().to_numpy()
+    pred = predict_clv(model, X.loc[keep]).to_numpy()
+    return {"name": "hist_gb", "scheme": "fitted_model_evaluation", "model_source": "loaded (재학습 없음)",
+            "n": int(keep.sum()), "n_excluded_missing_target": int((~keep).sum()),
+            **_scores(y[keep].to_numpy(), pred)}
+
+
 def evaluate_clv(X: pd.DataFrame, future_value, *, horizon_days: int = 42, seed: int = 0,
                  n_splits: int = CONFIG.cv_folds) -> dict:
     from sklearn.model_selection import KFold

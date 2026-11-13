@@ -189,8 +189,11 @@ class TestModesEndToEnd(unittest.TestCase):
                 for name in ("src.decision.segments", "src.decision.strategies", "src.decision.optimize")}
         cls.runs: dict[str, tuple[int, Path]] = {}
         for mode in cli.MODES:
+            # #214 — main.py 는 기본으로 저장한다. 저장소의 models/ · data/processed/ 를 더럽히지 않게 임시 폴더로 보낸다.
             argv = ["--mode", mode, *SMALL, "--out", str(base / mode / "out"),
-                    "--results-root", str(base / mode / "res"), "--run-id", f"SP-test-{mode}"]
+                    "--results-root", str(base / mode / "res"), "--run-id", f"SP-test-{mode}",
+                    "--models-root", str(base / mode / "models"),
+                    "--feature-store-root", str(base / mode / "processed")]
             if mode == "optimize":
                 argv += ["--budget", str(BUDGET)]
             modules = {**_Fake().modules(), **real}
@@ -229,6 +232,62 @@ class TestModesEndToEnd(unittest.TestCase):
                     else:
                         self.assertEqual("not_run", stage["status"], stage)
                         self.assertIn(f"--mode {mode}", stage["reason"])
+
+    def test_train_saves_models_and_features_with_nfr01_versions(self) -> None:
+        """#214 — ML-008 모델 · FS-001/002 Feature 저장과 NFR-01 8개 키."""
+        _, run_dir = self.runs["train"]
+        persisted = _read(run_dir / cli.MANIFEST)["outputs"]["persisted"]
+        self.assertEqual("ok", persisted["status"], persisted)
+        for kind in ("churn", "uplift", "clv"):
+            record = persisted["models"]["models"][kind]
+            self.assertEqual("ok", record["status"], kind)
+            self.assertTrue(Path(record["file"]).is_file(), kind)
+            meta = _read(Path(record["file"]).with_suffix(".json"))
+            for key in ("model_version", "dataset_version", "feature_version", "parameters", "cv_score",
+                        "test_score", "created_at", "sha256"):
+                self.assertIn(key, meta, f"{kind}.{key}")
+        self.assertEqual("ok", persisted["features"]["tables"]["features_t1"]["status"])
+        self.assertEqual("ok", persisted["features"]["tables"]["labels_t1"]["status"])
+        versions = _read(run_dir / "run_meta.json")["versions"]
+        for key in ("service_version", "simulator_version", "customer_seed", "random_seed", "feature_version",
+                    "model_version", "strategy_version", "experiment_version"):
+            self.assertIn(key, versions)
+        self.assertEqual({"churn", "uplift", "clv"}, set(versions["model_version"]))
+
+    def test_another_seed_loads_saved_models_without_refitting(self) -> None:
+        """#214 완료 조건 — 저장한 모델을 다른 seed 실행이 다시 학습하지 않고 불러와 평가만 한다(GATE 4 전제)."""
+        _, train_dir = self.runs["train"]
+        models_dir = _read(train_dir / cli.MANIFEST)["outputs"]["persisted"]["models"]["root"]
+        base = Path(self.tmp.name) / "load"
+        fake = _Fake()
+        argv = ["--mode", "train", "--seed", "8", *SMALL[2:], "--out", str(base / "out"),
+                "--results-root", str(base / "res"), "--run-id", "SP-test-load", "--no-persist",
+                "--load-models", models_dir]
+        generated = mock.patch.object(rs, "purchase_generated", return_value=(True, "test: 가짜 로더가 만든다"))
+        with mock.patch.dict(sys.modules, fake.modules()), generated, _quiet():
+            code = cli.main(argv)
+        run_dir = base / "res" / "sprint-v0" / "SP-test-load"
+        self.assertEqual(0, code)
+        refits = [name for name, _ in fake.calls
+                  if name in ("fit_best_churn", "fit_uplift", "evaluate_churn_models", "evaluate_uplift_models")]
+        self.assertEqual([], refits, "불러온 실행이 다시 학습 · 선택했다")
+        for name in ("churn_eval", "uplift_eval", "clv_eval"):
+            payload = _read(run_dir / f"{name}.json")
+            self.assertEqual("ok", payload["status"], name)
+            self.assertTrue(payload["model_source"].startswith("loaded"), name)
+            self.assertEqual("SP-test-train", payload["trained_run"], name)
+        manifest = _read(run_dir / cli.MANIFEST)
+        self.assertIs(True, manifest["inputs"]["reads_previous_runs"])
+        self.assertEqual("not_requested", manifest["outputs"]["persisted"]["status"])
+
+    def test_missing_model_folder_stops_before_simulating(self) -> None:
+        base = Path(self.tmp.name) / "missing"
+        argv = ["--mode", "train", *SMALL, "--out", str(base / "out"), "--results-root", str(base / "res"),
+                "--no-persist", "--load-models", str(base / "nope")]
+        with _quiet(), contextlib.redirect_stderr(io.StringIO()):
+            code = cli.main(argv)
+        self.assertEqual(cli.EXIT_MODEL_LOAD, code)
+        self.assertFalse((base / "out").exists(), "멈춘 실행이 시뮬레이터 출력을 만들었다")
 
     def test_train_trains_and_scores_nothing(self) -> None:
         _, run_dir = self.runs["train"]

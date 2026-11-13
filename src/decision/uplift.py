@@ -390,6 +390,38 @@ def _score_row(name: str, kind: str, score, treated, y, curve: bool) -> dict[str
     return row
 
 
+def evaluate_fitted_uplift(model: UpliftModel, X: pd.DataFrame, treatment: pd.Series, y: pd.Series) -> dict[str, Any]:
+    """저장해 둔 **학습된** 메타러너를 새 무작위 실험 데이터로 **평가만** 한다 (#214 — GATE 4 전제).
+
+    다시 학습하지 않는다. 처치군마다 (그 처치 + T0) 고객으로 Qini · AUUC · uplift@k 를 내고, 무작위 배정
+    전제의 ATE 를 함께 싣는다. 결과 결측 고객은 빼고 건수를 남긴다(0 으로 채우지 않는다).
+    """
+    if not isinstance(model, UpliftModel):
+        raise TypeError(f"UpliftModel 이 아니다: {type(model).__name__}")
+    t = pd.Series(treatment).reindex(X.index)
+    yv = pd.Series(y).reindex(X.index).astype(float)
+    keep = (yv.notna() & t.notna()).to_numpy()
+    Xk, tk, yk = X.loc[keep], t[keep].to_numpy(), yv[keep].to_numpy()
+    cate = predict_cate(model, Xk)
+    by_arm: list[dict[str, Any]] = []
+    ate: dict[str, Any] = {}
+    for arm in model.arms:
+        mask = np.isin(tk, [CONTROL, arm])
+        n_t, n_c = int((tk == arm).sum()), int((tk == CONTROL).sum())
+        if n_t < MIN_ARM_N or n_c < MIN_ARM_N:
+            by_arm.append({"arm": arm, "status": "not_run",
+                           "reason": f"표본 부족 — {arm} {n_t}명 · {CONTROL} {n_c}명 (최소 {MIN_ARM_N})"})
+            continue
+        treated = (tk[mask] == arm).astype(int)
+        score, outcome = cate[arm].to_numpy()[mask], yk[mask]
+        row = _score_row(model.method, "loaded", score, treated, outcome, curve=False)
+        by_arm.append({"arm": arm, "status": "ok", "n": int(mask.sum()), **row})
+        ate[arm] = ate_with_ci(outcome[treated == 1], outcome[treated == 0])
+    return {"method": model.method, "scheme": "fitted_model_evaluation", "model_source": "loaded (재학습 없음)",
+            "n": int(keep.sum()), "n_outcome_missing_excluded": int((~keep).sum()),
+            "metric_version": METRIC_VERSION, "by_arm": by_arm, "ate": ate}
+
+
 def _id_hash(index) -> str:
     return hashlib.sha256(json.dumps(sorted(map(str, index)), ensure_ascii=False,
                                      separators=(",", ":")).encode()).hexdigest()

@@ -10,11 +10,12 @@ SRS SYS-004 · PRD §73. **디스패처다 — 계산하지 않는다.** 실행 
      (``segments.uplift_score`` · ``assign_quadrants`` · ``assign_segments`` · ``strategies.plan("S5")``)의
      결과를 옮겨 적은 것이다.
 
-모드 사이에 넘기는 것 — **없다.** 모델·Feature 를 디스크에 저장하지 않는다(#184 잔여: ``models/`` 저장 ·
-Feature Store). 그래서 모든 모드가 시뮬레이션부터 다시 돌고 다시 학습한다. 같은 seed · 고객 수 · 프로파일 ·
-config(``run_meta.provenance.config_sha256``)면 같은 세계 · 같은 모델이 나온다 — 지금 구조에서 가능한
-'넘김'은 이 재현성뿐이다. 한계: (1) ``uplift`` 는 ``train`` 을 다시 한다(시간), (2) 다른 프로세스가 학습한
-모델을 평가할 수 없다 — Final Holdout(GATE 4)은 모델 저장이 선행이다.
+모드 사이에 넘기는 것 — **저장한 모델**(#214). 학습한 Churn · Uplift · CLV 모델을 ``models/<run_id>/`` 에
+(ML-008 메타데이터와 함께), Feature · 라벨을 ``data/processed/<run_id>/`` 에(FS-001/002) 기본으로 남긴다
+(``--no-persist`` 로 끈다). 다음 실행은 ``--load-models models/<run_id>`` 로 그 모델을 **다시 학습하지 않고**
+불러와 새 seed 데이터로 평가만 할 수 있다 — Final Holdout(GATE 4)의 전제다. 저장 당시 Feature 정의
+(``feature_version``)가 지금 코드와 다르면 시뮬레이션 전에 멈춘다(종료 코드 6). 시뮬레이션 세계는 넘기지
+않는다 — 모든 모드가 시뮬레이션부터 다시 돈다(같은 seed · 고객 수 · 프로파일 · config 면 같은 세계).
 
 격리: ``src.simulator`` · ``src.diagnostics`` 를 import 하지 않는다. 시뮬레이터는 ``run_sprint`` 가 공개 api 로만
 부른다(``tests/test_orchestration_main_cli.py`` 가 AST 로 고정). 결정 기록: ``docs/decisions/DR-206-main-cli-config.md``.
@@ -98,14 +99,15 @@ MODES: dict[str, Mode] = {
 }
 
 HANDOFF = (
-    "넘기는 것이 없다 — 모델·Feature 를 저장하지 않으므로(#184 잔여) 모든 모드가 시뮬레이션부터 "
-    "다시 돌고 다시 학습한다. 같은 seed · 고객 수 · 프로파일 · config SHA-256 이면 같은 세계 · 같은 모델이다"
+    "저장한 모델을 넘긴다(#214) — 학습한 모델은 models/<run_id>/ 에, Feature · 라벨은 data/processed/<run_id>/ "
+    "에 남는다(--no-persist 로 끈다). --load-models models/<run_id> 로 다시 학습하지 않고 불러와 평가만 한다. "
+    "시뮬레이션 세계는 넘기지 않는다 — 같은 seed · 고객 수 · 프로파일 · config SHA-256 이면 같은 세계다"
 )
 NOT_PERSISTED = (
-    "models/ — 학습한 모델을 저장하지 않는다(ML-008, #184 잔여). 프로세스가 끝나면 사라진다",
-    "data/processed/ — Feature Store 가 없다(FS-001/002, #184 잔여)",
     "SHAP 요약 그림(png) — churn_eval.shap_top 의 수치만 있다",
+    "시뮬레이션 세계 — 모든 모드가 시뮬레이션부터 다시 돈다",
 )
+EXIT_MODEL_LOAD = 6  # --load-models 폴더를 쓸 수 없다 (run_sprint.ModelLoadError.exit_code 와 같다)
 
 
 def _epilog() -> str:
@@ -135,7 +137,9 @@ def _epilog() -> str:
         "",
         "종료 코드: 0 실행한 단계 전부 ok · 1 실패한 단계(또는 산출물) 있음 · 2 인자 오류(argparse) ·",
         "  3 실패는 없지만 실행 범위 안에 not_run 이 있음(예: 라벨이 한 값뿐) ·",
-        "  4 --require-clean 인데 커밋 전 변경이 있음(시작 전에 멈춤) · 5 config 오류",
+        "  4 --require-clean 인데 커밋 전 변경이 있음(시작 전에 멈춤) · 5 config 오류 ·",
+        "  6 --load-models 폴더를 쓸 수 없음(없음 · 파일 변조 · Feature 정의 변경, 시작 전에 멈춤).",
+        "  모델 · Feature 저장이 실패해도 1 이다(조용히 넘어가지 않는다)",
         "",
         "예:  python src/main.py --mode train --customers 2000 --profile small",
         "     python src/main.py --mode optimize --budget 50000000",
@@ -174,6 +178,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-clean", action="store_true",
                         help="저장소에 커밋 전 변경(추적 파일 변경 · .gitignore 밖 새 파일)이 있으면 시뮬레이션 전에 "
                              "멈춘다(종료 코드 4). 봉인 실행(GATE 2 Baseline)은 이 옵션으로 돌린다 (#262)")
+    parser.add_argument("--models-root", type=Path, default=None,
+                        help="학습한 모델을 <경로>/<run_id>/ 에 저장(ML-008). 기본: models/")
+    parser.add_argument("--feature-store-root", type=Path, default=None,
+                        help="Feature · 라벨을 <경로>/<run_id>/ 에 parquet 로 저장(FS-001/002). 기본: data/processed/")
+    parser.add_argument("--no-persist", action="store_true", help="모델 · Feature 를 저장하지 않는다")
+    parser.add_argument("--load-models", type=Path, default=None, metavar="DIR",
+                        help="저장된 모델 폴더(models/<run_id>) — 다시 학습하지 않고 불러와 평가만 한다(GATE 4 전제). "
+                             "못 쓰면 시작 전에 멈춘다(종료 코드 6)")
     return parser
 
 
@@ -443,6 +455,14 @@ def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> lis
         if name == BUDGET_ALLOCATION and output.get("status") == "ok":
             lines.append(f"    예산 {fmt(output.get('budget_krw'), 0)}원 · 대상 {output.get('n_targeted')}명 · "
                          f"계획 지출 {fmt(output.get('planned_spend_krw'), 0)}원 · 기대 ROI {fmt(output.get('expected_roi'))}")
+    persisted = manifest["outputs"].get("persisted") or {}
+    if persisted.get("status") not in (None, "not_requested"):
+        models = persisted.get("models") or {}
+        features = persisted.get("features") or {}
+        lines.append(f"  저장       {persisted.get('status')} — 모델 {models.get('root') or models.get('reason') or '—'} · "
+                     f"Feature {features.get('root') or features.get('reason') or '—'}")
+    if manifest["inputs"].get("models_from"):
+        lines.append(f"  불러온 모델 {manifest['inputs']['models_from']} — 다시 학습하지 않음")
     return lines
 
 
@@ -478,6 +498,10 @@ def main(argv: list[str] | None = None) -> int:
         warmup_days=args.warmup_days, budget_krw=args.budget, run_id=run_id,
         cv_folds=args.cv_folds, max_train_rows=args.max_train_rows,
         stages=mode.stages, scope=f"--mode {mode.name}", capture=capture, require_clean=args.require_clean,
+        # #214 — 기본으로 저장한다. --no-persist 면 저장하지 않는다.
+        models_root=None if args.no_persist else (args.models_root or REPO_ROOT / "models"),
+        feature_store_root=None if args.no_persist else (args.feature_store_root or REPO_ROOT / "data" / "processed"),
+        load_models=args.load_models,
     )
     started = time.perf_counter()
     try:
@@ -485,8 +509,13 @@ def main(argv: list[str] | None = None) -> int:
     except rs.DirtyRepoError as error:
         print(f"[main] {error}", file=sys.stderr)
         return error.exit_code
+    except rs.ModelLoadError as error:
+        print(f"[main] {error}", file=sys.stderr)
+        return EXIT_MODEL_LOAD
     outputs = {name: write_artifact(name, run_dir, capture) for name in mode.writes}
-    stages = _read_json(run_dir / "run_meta.json").get("stages") or []
+    run_meta = _read_json(run_dir / "run_meta.json")
+    stages = run_meta.get("stages") or []
+    persisted = run_meta.get("persistence") or {"status": "not_requested"}
     report = stage_report(mode, stages)
     manifest = {
         "mode": mode.name, "run_id": run_id, "generated_at": datetime.now(KST).isoformat(),
@@ -496,14 +525,18 @@ def main(argv: list[str] | None = None) -> int:
             "budget_krw": args.budget, "warmup_days": args.warmup_days, "cv_folds": args.cv_folds,
             "max_train_rows": args.max_train_rows,
             "config_sha256": {name: _sha256(name) for name in CONFIG_FILES},
-            "reads_previous_runs": False,
+            # 이전 실행에서 읽는 것은 --load-models 의 모델뿐이다(시뮬레이션 산출물 · 결과 파일은 읽지 않는다)
+            "reads_previous_runs": sprint.load_models is not None,
+            "models_from": None if sprint.load_models is None else str(sprint.load_models),
         },
         "stages": report,
-        "outputs": {"results_dir": str(run_dir), "simulator_out": str(sprint.out), "files": outputs},
+        "outputs": {"results_dir": str(run_dir), "simulator_out": str(sprint.out), "files": outputs,
+                    "persisted": persisted},
         "handoff": HANDOFF, "not_persisted": list(NOT_PERSISTED),
         "seconds": round(time.perf_counter() - started, 1),
     }
-    manifest["exit_code"] = exit_code(report, outputs)
+    # 저장을 요청했는데 실패하면 1 — 조용히 넘어가지 않는다(#214)
+    manifest["exit_code"] = 1 if persisted.get("status") == "failed" else exit_code(report, outputs)
     (run_dir / MANIFEST).write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     _mirror_into_latest(run_dir, [MANIFEST, *mode.writes])
     print("\n".join(summary_lines(mode, run_dir, manifest)), flush=True)
