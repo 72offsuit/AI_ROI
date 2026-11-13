@@ -264,7 +264,12 @@ class TestModesEndToEnd(unittest.TestCase):
                 "--results-root", str(base / "res"), "--run-id", "SP-test-load", "--no-persist",
                 "--load-models", models_dir]
         generated = mock.patch.object(rs, "purchase_generated", return_value=(True, "test: 가짜 로더가 만든다"))
-        with mock.patch.dict(sys.modules, fake.modules()), generated, _quiet():
+        modules = fake.modules()
+        # PR #279 리뷰 N2 — 평가 함수가 없으면 단계가 not_run 이다. 정상 경로를 보려면 평가 함수를 준다.
+        modules["src.decision.churn"].evaluate_fitted_churn = lambda model, X, y: {"n": int(len(y))}
+        modules["src.decision.uplift"].evaluate_fitted_uplift = lambda model, X, t, y: {"n": int(len(y))}
+        modules["src.decision.clv"].evaluate_fitted_clv = lambda model, X, v: {"n": int(len(v))}
+        with mock.patch.dict(sys.modules, modules), generated, _quiet():
             code = cli.main(argv)
         run_dir = base / "res" / "sprint-v0" / "SP-test-load"
         self.assertEqual(0, code)
@@ -279,6 +284,21 @@ class TestModesEndToEnd(unittest.TestCase):
         manifest = _read(run_dir / cli.MANIFEST)
         self.assertIs(True, manifest["inputs"]["reads_previous_runs"])
         self.assertEqual("not_requested", manifest["outputs"]["persisted"]["status"])
+
+    def test_unknown_current_feature_version_stops_before_loading(self) -> None:
+        """PR #279 리뷰 R2 — 지금 코드의 feature_version 을 잴 수 없으면(None) 대조를 건너뛰지 않고 시작 전에 멈춘다."""
+        _, train_dir = self.runs["train"]
+        models_dir = _read(train_dir / cli.MANIFEST)["outputs"]["persisted"]["models"]["root"]
+        base = Path(self.tmp.name) / "noversion"
+        argv = ["--mode", "train", *SMALL, "--out", str(base / "out"), "--results-root", str(base / "res"),
+                "--no-persist", "--load-models", models_dir]
+        err = io.StringIO()
+        with mock.patch("src.decision.versions.feature_version", return_value=None), _quiet(), \
+                contextlib.redirect_stderr(err):
+            code = cli.main(argv)
+        self.assertEqual(cli.EXIT_MODEL_LOAD, code)
+        self.assertIn("feature_version", err.getvalue())
+        self.assertFalse((base / "out").exists(), "멈춘 실행이 시뮬레이터 출력을 만들었다")
 
     def test_missing_model_folder_stops_before_simulating(self) -> None:
         base = Path(self.tmp.name) / "missing"
