@@ -39,25 +39,43 @@ MODEL_NAME = "bgnbd_gamma_gamma"
 
 # ── 거래 요약 ────────────────────────────────────────────────────────────────
 
-def rfm_summary(events: pd.DataFrame, index_time) -> pd.DataFrame:
-    """고객별 ``frequency · recency · T · monetary_value · n_orders`` — 기준 시각 미만 구매만."""
+def _local_cut(stamps: pd.Series, at: pd.Timestamp) -> pd.Timestamp:
+    """이벤트 시각열과 비교할 수 있게 기준 시각을 맞춘다(tz 없는 시각열이면 KST 로 풀어 tz 를 뗀다)."""
+    if stamps.dt.tz is None and at.tzinfo is not None:
+        return at.tz_convert("Asia/Seoul").tz_localize(None)
+    return at
+
+
+def _daily_purchases(events: pd.DataFrame, end, start=None) -> pd.DataFrame:
+    """``[start, end)`` 의 구매를 **KST 날짜당 1 거래**로 묶는다 — ``customer_id · _day · amount · n``.
+
+    주문 단위는 ``sprint_table._orders`` 와 같은 규칙. 그날 금액은 주문 금액 합(하나라도 결손이면 NaN), ``n`` 은 주문 수.
+    """
     from src.decision.features.sprint_table import _clean, _orders, to_index_time
 
-    t0 = to_index_time(index_time)
     frame = _clean(events)
     stamps = pd.to_datetime(frame["timestamp"])
-    if stamps.dt.tz is None:
-        cut = t0.tz_convert("Asia/Seoul").tz_localize(None) if t0.tzinfo is not None else t0
-    else:
-        cut = t0
-    orders = _orders(frame.loc[stamps < cut])
+    keep = stamps < _local_cut(stamps, to_index_time(end))
+    if start is not None:
+        keep &= stamps >= _local_cut(stamps, to_index_time(start))
+    orders = _orders(frame.loc[keep])
     if orders.empty:
-        return pd.DataFrame(columns=["frequency", "recency", "T", "monetary_value", "n_orders"]).rename_axis("customer_id")
+        return pd.DataFrame(columns=["customer_id", "_day", "amount", "n"])
     ts = pd.to_datetime(orders["timestamp"])
     local = ts.dt.tz_convert("Asia/Seoul") if ts.dt.tz is not None else ts
     orders = orders.assign(_day=local.dt.normalize().dt.tz_localize(None) if local.dt.tz is not None else local.dt.normalize())
-    daily = orders.groupby(["customer_id", "_day"]).agg(amount=("_amount", lambda s: s.sum(min_count=len(s))),
-                                                        n=("_order_key", "size")).reset_index()
+    return orders.groupby(["customer_id", "_day"]).agg(amount=("_amount", lambda v: v.sum(min_count=len(v))),
+                                                       n=("_order_key", "size")).reset_index()
+
+
+def rfm_summary(events: pd.DataFrame, index_time) -> pd.DataFrame:
+    """고객별 ``frequency · recency · T · monetary_value · n_orders`` — 기준 시각 미만 구매만."""
+    from src.decision.features.sprint_table import to_index_time
+
+    t0 = to_index_time(index_time)
+    daily = _daily_purchases(events, t0)
+    if daily.empty:
+        return pd.DataFrame(columns=["frequency", "recency", "T", "monetary_value", "n_orders"]).rename_axis("customer_id")
     index_day = t0.tz_convert("Asia/Seoul").normalize().tz_localize(None) if t0.tzinfo is not None else t0.normalize()
     rows = {}
     for cid, g in daily.groupby("customer_id", sort=True):
@@ -108,21 +126,44 @@ def fit_bgnbd(summary: pd.DataFrame) -> dict[str, Any]:
             "converged": bool(best.success), "n": int(len(x))}
 
 
+#: 기대 거래 수의 p 적분에 쓰는 Gauss–Jacobi 노드 수(PR #293 리뷰 R1). 피적분 함수 (1 − (1 + c·p)^−k) / p 는
+#: [0, 1] 에서 해석적이라 노드 수에 지수적으로 수렴한다(c = t / (α + T) 가 수백이어도 1e-7 안팎).
+QUAD_NODES = 192
+
+
 def expected_purchases(bg: Mapping[str, float], t: float | np.ndarray, x: np.ndarray, tx: np.ndarray,
                        T: np.ndarray) -> np.ndarray:
-    """E[Y(t) | x, t_x, T] — 앞으로 t 일 동안 기대 거래 수(FHL 2005 식 (10)). 이탈 가능성을 이미 반영한다."""
-    from scipy.special import hyp2f1
+    """E[Y(t) | x, t_x, T] — 앞으로 t 일 동안 기대 거래 수. **모든 r, α, a, b > 0** 에서 정의된다.
 
-    r, alpha, a, b = bg["r"], bg["alpha"], bg["a"], bg["b"]
+    E = P(살아 있음 | x, t_x, T) · E_{p ~ Beta(a, b+x)}[ (1 − ((α+T) / (α+T+p·t))^{r+x}) / p ].
+    살아 있다는 조건에서 λ ~ Gamma(r+x, α+T) · p ~ Beta(a, b+x) 가 독립이고, λ · p 가 주어지면 기대 거래 수는
+    (1 − e^{−λpt}) / p 다(Fader, Hardie & Lee 2005 식 (8)). 같은 논문 식 (10)의 닫힌 식은 E[1/p] 를 따로 꺼내 a > 1 을
+    요구하고 a = 1 에서 0 × ∞ 가 되지만, 1/p 와 괄호를 함께 적분하면 p → 0 에서 유한하다(저자들의 2022 정정 노트
+    §2–3). 그래서 p 적분을 Beta 가중 Gauss–Jacobi 구적으로 직접 잰다 — a ≤ 1 · a = 1 근처에서도 안정하고, a > 1 에서는
+    닫힌 식과 일치한다(시험). P(살아 있음) = 1 / (1 + [x > 0] · a / (b + x − 1) · ((α+T) / (α+t_x))^{r+x}).
+    """
+    from scipy.special import roots_jacobi
+
+    r, alpha, a, b = (float(bg[key]) for key in ("r", "alpha", "a", "b"))
+    if min(r, alpha, a, b) <= 0:
+        raise ValueError(f"BG/NBD 모수는 모두 양수여야 한다: r={r}, alpha={alpha}, a={a}, b={b}")
     x, tx, T = (np.asarray(v, dtype=float) for v in (x, tx, T))
-    t = np.asarray(t, dtype=float)
-    if a <= 1:
-        raise ValueError("BG/NBD 모수 a ≤ 1 — 조건부 기대값이 정의되지 않는다")
-    z = t / (alpha + T + t)
-    h = hyp2f1(r + x, b + x, a + b + x - 1, z)
-    numer = (a + b + x - 1) / (a - 1) * (1 - ((alpha + T) / (alpha + T + t)) ** (r + x) * h)
-    denom = 1 + np.where(x > 0, a / (b + x - 1) * ((alpha + T) / (alpha + tx)) ** (r + x), 0.0)
-    return numer / denom
+    t = np.broadcast_to(np.asarray(t, dtype=float), x.shape)
+    k = r + x
+    c = t / (alpha + T)
+    integral = np.empty(x.shape, dtype=float)
+    for xv in np.unique(x):
+        sel = x == xv
+        # 가중 (1 − z)^{b+x−1} (1 + z)^{a−1} on [−1, 1], p = (1 + z) / 2 → Beta(a, b + x) 밀도 모양
+        z, w = roots_jacobi(QUAD_NODES, b + xv - 1.0, a - 1.0)
+        p = (z + 1.0) / 2.0
+        w = w / w.sum()
+        g = -np.expm1(-k[sel][:, None] * np.log1p(c[sel][:, None] * p[None, :])) / p[None, :]
+        integral[sel] = g @ w
+    with np.errstate(over="ignore"):
+        odds = np.where(x > 0, a / np.maximum(b + x - 1.0, 1e-300) * np.exp(k * (np.log(alpha + T) - np.log(alpha + tx))),
+                        0.0)
+    return integral / (1.0 + odds)
 
 
 # ── Gamma-Gamma ──────────────────────────────────────────────────────────────
@@ -236,16 +277,24 @@ def evaluate_lifetime(model: LifetimeModel, events: pd.DataFrame, index_time, ac
     """
     from scipy.stats import spearmanr
 
+    from src.decision.features.sprint_table import to_index_time
+
     summary = rfm_summary(events, index_time)
     common = summary.index.intersection(actual.index)
     s = summary.loc[common]
     x, tx, T = (s[c].to_numpy(dtype=float) for c in ("frequency", "recency", "T"))
     pred_n = expected_purchases(model.bgnbd, float(window_days), x, tx, T)
     pred_rev = pred_n * expected_monetary(model.gamma_gamma, x, s["monetary_value"].to_numpy(dtype=float))
-    act_n = actual.loc[common, "purchases"].to_numpy(dtype=float)
+    # 구매 수는 모형과 같은 단위(KST 날짜당 1 거래 = 구매일 수)로 센다 — actual 의 주문 수와 다르다(PR #293 리뷰 N1).
+    # 관측 완결성은 actual 이 정한다: actual.purchases 가 NaN 이면 그 고객은 비교에서 뺀다(0 으로 채우지 않는다).
+    t0 = to_index_time(index_time)
+    window = _daily_purchases(events, t0 + pd.Timedelta(days=int(window_days)), start=t0)
+    days = window.groupby("customer_id").size() if not window.empty else pd.Series(dtype=float)
+    observed = actual.loc[common, "purchases"].to_numpy(dtype=float)
+    ok_n = np.isfinite(observed)
+    act_n = np.where(ok_n, days.reindex(common, fill_value=0).to_numpy(dtype=float), np.nan)
     act_rev = actual.loc[common, "revenue"].to_numpy(dtype=float)
     ok = np.isfinite(act_rev)
-    ok_n = np.isfinite(act_n)  # 관측 미완료 고객(NaN)은 비교에서 빼고 수를 남긴다 — 0 으로 채우지 않는다
 
     def corr(a, b):
         return float(spearmanr(a, b).statistic) if len(a) > 2 and np.std(a) > 0 and np.std(b) > 0 else None
@@ -253,13 +302,19 @@ def evaluate_lifetime(model: LifetimeModel, events: pd.DataFrame, index_time, ac
     out: dict[str, Any] = {
         "window_days": int(window_days), "n": int(len(common)), "n_revenue_missing": int((~ok).sum()),
         "n_purchases_missing": int((~ok_n).sum()),
-        "purchases": {"predicted_mean": float(pred_n[ok_n].mean()) if ok_n.any() else None,
+        "purchases": {"unit": "구매일 수(KST 날짜당 1 거래 — 모형과 같은 단위, 주문 수가 아니다)",
+                      "predicted_mean": float(pred_n[ok_n].mean()) if ok_n.any() else None,
                       "actual_mean": float(act_n[ok_n].mean()) if ok_n.any() else None,
+                      "actual_orders_mean": float(observed[ok_n].mean()) if ok_n.any() else None,
                       "mae": float(np.mean(np.abs(pred_n[ok_n] - act_n[ok_n]))) if ok_n.any() else None,
                       "spearman": corr(pred_n[ok_n], act_n[ok_n])},
-        "revenue": {"predicted_total": float(pred_rev[ok].sum()), "actual_total": float(act_rev[ok].sum()),
+        # 비교할 실제 매출이 한 건도 없으면 합계도 null — 빈 합 0 을 측정값처럼 남기지 않는다(PR #293 리뷰 R2)
+        "revenue": {"predicted_total": float(pred_rev[ok].sum()) if ok.any() else None,
+                    "actual_total": float(act_rev[ok].sum()) if ok.any() else None,
                     "mae": float(np.mean(np.abs(pred_rev[ok] - act_rev[ok]))) if ok.any() else None,
-                    "spearman": corr(pred_rev[ok], act_rev[ok])},
+                    "spearman": corr(pred_rev[ok], act_rev[ok]),
+                    **({} if ok.any() else {"reason": "비교할 실제 매출이 없다(전부 관측 미완료) — 합계 · 오차 계산 불가"})},
+
         "note": "관측 가능한 창의 예측 · 실제 비교 — 12개월 실제가 아니다(그것은 최종 실행 연장 관측)",
     }
     if sensitivity:

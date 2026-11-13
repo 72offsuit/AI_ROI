@@ -2084,9 +2084,16 @@ def run(config: SprintConfig) -> Path:
                     ))  # horizon_days · models … (대시보드 ClvEval)
                 except NotRun as reason:
                     clv_eval["evaluation_status"] = {"status": "not_run", "reason": str(reason)}
-            # #217 2부 — 12개월 CLV(BG/NBD + Gamma-Gamma): t1 미만 구매 이력(처치 전)으로 학습하고 T0 군 42일 실제와 비교.
-            # 전략 S4 · S5 · What-if · 세그먼트의 가치는 이 값(× margin_rate)이다. 위 42일 매출 모델은 단기 비교로 남긴다.
+
+        # 12개월 CLV — 전략 가치 모형 -------------------------------------------
+        # #217 2부 — BG/NBD + Gamma-Gamma: t1 미만 구매 이력(처치 전)으로 학습하고 T0 군 42일 실제와 비교한다.
+        # 전략 S4 · S5 · What-if · 세그먼트의 가치는 이 값(× margin_rate)이다. 42일 단기 모형(clv 단계)과 **독립된 단계**다 —
+        # 단기 모형이 없거나(not_run · 불러온 묶음에 없음) 실패해도 주 가치 모형은 돈다(PR #293 리뷰 N2).
+        with log.stage("clv_12m", requires=("training_set",)):
+            skip_if_not_run(log, "clv_12m")
             clv_eval["clv_12m"] = lifetime_clv(ctx, config, loaded_models, loaded_manifest)
+            if clv_eval["clv_12m"].get("status") != "ok":
+                raise NotRun(clv_eval["clv_12m"].get("reason") or "12개월 CLV 를 만들지 못했다")
 
         # A/B — 탐색 RCT 자체 분석 -------------------------------------------
         with log.stage("ab_test", requires=("training_set",)):
@@ -2135,7 +2142,8 @@ def run(config: SprintConfig) -> Path:
                                                                 customers=X2.index)
             else:
                 reasons["clv"] = ("12개월 CLV 모델이 없다 — "
-                                  + str((clv_eval.get("clv_12m") or {}).get("reason") or f"clv 단계 {log.status('clv')}"))
+                                  + str((clv_eval.get("clv_12m") or {}).get("reason")
+                                        or f"clv_12m 단계 {log.status('clv_12m')}"))
             # S1 입력 · Eligible(t2) — 이벤트에서 계산한다. purchase 를 만들지 않는 판이면 계산하지 않는다
             # (0 으로 채우지 않는다). 그러면 S1~S5 가 not_run 이다 — 모두 Eligible 안에서만 고른다(DR-234).
             # 가입일 명부는 본선 세계가 t2 에 있는 지금(분기 restore 전) 받는다.
