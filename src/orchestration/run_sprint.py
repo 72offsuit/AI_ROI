@@ -1478,7 +1478,7 @@ def persist_models(root: Path, run_id: str, ctx: Mapping[str, Any],
                    (evaluations.get("uplift") or {}).get("fitted_method")),
         "clv": ("clv_model", lambda: (ctx["X_rct"], ctx["Y_rct"]["revenue"]), "hist_gb"),
         # #217 2부 — 학습 데이터는 t1 미만 구매 요약(모델이 지문을 갖고 있다). 행 수 = 요약 고객 수
-        "clv_12m": ("clv_12m_model", None, getattr(ctx.get("clv_12m_model"), "name", None) or "bgnbd_gamma_gamma"),
+        "clv_12m": ("clv_12m_model", None, lifetime_model_name(ctx.get("clv_12m_model"))),
     }
     records: dict[str, Any] = {}
     results: dict[str, Any] = {}
@@ -1579,6 +1579,12 @@ def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any
 
 
 CLV_FILE = "clv_predictions.csv"
+LIFETIME_MODEL_NAME = "bgnbd_gamma_gamma"
+
+
+def lifetime_model_name(model: Any) -> str:
+    """12개월 CLV 모델 이름 — 저장(``persist_models``)과 ``clv_predictions.csv`` 의 버전이 같은 규칙을 쓴다."""
+    return getattr(model, "name", None) or LIFETIME_MODEL_NAME
 
 
 def lifetime_clv(ctx: Mapping[str, Any], config: SprintConfig, loaded_models: Mapping[str, Any],
@@ -1629,8 +1635,9 @@ def clv_predictions_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[s
         return {"status": "not_run", "reason": "12개월 CLV 점수가 없다(모델 없음 · 점수 단계 미실행)"}
     try:
         settings = dict(load_model_config().clv.lifetime)
+        # 저장할 model_version 과 같은 규칙(persist_models: f"{kind}-{name}-{run_id}"). 불러온 모델이면 그 버전
         version = ((loaded_models.get("clv_12m") or (None, {}))[1].get("model_version")
-                   or f"clv_12m-{getattr(model, 'name', 'unknown')}-{run_id}")
+                   or f"clv_12m-{lifetime_model_name(model)}-{run_id}")
         table = decision_fn("clv_table")(clv, model_version=version, high_value_share=settings["high_value_share"])
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)

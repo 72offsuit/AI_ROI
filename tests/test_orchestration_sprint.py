@@ -384,7 +384,9 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         self.assertEqual(["customer_id", "clv_model_version", "predicted_clv_12m", "clv_percentile", "high_value_flag"],
                          list(frame.columns))
         self.assertEqual(record["rows"], len(frame))
+        # 이름 없는 모델이어도 CSV 버전은 저장 model_version 과 같은 규칙이다(CI 에서 'unknown' 으로 어긋났던 결함)
         self.assertEqual({"clv_12m-bgnbd_gamma_gamma-SP-test-fake"}, set(frame["clv_model_version"]))
+        self.assertEqual(record["clv_model_version"], frame["clv_model_version"].iloc[0])
         self.assertEqual(_read(self.run_dir, "segments")["n"], len(frame))  # t2 점수 고객 전원
 
     def test_rct_arms_follow_design(self) -> None:
