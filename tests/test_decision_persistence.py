@@ -147,6 +147,44 @@ class TestModelStoreRoundTrip(unittest.TestCase):
         with self.assertRaises(model_store.ModelStoreError):  # manifest 없는 폴더
             model_store.load_models(Path(self.tmp.name))
 
+    def test_mixed_pairs_from_another_run_are_refused_before_unpickling(self) -> None:
+        """PR #279 리뷰 R1 — 다른 실행의 **정상** clv.pkl · clv.json 쌍이 섞이면(각 쌍의 해시는 맞다) 묶음과 어긋난다.
+        manifest 와 개별 메타데이터를 unpickle 전에 대조해 아무것도 불러오지 않고 멈춘다."""
+        from unittest import mock
+
+        from src.decision import clv, model_store
+
+        other = Path(self.tmp.name) / "models" / "SP-other"
+        X, _, _, rev = _data(9)
+        other_meta = model_store.save_model(other, "clv", clv.fit_clv(X, rev * 2, seed=9),
+                                            model_version="clv-test-SP-other", dataset_version="rct-t1-other",
+                                            feature_version="features-old-definition", extra={"run_id": "SP-other"})
+        model_store.write_manifest(other, {"clv": other_meta}, {"run_id": "SP-other"})
+        mixed = Path(self.tmp.name) / "mixed"
+        shutil.copytree(self.root, mixed)
+        for name in ("clv.pkl", "clv.json"):  # B 의 manifest 는 두고 A 의 정상 쌍으로 바꿔 끼운다
+            shutil.copyfile(other / name, mixed / name)
+        self.assertEqual(other_meta["sha256"], model_store.load_model(other, "clv")[1]["sha256"])  # 쌍 자체는 정상
+        with mock.patch.object(model_store.pickle, "loads", side_effect=AssertionError("unpickle 하면 안 된다")):
+            with self.assertRaisesRegex(model_store.ModelStoreError, "manifest 와 개별 메타데이터가 다르다"):
+                model_store.load_models(mixed, expected_feature_version="features-test")
+            with self.assertRaisesRegex(model_store.ModelStoreError, "manifest 와 개별 메타데이터가 다르다"):
+                model_store.load_models(mixed)  # 버전 대조를 하지 않아도 연결 대조는 한다
+
+    def test_run_id_lineage_must_match_the_bundle(self) -> None:
+        from src.decision import model_store
+
+        copy = Path(self.tmp.name) / "lineage"
+        shutil.copytree(self.root, copy)
+        manifest = json.loads((copy / model_store.MANIFEST).read_text(encoding="utf-8"))
+        manifest["run"]["run_id"] = "SP-someone-else"
+        (copy / model_store.MANIFEST).write_text(json.dumps(manifest), encoding="utf-8")
+        meta = json.loads((copy / "churn.json").read_text(encoding="utf-8"))
+        meta["run_id"] = "SP-test"
+        (copy / "churn.json").write_text(json.dumps(meta), encoding="utf-8")
+        with self.assertRaisesRegex(model_store.ModelStoreError, "계보"):
+            model_store.load_models(copy, kinds=("churn",))
+
     def test_unpicklable_model_is_an_error_not_a_silent_skip(self) -> None:
         from src.decision import model_store
 
