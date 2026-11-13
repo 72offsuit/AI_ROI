@@ -19,8 +19,9 @@ from src.simulator._internal.rng import RNG_SCHEME, canonical_json
 # #196(sim-0.7): Sleeping Dog 직접 경로(Negative 노출 즉시 onset)와 Negative 비율 배율 상향으로 처치 이후 이벤트가 바뀐다.
 # #198(sim-0.8): 부수 이벤트 4종(search·return_visit·review·cs_contact)이 생겨 이벤트가 바뀐다. 고객 항목에
 # pending_reviews(구매 후 기록 대기 중인 리뷰)와 큐 종류 cs 가 생겨 상태 형식도 바뀐다.
+# #282(sim-0.9): T3 처치 반응 계수 재보정으로 T3 처치 이후 이벤트가 바뀐다. 상태 형식은 그대로라 FORMAT_VERSION 은 둔다.
 FORMAT_VERSION = "sim-state-v5"
-SIMULATOR_VERSION = "sim-0.8"
+SIMULATOR_VERSION = "sim-0.9"
 WORLD_ID_SCHEME = "sim-world-v2"
 SEED_LIMIT = 1 << 63
 MAX_CUSTOMERS = 99_999_999
