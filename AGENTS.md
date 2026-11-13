@@ -117,7 +117,7 @@ python3 -m unittest tests.test_isolation -v
   - 여기에 **건수를 적지 않는다.** 이전 판은 `407건` 이라고 적었고 테스트를 추가한 바로 다음 커밋에 낡았다 — 아무도 대조하지 않는 숫자를 문서에 두는 것이 이슈 `#59` 가 닫은 결함의 모양이다. 건수는 명령을 실행하면 나온다.
 - 저장소 보안 설정 (이슈 `#66` · 보안 F4, 2026-09-14):
   - **Dependabot alerts — 활성화됨.** `gh api -X PUT repos/…/vulnerability-alerts`. 되돌리려면 같은 경로에 `DELETE`.
-  - **Secret scanning — 꺼져 있다(켤 수 있게 됨).** 2026-09-14 에는 private 저장소의 플랜 제한(`HTTP 422 Secret scanning is not available for this repository`)으로 `BLOCKED` 였다. 2026-11-14 public 전환 뒤 `security_and_analysis.secret_scanning` · `secret_scanning_push_protection` 이 `disabled` 인 것을 확인했다 — 켜는 것은 리드 승인 뒤. **켜지 않은 것을 켠 것으로 적지 않는다.** 전환 전 비밀값 패턴 점검(시스템 팀이 읽을 수 있는 경로 · 모든 브랜치의 커밋 기록)은 0건이었고, 시뮬레이터 팀 경로는 그 팀이 본다. 그때까지 커밋된 비밀값 감시는 **사람이 본다**.
+  - **Secret scanning · push protection — 활성화됨(2026-11-14).** 2026-09-14 에는 private 저장소의 플랜 제한(`HTTP 422 Secret scanning is not available for this repository`)으로 `BLOCKED` 였고, public 전환 뒤 리드 승인으로 `security_and_analysis.secret_scanning` · `secret_scanning_push_protection` 을 `enabled` 로 바꿨다(API 로 다시 읽어 확인). 형식이 알려진 비밀값(토큰 · 키)을 커밋 기록 전체에서 찾아 Security 탭에 경고하고(관리자만 본다), 그런 값이 든 푸시를 막는다. 형식 없는 비밀번호 · 개인정보는 잡지 못한다 — 그것은 여전히 **사람이 본다**. 경고가 오면 기록에서 지우기보다 그 키를 먼저 폐기 · 재발급한다. 전환 전 비밀값 패턴 점검(시스템 팀이 읽을 수 있는 경로 · 모든 브랜치의 커밋 기록)은 0건이었고, 시뮬레이터 팀 경로는 이 탐지가 덮는다. 되돌리려면 같은 필드를 `disabled` 로.
   - CI 서드파티 액션은 커밋 SHA 로 고정돼 있다. 갱신 시 `uses:` 옆 주석의 태그를 함께 고친다.
 - ★ **로컬 검증은 의존성 두 벌을 다 설치하고 돌린다.**
   ```bash
