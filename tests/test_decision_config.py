@@ -153,7 +153,7 @@ class TestSchema(unittest.TestCase):
         cases = {
             "최상위": _model(extra=1),
             "섹션": _model(churn__cv_fold=5),                      # 오타 — 조용히 버려지면 기본값이 쓰인다
-            "모델": _model(churn__models__xgboost={"n_estimators": 3}),
+            "모델": _model(churn__models__catboost={"n_estimators": 3}),   # #215 에서 xgboost 는 정식 모델이 됐다
             "하이퍼파라미터": _model(churn__models__hist_gb__max_depth=3),
         }
         for label, raw in cases.items():
