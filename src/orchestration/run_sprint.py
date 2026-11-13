@@ -1553,6 +1553,65 @@ def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any
     return record
 
 
+CATE_FILE = "cate.jsonl"
+CATE_COLUMNS = ("customer_id", "t0", "cate_T1", "cate_T2", "cate_T3", "cate_T4")
+
+
+def cate_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Path], *, loaded: bool) -> dict[str, Any]:
+    """#217 · DR-S8 결정 1 — 고객별 τ̂ ``cate.jsonl`` (S8 채점 입력). 한 줄에 한 고객 · 한 기준 시각.
+
+    열은 DR-S8 이 받기로 한 ``customer_id · t0 · cate_T1~cate_T4`` 그대로다(다른 키를 넣지 않는다).
+      - t1 — RCT 배정 고객(Feature(t1) 이 있는 고객). S8 Qini 는 RCT 분기에서 잰다.
+      - t2 — 점수를 매긴 고객(Feature(t2)). S8 PEHE · corr · 4분면.
+    계산할 수 없는 처치군의 τ̂ 은 null — 0 으로 채우지 않는다(DR-S8 X3). 같은 실행에서 학습한 모델이면 t1 τ̂ 은
+    **학습 데이터 위 예측**이다(`in_sample_t1`) — 채점은 모델을 불러온 Final Holdout 실행(#226)의 파일로 한다.
+    """
+    model = ctx.get("uplift_model")
+    if model is None:
+        return {"status": "not_run", "reason": "uplift 모델이 없다(단계 미실행 · 실패)"}
+    try:
+        predict = decision_fn("predict_cate")
+        pd = _pd()
+        blocks: list[tuple[str, Any, Any]] = []
+        if ctx.get("X1") is not None and ctx.get("t1") is not None and ctx.get("rct_assignment"):
+            ids = ctx["X1"].index.intersection(pd.Index(list(ctx["rct_assignment"])))
+            blocks.append(("t1", ctx["t1"], predict(model, ctx["X1"].loc[ids])))
+        cate_t2 = (ctx.get("scores") or {}).get("cate")
+        if cate_t2 is None and ctx.get("X2") is not None:
+            cate_t2 = predict(model, ctx["X2"])
+        if cate_t2 is not None and ctx.get("t2") is not None:
+            blocks.append(("t2", ctx["t2"], cate_t2))
+        if not blocks:
+            return {"status": "not_run", "reason": "τ̂ 을 낼 Feature(t1 · t2)가 없다"}
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        counts: dict[str, int] = {}
+        missing: dict[str, int] = {}
+        with path.open("w", encoding="utf-8") as handle:
+            for label, t0, frame in blocks:
+                stamp = to_jsonable(t0)
+                arms = [f"cate_{arm}" for arm in RCT_ARMS[1:]]
+                frame = frame.reindex(columns=list(RCT_ARMS[1:])).sort_index()
+                for cid, values in zip(frame.index, frame.to_numpy(dtype=float)):
+                    row = {"customer_id": str(cid), "t0": stamp}
+                    for name, value in zip(arms, values):
+                        row[name] = float(value) if math.isfinite(value) else None
+                    handle.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
+                counts[label] = int(len(frame))
+                missing[label] = int(frame.isna().any(axis=1).sum())
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    extra_files[CATE_FILE] = path
+    return {"status": "ok", "file": CATE_FILE, "columns": list(CATE_COLUMNS), "rows": counts,
+            "rows_with_null_arm": missing, "in_sample_t1": not loaded,
+            "note": ("t1 τ̂ 은 같은 실행에서 학습한 모델의 학습 데이터 위 예측 — S8 채점은 Final Holdout(#226, "
+                     "--load-models) 실행의 파일로 한다" if not loaded else
+                     "불러온 모델(재학습 없음)의 예측 — t1 · t2 모두 학습에 쓰지 않은 데이터"),
+            "contract": "DR-S8 결정 1 — customer_id · t0 · cate_T1~cate_T4, 계산 불가는 null"}
+
+
 def shap_summary_file(model: Any, X: Any, out: Path, seed: int, extra_files: dict[str, Path]) -> dict[str, Any]:
     """#215 — ``shap_summary.png`` 를 ``<out>/artifacts/`` 에 그리고 결과 폴더 사본 목록에 올린다.
 
@@ -2137,7 +2196,9 @@ def run(config: SprintConfig) -> Path:
             # S5 와 같은 모집단 — Eligible(t2) 안에서만(DR-234). 거르기 규칙은 의사결정의 것을 그대로 쓴다.
             pool = decision_fn("within_eligible")(scores)
             cate = pool["cate"][[t for t in RCT_ARMS[1:] if t in pool["cate"].columns]].astype(float)
-            value = pool["clv"].astype(float) * float(pool.get("margin_rate", 1.0))
+            if pool.get("margin_rate") is None:  # #217 — 매출 CLV 를 이익으로 쓰지 않는다(예전 기본 1.0 제거)
+                raise NotRun(f"margin_rate(기여이익률)가 없다 — {(ctx.get('margin_basis') or {}).get('reason', '근거 없음')}")
+            value = pool["clv"].astype(float) * float(pool["margin_rate"])
             # 기대 증분가치 = CATE × CLV × margin_rate (DR-145 S4·S5 와 같은 정의 — 의사결정의 공개 함수가 없어 여기서 만든다)
             gain = cate.mul(value.reindex(cate.index), axis=0)
             comparison["what_if"] = {
@@ -2242,6 +2303,9 @@ def run(config: SprintConfig) -> Path:
         comparison["strategies"] = rows
 
         events_frame = ctx.get("events_t2", ctx.get("events_t1"))
+        # #217 — 고객별 τ̂ (S8 채점 입력). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 uplift_eval 에 남긴다.
+        uplift_eval["cate_file"] = cate_file(out / "artifacts" / CATE_FILE, ctx, extra_outputs,
+                                             loaded=config.load_models is not None)
         realism, extra_files = realism_copy(Path(config.realism_report))
         extra_files = {**extra_files, **extra_outputs}
         budget_record = ctx.get("budget") or {

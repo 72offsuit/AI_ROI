@@ -53,7 +53,8 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
 | S4 | `max_t (CATE_t × 가치 − cost_t)` 내림차순, 양수만 | 그 최대 처치 |
 | S5 | 다중선택 배낭 탐욕 근사 (`optimize.optimize_budget`) | 최적화 결과 |
 
-가치 = CLV × `margin_rate`(주어진 경우). `margin_rate` 가 없으면 CLV 를 이미 **이익 기준**으로 본다.
+~~가치 = CLV × `margin_rate`(주어진 경우). `margin_rate` 가 없으면 CLV 를 이미 **이익 기준**으로 본다.~~
+**번복 (2026-11-13, #217 → `DR-217-margin-cate.md`).** 가치 = CLV × `margin_rate` 이고, `margin_rate` 가 없으면 S4 · S5 · What-if 를 **계산하지 않는다**(not_run). 기본 1.0 은 42일 **매출** CLV 를 이익으로 취급해 기대 증분가치를 이익률만큼 부풀렸고, 그 사실이 결과에 드러나지 않았다(#171 · PR #156 사후 리뷰).
 계획 비용 = 처치 단가 + 메시지 비용(쿠폰 전량 사용 가정의 **상한**) — 실현 비용이 예산을 넘지
 않게 하는 보수적 선택이다.
 
@@ -122,6 +123,7 @@ Incremental Profit(PRD §63)은 S1 대비 차이로만 정의된다. S1 이 정�
   C_rule 의 정의도 DR-170 에서 정했다 — 값의 Lock 은 여전히 GATE 2 봉인 실행의 일이다.
 - CLV 의 기준(매출/이익)이 D5 에서 정해지지 않았다. `margin_rate` 를 넘기지 않으면 이익 기준으로
   읽는다는 가정이 S4·S5 결과를 좌우한다.
+  → 2026-11-13 해소(#217 · DR-217): 그 가정을 없앴다 — `margin_rate` 가 없으면 S4 · S5 는 not_run 이다.
 - X-learner 성향점수를 표본 비율 상수로 둔 것은 무작위 배정 전제다(SIM-010 기본값). 공개
   관측 데이터에 쓰면 편향이 생긴다.
 - 증분 마케팅 ROI(`roi`)와 PRD §64 AI ROI(`ai_roi`)를 둘 다 낸다. AI 투자비 범위가 TBD 라

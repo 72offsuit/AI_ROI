@@ -34,6 +34,8 @@ def scores(n=300, seed=0):
         "days_since_last_purchase": pd.Series(rng.integers(0, 120, n).astype(float), index=idx),
         # 전원 Eligible — 아래 기존 검사는 거르기 전 동작을 본다. 거르기는 TestEligibleIsTheCommonPool.
         "eligible": pd.Series(True, index=idx),
+        # #217 — S4 · S5 의 가치 = CLV × margin_rate. 없으면 계산하지 않는다(예전 기본 1.0 제거).
+        "margin_rate": 0.3,
     }
 
 
@@ -74,6 +76,22 @@ class TestPlans(unittest.TestCase):
         for sid in ("S4", "S5"):
             with self.subTest(strategy=sid), self.assertRaises(NotComputable):
                 plan(sid, s, self.budget, COSTS)
+
+    def test_missing_margin_rate_is_not_computable(self) -> None:
+        """#217 · #171 — 기여이익률이 없으면 매출 CLV 를 이익으로 쓰지 않는다(예전에는 1.0)."""
+        s = {k: v for k, v in self.s.items() if k != "margin_rate"}
+        for sid in ("S4", "S5"):
+            with self.subTest(strategy=sid), self.assertRaises(NotComputable) as caught:
+                plan(sid, s, self.budget, COSTS)
+            self.assertIn("margin_rate", str(caught.exception))
+        for sid in ("S2", "S3"):  # 가치를 쓰지 않는 전략은 영향이 없다
+            plan(sid, s, self.budget, COSTS)
+
+    def test_value_is_clv_times_margin(self) -> None:
+        from src.decision.strategies import _value
+
+        value = _value(self.s, "S4")
+        self.assertTrue(np.allclose(self.s["clv"].to_numpy() * 0.3, value.to_numpy()))
 
     def test_ai_strategy_requires_budget(self) -> None:
         with self.assertRaises(ValueError):

@@ -224,11 +224,16 @@ def _fill(order: list[tuple[str, str]], budget_krw: float, costs: Mapping[str, A
 
 
 def _value(scores: Mapping[str, Any], sid: str):
-    """CLV → 가치(원). ``margin_rate`` 가 있으면 CLV(매출 기준)에 곱하고, 없으면 CLV 가
-    이미 이익 기준이라고 본다(DR-145)."""
+    """CLV → 가치(원) = CLV(매출 기준) × ``margin_rate``(기여이익률).
+
+    #217 · #171 — ``margin_rate`` 가 없으면 **계산하지 않는다**(``NotComputable``). 예전에는 1.0 을 써서 매출을
+    이익으로 취급했다 — S4 · S5 의 기대 증분가치가 이익률만큼 부풀고, 그 사실이 결과에 드러나지 않았다.
+    """
     clv = _need(scores, "clv", sid)
     rate = scores.get("margin_rate")
-    return clv.astype(float) * (float(rate) if rate is not None else 1.0)
+    if rate is None:
+        raise NotComputable(f"{sid}: margin_rate(기여이익률)가 없다 — 매출 CLV 를 이익으로 쓰지 않는다(#217)")
+    return clv.astype(float) * float(rate)
 
 
 def plan_S2(scores, budget_krw, costs) -> dict[str, str]:
@@ -304,7 +309,7 @@ def plan(strategy_id: str, scores: Mapping[str, Any], budget_krw: int | None,
 
     scores 키: ``churn_p``(Series) · ``cate``(DataFrame T1~T4) · ``clv``(Series|None) ·
     ``days_since_last_purchase``(Series) · ``eligible``(Series, S1~S5 필수) · 선택
-    ``lifetime_order_count`` · ``margin_rate``. 필요한 점수(``REQUIRED_SCORES``)가 없으면 ``NotComputable`` — 빈 배정으로
+    ``lifetime_order_count`` · ``margin_rate``(S4 · S5 필수, #217). 필요한 점수(``REQUIRED_SCORES``)가 없으면 ``NotComputable`` — 빈 배정으로
     대신하지 않는다. ``costs`` 는 처치별 고객당 단가 dict(``T0`` 키가 있어도 된다).
     S2~S5 는 ``budget_krw`` 가 None 이면 ValueError(호출 오류 — 모든 AI 전략 ≤ C_rule).
 
@@ -348,8 +353,8 @@ REQUIRED_SCORES: dict[str, tuple[str, ...]] = {
     "S1": ("days_since_last_purchase", "eligible"),
     "S2": ("churn_p", "eligible"),
     "S3": ("churn_p", "cate", "eligible"),
-    "S4": ("cate", "clv", "eligible"),
-    "S5": ("cate", "clv", "eligible"),
+    "S4": ("cate", "clv", "margin_rate", "eligible"),  # #217 — 가치 = CLV × margin_rate, 기본 1.0 없음
+    "S5": ("cate", "clv", "margin_rate", "eligible"),
 }
 
 
