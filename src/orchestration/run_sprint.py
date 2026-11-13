@@ -1534,9 +1534,21 @@ def shap_local(model: Any, X: Any, candidates: Any) -> dict[str, Any]:
     except NotRun as reason:
         return {"status": "not_run", "reason": str(reason)}
     try:
-        return {"status": "ok", **explain(model, X, candidates=candidates)}
+        result = explain(model, X, candidates=candidates)
     except Exception as error:
         return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    if candidates is not None and not result.get("n_pool"):  # #280 리뷰 N1 — 빈 Eligible 을 넓히지 않는다
+        return {"status": "not_run", "reason": "Eligible(t2) 후보가 0명 — 전체 고객으로 넓혀 설명하지 않는다", **result}
+    return {"status": "ok", **result}
+
+
+def deployed_threshold(model: Any) -> dict[str, Any]:
+    """#280 리뷰 R1 — 배치 객체의 임계와 그 근거. ``threshold_table``(고른 모델 종류의 바깥 CV OOF)과 근거가 다르다."""
+    value = getattr(model, "threshold", None)
+    return {"value": float(value) if isinstance(value, (int, float)) else None,
+            "rule": getattr(model, "threshold_rule", None) or None,
+            "note": "predicted_label 에 쓰는 임계 — churn_eval.threshold_table 은 같은 F1 최대 규칙을 다른 OOF 에 적용한 "
+                    "비교표라 값이 다를 수 있다"}
 
 
 def persistence_status(record: Mapping[str, Any]) -> str:
@@ -1753,6 +1765,7 @@ def run(config: SprintConfig) -> Path:
                 ctx["churn_train"] = (X, y)
                 if isinstance(evaluation, Mapping) and evaluation.get("best_proposed") is not None:
                     ctx["churn_best_name"] = evaluation["best_proposed"]
+            churn_eval["deployed_threshold"] = deployed_threshold(ctx["churn_model"])
             # #215 — SHAP 요약 그림: 확정 모델 · 학습 모집단 표본(불러온 실행은 이 실행의 T0 군)
             churn_eval["shap_summary"] = shap_summary_file(ctx["churn_model"], ctx["churn_train"][0], out,
                                                            config.seed, extra_outputs)

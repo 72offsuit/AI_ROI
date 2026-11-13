@@ -66,6 +66,12 @@ class TestThresholdTable(unittest.TestCase):
             row = rows[f"top_{round(share * 100)}pct"]
             self.assertAlmostEqual(share, row["flagged_share"], delta=0.01)
         self.assertGreaterEqual(rows["recall_80"]["recall"], 0.80)
+        # SRS ML-006 최소 비교 항목 — 대상 수는 임계 이상 수, 비용은 근거가 없어 None(0 이 아니다, #280 리뷰 R2)
+        for row in rows.values():
+            self.assertEqual(int((self.score >= row["threshold"]).sum()), row["target_count"])
+            self.assertIsNone(row["expected_campaign_cost"])
+            self.assertLessEqual({"threshold", "precision", "recall", "f1", "target_count", "expected_campaign_cost"},
+                                 set(row))
         # F1 최대 행의 F1 은 다른 어느 행보다 작지 않다
         self.assertGreaterEqual(rows["f1_max"]["f1"] + 1e-12, max(r["f1"] for r in rows.values()))
 
@@ -100,6 +106,9 @@ class TestEvaluationCarriesTheNewTables(unittest.TestCase):
         self.assertEqual(r["best_proposed"], r["calibration"]["model"])
         self.assertEqual("f1_max", r["threshold_table"]["selected"])
         self.assertIn("시험", r["threshold_table"]["basis"])
+        for key in ("basis_model", "target_count_population", "expected_campaign_cost", "srs_ml006"):
+            self.assertIn(key, r["threshold_table"])
+        self.assertIn("부분 충족", r["threshold_table"]["srs_ml006"])
         self.assertEqual(len(self.y), sum(b["n"] for b in r["calibration"]["bins"]))
 
     def test_rule_baseline_has_no_calibration_but_models_do(self) -> None:
@@ -121,8 +130,35 @@ class TestEvaluationCarriesTheNewTables(unittest.TestCase):
         for row in out["rows"]:
             self.assertEqual(2, len(row["top"]))
             self.assertIn(row["top"][0]["direction"], ("raises_risk", "lowers_risk"))
-        everyone = churn.explain_top_risk(self.model, self.X, candidates=[], n=3)
-        self.assertEqual("all_scored", everyone["population"])  # 후보가 비면 그렇게 적는다
+        self.assertEqual(churn.shap_unit(self.model.name), out["shap_unit"])
+        # 후보를 정하지 않으면(None) 전체에서, 후보가 비면 넓히지 않고 빈 결과(#280 리뷰 N1)
+        everyone = churn.explain_top_risk(self.model, self.X, candidates=None, n=3)
+        self.assertEqual(("all_scored", 3), (everyone["population"], everyone["n"]))
+        for empty in ([], ["no-such-customer"]):
+            none = churn.explain_top_risk(self.model, self.X, candidates=empty, n=3)
+            self.assertEqual(("candidates", 0, 0, []), (none["population"], none["n_pool"], none["n"], none["rows"]))
+
+    @unittest.skipUnless(importlib.util.find_spec("shap") is not None, "BLOCKED: shap 미설치 — 단위 실측 미실행")
+    def test_shap_units_are_what_the_contributions_add_up_to(self) -> None:
+        """#280 리뷰 N2 — 기여 합 + 기대값이 RF 는 확률, HistGB 는 로그오즈를 복원한다(SHAP_UNITS 가 맞는지 실측)."""
+        import numpy as np
+        import shap
+
+        from src.decision import churn
+
+        for name in ("random_forest", "hist_gb"):
+            model = churn.make_model(name, 3).fit(self.X, self.y)
+            Xt = model[:-1].transform(self.X.iloc[:15].astype(float))
+            explainer = shap.TreeExplainer(model[-1])
+            values = explainer.shap_values(Xt)
+            values = np.asarray(values[1] if isinstance(values, list) else values)
+            values = values[:, :, 1] if values.ndim == 3 else values
+            base = np.atleast_1d(explainer.expected_value)
+            total = values.sum(axis=1) + (base[1] if len(base) > 1 else base[0])
+            proba = model.predict_proba(self.X.iloc[:15].astype(float))[:, 1]
+            target = {"probability": proba, "log_odds": np.log(proba / (1 - proba))}[churn.shap_unit(name)]
+            with self.subTest(name):
+                self.assertTrue(np.allclose(total, target, atol=1e-8))
 
     @unittest.skipUnless(HAVE_PLOT, "BLOCKED: matplotlib/shap 미설치 — 그림 미생성(통과가 아니다)")
     def test_summary_plot_is_written(self) -> None:

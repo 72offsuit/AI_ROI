@@ -328,6 +328,12 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         meta = _read(self.run_dir, "run_meta")
         self.assertEqual([meta["timeline"]["t1"], meta["timeline"]["t2"]], [t.isoformat() for t in index_times])
 
+    def test_churn_records_the_deployed_threshold_next_to_the_table(self) -> None:
+        """PR #280 리뷰 R1 — 배치 객체의 임계 · 규칙을 비교표와 따로 남긴다(가짜 모델은 임계가 없어 null)."""
+        record = _read(self.run_dir, "churn_eval")["deployed_threshold"]
+        self.assertEqual({"value", "rule", "note"}, set(record))
+        self.assertIsNone(record["value"])
+
     def test_rct_arms_follow_design(self) -> None:
         rct = _read(self.run_dir, "run_meta")["rct"]
         counts = rct["arm_counts"]
