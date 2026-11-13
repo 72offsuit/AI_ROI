@@ -34,8 +34,9 @@ def _isolated_probe(mode):
 
     sys.path.insert(0, str(ROOT))
     # DECISION_API 에 등록된 모듈 전부 — 등록 함수는 실행 루프가 필요할 때만 불러오는 선택 모듈이다.
-    # #214 에서 모델 저장 · Feature Store · 버전 기록 모듈을 등록했다.
+    # #214 에서 모델 저장 · Feature Store · 버전 기록 모듈을, #217 2부에서 12개월 CLV 모듈을 등록했다.
     optional = ("src.decision.data", "src.decision.features", "src.decision.churn", "src.decision.clv",
+                "src.decision.clv_lifetime",
                 "src.decision.uplift", "src.decision.segments", "src.decision.strategies", "src.decision.roi",
                 "src.decision.ab_test", "src.decision.optimize", "src.decision.model_store",
                 "src.decision.feature_store", "src.decision.versions", "sklearn", "torch", "shap")

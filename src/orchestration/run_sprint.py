@@ -183,6 +183,11 @@ DECISION_API: dict[str, tuple[str, str]] = {
     # #215 — SHAP 요약 그림 · 고객별 설명
     "write_shap_summary": ("src.decision.churn", "write_shap_summary"),
     "explain_top_risk": ("src.decision.churn", "explain_top_risk"),
+    # #217 2부 — 12개월 CLV(BG/NBD + Gamma-Gamma)
+    "fit_lifetime": ("src.decision.clv_lifetime", "fit_lifetime"),
+    "predict_lifetime": ("src.decision.clv_lifetime", "predict_lifetime"),
+    "evaluate_lifetime": ("src.decision.clv_lifetime", "evaluate_lifetime"),
+    "clv_table": ("src.decision.clv_lifetime", "clv_table"),
 }
 
 
@@ -1444,6 +1449,14 @@ def model_scores(kind: str, evaluation: Mapping[str, Any], name: Any) -> tuple[A
                            "객체는 전체 RCT 로 다시 학습했으므로 이 점수가 저장 객체의 미학습 점수는 아니다"
                            if test else "test 분할 점수가 없다 — null"),
         }
+    if kind == "clv_12m":
+        validation = (evaluation.get("clv_12m") or {}).get("validation_42d") or {}
+        test = _pick(validation.get("revenue"), ("spearman", "mae", "predicted_total", "actual_total"))
+        return None, test, {
+            "cv_score": "확률 모형(BG/NBD · Gamma-Gamma)은 우도 최대로 맞춘다 — 교차검증 점수가 없다 — null",
+            "test_score": ("t1 이후 42일 T0 군(처치 없음) 실제 매출과 예측 비교 — 12개월 실제가 아니다"
+                           if test else "검증 결과가 없다 — null"),
+        }
     cv = _pick(row, ("mae", "rmse", "spearman", "top20_hit"))
     return cv, None, {
         "cv_score": f"교차검증 OOF — {evaluation.get('cv_scheme') or 'clv_eval.cv_scheme'}",
@@ -1460,10 +1473,12 @@ def persist_models(root: Path, run_id: str, ctx: Mapping[str, Any],
     save = decision_fn("save_model")
     plan = {
         "churn": ("churn_model", lambda: ctx["churn_train"],
-                  getattr(ctx.get("churn_model"), "name", None) or evaluations["churn"].get("best_proposed")),
+                  getattr(ctx.get("churn_model"), "name", None) or (evaluations.get("churn") or {}).get("best_proposed")),
         "uplift": ("uplift_model", lambda: (ctx["X_rct"], ctx["treatment"], 1 - ctx["Y_rct"]["churn"]),
-                   evaluations["uplift"].get("fitted_method")),
+                   (evaluations.get("uplift") or {}).get("fitted_method")),
         "clv": ("clv_model", lambda: (ctx["X_rct"], ctx["Y_rct"]["revenue"]), "hist_gb"),
+        # #217 2부 — 학습 데이터는 t1 미만 구매 요약(모델이 지문을 갖고 있다). 행 수 = 요약 고객 수
+        "clv_12m": ("clv_12m_model", None, getattr(ctx.get("clv_12m_model"), "name", None) or "bgnbd_gamma_gamma"),
     }
     records: dict[str, Any] = {}
     results: dict[str, Any] = {}
@@ -1472,12 +1487,18 @@ def persist_models(root: Path, run_id: str, ctx: Mapping[str, Any],
             results[kind] = {"status": "not_run", "reason": f"{kind} 모델이 없다 — 단계 미실행 또는 실패"}
             continue
         try:
-            frames = data()
-            cv, test, notes = model_scores(kind, evaluations[kind], name)
+            if data is None:  # clv_12m — 모델이 학습 요약의 지문 · 고객 수를 갖고 있다
+                model_notes = getattr(ctx[key], "notes", None) or {}
+                dataset_version = f"rfm-t1-{str(model_notes.get('summary_sha256', 'unknown'))[:12]}"
+                rows = getattr(ctx[key], "n_customers", None)
+            else:
+                frames = data()
+                dataset_version, rows = f"rct-t1-{digest(*frames)[:12]}", int(len(frames[0]))
+            cv, test, notes = model_scores(kind, evaluations.get(kind) or {}, name)
             meta = save(target, kind, ctx[key], model_version=f"{kind}-{name}-{run_id}",
-                        dataset_version=f"rct-t1-{digest(*frames)[:12]}", feature_version=feature_version,
+                        dataset_version=dataset_version, feature_version=feature_version,
                         cv_score=cv, test_score=test, score_notes=notes,
-                        extra={"run_id": run_id, "method": name, "training_rows": int(len(frames[0]))})
+                        extra={"run_id": run_id, "method": name, "training_rows": rows})
         except Exception as error:  # 저장 실패를 삼키지 않는다 — failed 로 적고 종료 코드에 반영한다
             results[kind] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
             continue
@@ -1555,6 +1576,75 @@ def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any
     except Exception as error:  # 삼키지 않는다 — failed 와 사유. churn 은 무작위 교차검증으로 고른다
         record.update(status="failed", reason=f"{type(error).__name__}: {error}"[:300])
     return record
+
+
+CLV_FILE = "clv_predictions.csv"
+
+
+def lifetime_clv(ctx: Mapping[str, Any], config: SprintConfig, loaded_models: Mapping[str, Any],
+                 loaded_manifest: Mapping[str, Any]) -> dict[str, Any]:
+    """#217 2부 — 12개월 CLV 모델을 t1 에서 학습(또는 불러오기)하고 T0 군 42일 실제와 비교한다.
+
+    함수가 없으면 not_run(사유) — 전략은 42일 매출 CLV 로 대신하지 않고 not_run 이 된다. 학습 · 검증 중 오류는
+    clv 단계 실패로 올린다(삼키지 않는다).
+    """
+    settings = dict(load_model_config().clv.lifetime)
+    try:
+        fit = decision_fn("fit_lifetime")
+        evaluate = decision_fn("evaluate_lifetime")
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    if config.load_models is not None:
+        if "clv_12m" not in loaded_models:
+            return {"status": "not_run",
+                    "reason": f"{config.load_models} 에 clv_12m 모델이 없다 — 다시 학습하지 않는다"}
+        model, meta = loaded_models["clv_12m"]
+        record: dict[str, Any] = {"status": "ok", **_loaded_record(config.load_models, meta, loaded_manifest)}
+    else:
+        model = fit(ctx["events_t2"], ctx["t1"], horizon_months=settings["horizon_months"],
+                    annual_discount_rate=settings["annual_discount_rate"])
+        record = {"status": "ok", "model_source": "t1 미만 구매 이력(처치 전)으로 학습"}
+    ctx["clv_12m_model"] = model
+    actual = ctx["Y_rct"].loc[ctx["treatment"] == "T0"]
+    record["validation_42d"] = evaluate(model, ctx["events_t2"], ctx["t1"], actual, window_days=LABEL_WINDOW_DAYS,
+                                        high_value_share=settings["high_value_share"],
+                                        sensitivity=tuple(settings["discount_sensitivity"]))
+    record.update({
+        "model": getattr(model, "name", None), "fitted_at": getattr(model, "fitted_at", None),
+        "bgnbd": getattr(model, "bgnbd", None), "gamma_gamma": getattr(model, "gamma_gamma", None),
+        "n_customers_fit": getattr(model, "n_customers", None), "fit_notes": getattr(model, "notes", None),
+        "settings": settings,
+        "basis": "12개월 할인 매출 현재가치(월말 현금흐름) — 이익은 전략이 margin_rate 를 곱한다(DR-217)",
+        "validation_population": "탐색 RCT T0 군(처치 없음) — t1 이후 42일. 12개월 실제는 최종 실행 연장 관측(#217 2b)",
+    })
+    return record
+
+
+def clv_predictions_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Path], run_id: str,
+                         loaded_models: Mapping[str, Any]) -> dict[str, Any]:
+    """#217 2부 — ``clv_predictions.csv``(SRS CLV-005): t2 점수 고객의 12개월 CLV · 백분위 · 상위 20% 플래그."""
+    clv = (ctx.get("scores") or {}).get("clv")
+    model = ctx.get("clv_12m_model")
+    if clv is None or model is None:
+        return {"status": "not_run", "reason": "12개월 CLV 점수가 없다(모델 없음 · 점수 단계 미실행)"}
+    try:
+        settings = dict(load_model_config().clv.lifetime)
+        version = ((loaded_models.get("clv_12m") or (None, {}))[1].get("model_version")
+                   or f"clv_12m-{getattr(model, 'name', 'unknown')}-{run_id}")
+        table = decision_fn("clv_table")(clv, model_version=version, high_value_share=settings["high_value_share"])
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(path, index=False)
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    extra_files[CLV_FILE] = path
+    known = table["predicted_clv_12m"].notna()
+    return {"status": "ok", "file": CLV_FILE, "rows": int(len(table)), "rows_without_clv": int((~known).sum()),
+            "high_value_rows": int(table["high_value_flag"].fillna(False).sum()), "clv_model_version": version,
+            "columns": list(table.columns),
+            "note": "구매 이력이 없는 고객은 값 · 백분위 · 플래그가 비어 있다(0 으로 채우지 않는다) — 추정 불가 수"}
 
 
 CATE_FILE = "cate.jsonl"
@@ -1945,6 +2035,9 @@ def run(config: SprintConfig) -> Path:
                     ))  # horizon_days · models … (대시보드 ClvEval)
                 except NotRun as reason:
                     clv_eval["evaluation_status"] = {"status": "not_run", "reason": str(reason)}
+            # #217 2부 — 12개월 CLV(BG/NBD + Gamma-Gamma): t1 미만 구매 이력(처치 전)으로 학습하고 T0 군 42일 실제와 비교.
+            # 전략 S4 · S5 · What-if · 세그먼트의 가치는 이 값(× margin_rate)이다. 위 42일 매출 모델은 단기 비교로 남긴다.
+            clv_eval["clv_12m"] = lifetime_clv(ctx, config, loaded_models, loaded_manifest)
 
         # A/B — 탐색 RCT 자체 분석 -------------------------------------------
         with log.stage("ab_test", requires=("training_set",)):
@@ -1988,10 +2081,12 @@ def run(config: SprintConfig) -> Path:
                 scores["cate"] = decision_fn("predict_cate")(ctx["uplift_model"], X2)
             else:
                 reasons["cate"] = f"uplift 단계 {log.status('uplift')}"
-            if "clv_model" in ctx:
-                scores["clv"] = decision_fn("predict_clv")(ctx["clv_model"], X2)
+            if "clv_12m_model" in ctx:  # #217 2부 — 12개월 할인 매출 CLV(구매 이력 없는 고객은 NaN)
+                scores["clv"] = decision_fn("predict_lifetime")(ctx["clv_12m_model"], ctx["events_t2"], ctx["t2"],
+                                                                customers=X2.index)
             else:
-                reasons["clv"] = f"clv 단계 {log.status('clv')}"
+                reasons["clv"] = ("12개월 CLV 모델이 없다 — "
+                                  + str((clv_eval.get("clv_12m") or {}).get("reason") or f"clv 단계 {log.status('clv')}"))
             # S1 입력 · Eligible(t2) — 이벤트에서 계산한다. purchase 를 만들지 않는 판이면 계산하지 않는다
             # (0 으로 채우지 않는다). 그러면 S1~S5 가 not_run 이다 — 모두 Eligible 안에서만 고른다(DR-234).
             # 가입일 명부는 본선 세계가 t2 에 있는 지금(분기 restore 전) 받는다.
@@ -2316,6 +2411,9 @@ def run(config: SprintConfig) -> Path:
         comparison["strategies"] = rows
 
         events_frame = ctx.get("events_t2", ctx.get("events_t1"))
+        # #217 2부 — clv_predictions.csv (CLV-005). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 clv_eval 에 남긴다.
+        clv_eval["clv_predictions_file"] = clv_predictions_file(out / "artifacts" / CLV_FILE, ctx, extra_outputs, run_id,
+                                                                loaded_models)
         # #217 — 고객별 τ̂ (S8 채점 입력). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 uplift_eval 에 남긴다.
         uplift_eval["cate_file"] = cate_file(out / "artifacts" / CATE_FILE, ctx, extra_outputs,
                                              loaded=config.load_models is not None)
@@ -2347,7 +2445,8 @@ def run(config: SprintConfig) -> Path:
                 try:
                     persistence["models"] = persist_models(
                         Path(config.models_root), run_id, ctx,
-                        {"churn": churn_eval, "uplift": uplift_eval, "clv": clv_eval}, run_info)
+                        {"churn": churn_eval, "uplift": uplift_eval, "clv": clv_eval, "clv_12m": clv_eval},
+                        run_info)
                 except Exception as error:  # NotRun(모듈 없음) 포함 — 삼키지 않고 failed 로 적는다
                     persistence["models"] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
         if config.feature_store_root is not None:
