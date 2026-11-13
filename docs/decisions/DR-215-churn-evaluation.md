@@ -49,7 +49,7 @@ GATE 3 모델 동결(11/27)에 "왜 이 모델인가"를 말할 근거가 ROC-AU
 4. **SHAP.** 다시 학습하지 않고 **배치될 확정 모델**(`fit_best_churn` 결과 · 불러온 모델)을 설명한다.
    - `shap_summary.png` — 학습 모집단 표본(최대 `shap_sample`)의 beeswarm, 결과 폴더에 함께 둔다. 실패해도 churn 단계는 이어 가고 `churn_eval.shap_summary` 에 사유를 남긴다.
    - SHAP Local — t2 점수 시점에 Eligible(t2) 안에서 이탈 확률 상위 200명, 고객마다 영향이 큰 Feature 3개와 방향(`raises_risk` · `lowers_risk`) → `churn_eval.shap_local`. **Eligible(t2) 가 0명이면 전체 고객으로 넓히지 않고 not_run**(PR #280 리뷰 N1). 후보를 정하지 않은 경우(None — purchase 를 만들지 않는 판)만 전체 점수 고객에서 고르고 `population: all_scored` 로 적는다.
-   - **기여값의 단위는 모델마다 다르다**(PR #280 리뷰 N2) — TreeExplainer 기본 출력에서 기여 합 + 기대값이 RandomForest 는 **확률**, HistGB 는 **로그오즈**를 복원한다(실측, 시험 `test_shap_units_are_what_the_contributions_add_up_to`). 결과에 `shap_unit` 으로 싣는다 — 크기를 해석하는 화면은 이 값을 본다.
+   - **기여값의 단위는 모델마다 다르다**(PR #280 리뷰 N2) — TreeExplainer 기본 출력에서 기여 합 + 기대값이 RandomForest 는 **확률**, HistGB · XGBoost · LightGBM 은 **로그오즈**를 복원한다(실측 — XGBoost · LightGBM 은 #215 2부에서 추가, 시험 `test_shap_units_are_what_the_contributions_add_up_to`). 결과에 `shap_unit` 으로 싣는다 — 크기를 해석하는 화면은 이 값을 본다.
    - 그림에 `matplotlib==3.11.2`(개발 venv 판)를 `requirements.txt` 에 고정했다.
 5. **모델 채택 기준(멘토 피드백, GATE 3 에 쓴다).** 아래 셋을 **모두** 만족할 때 채택한다. 하나라도 못 하면 단순 기준(규칙 · 로지스틱)을 쓴다.
    1. 무작위 실험(RCT)에서 처치 효과가 확인된다 — 이탈 모델이 쓰일 전략(S2~)의 전제다(`ab_test`).

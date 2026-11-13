@@ -333,9 +333,10 @@ THRESHOLD_COLUMNS_NOTE = {
 }
 
 #: TreeExplainer 기본 출력(model_output="raw")의 단위 — 기여 합 + 기대값이 무엇을 복원하나(#280 리뷰 N2).
-#: 실측(shap 0.54.1 · sklearn 1.9): random_forest = 양성 확률(오차 ~1e-15), hist_gb = 양성 로그오즈(~1e-14).
+#: 실측(shap 0.54.1 · sklearn 1.9 · xgboost 3.4.1 · lightgbm 4.7.0): random_forest = 양성 확률(오차 ~1e-15),
+#: hist_gb · lightgbm = 양성 로그오즈(~1e-14), xgboost = 양성 로그오즈(float32 — ~3e-6).
 #: 표에 없는 모델은 None — 확인하지 않은 단위를 적지 않는다.
-SHAP_UNITS = {"random_forest": "probability", "hist_gb": "log_odds"}
+SHAP_UNITS = {"random_forest": "probability", "hist_gb": "log_odds", "xgboost": "log_odds", "lightgbm": "log_odds"}
 
 
 def shap_unit(name: str) -> str | None:
