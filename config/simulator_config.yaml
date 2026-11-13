@@ -1,5 +1,5 @@
 {
-  "config_version": "sim-gen-v6",
+  "config_version": "sim-gen-v7",
   "notes": [
     "S2(#76) 생성 config. 내용은 JSON 문법만 쓴다 — 표준 json 으로 읽어 의존성 없는 Python 3.10 에서도 생성이 돈다(사용자 확정 U2).",
     "값은 모두 정수다. ratio_bp 는 1/10000, mu_ppm 은 1/1000000, kappa_milli·shape_milli 는 1/1000, sigma_ppm 은 1/1000000 단위다. 금액은 원, 구매 주기는 밀리일, 방문 빈도는 밀리회/주다.",
@@ -13,7 +13,8 @@
     "2026-10-22 실측 검증(#148 F4·F9·F10) 반영: 탐색 세션의 담기는 장바구니 이탈 성향 Trait 이 정한다(browse_add_to_cart_weight_pct), 구매 세션은 목표 금액만큼만 담고 넘치면 덜어낸다(intent_trim_over_pct), 조회의 일부는 과거 구매 상품을 다시 본다(reorder_scale_pct × 브랜드 충성도). 쿠폰은 유효 14일(economic_config T3 조건).",
     "sim-gen-v4(#183, 2026-10-28): 구매 의향 intent_scale_pct 180·이탈 onset 14,500ppm·쿠폰 받기 배율 40% 보정(20K seed 42·7 realism + 가드레일 seed 42~46 평균, 2026-10-29 PR #243 리뷰로 재보정), 반복 노출 감쇠(treatment.repeat_exposure), 재구매 게이트 탈락 이탈의 회복 배율(churn.gate_recovery_scale_pct 10%)을 더했다. 새 계수 모두 외부 정량 근거가 없다 — 근거와 민감도: docs/decisions/DR-183-purchase-calibration.md · DR-183-repeat-exposure.md.",
     "sim-gen-v5(#196, 2026-10-30): Sleeping Dog 직접 경로 — Negative 고객은 노출 순간 이탈 진행에 들어간다(negative_effect.onset_at_exposure_pct 100), Negative 비율 배율 negative_scale_pct 40 → 100(상한, Negative 확률 = 피로 Trait), 반복 노출 상한 negative_max_pct 60 → 100. #183 재보정(onset 14,500 · 쿠폰 받기 40) 위에서 정본 모집단(②) 13,000명 × 보정 seed 42~46 · 확인 seed 47~51 로 정했다. 쿠폰 받기 배율 40 은 그대로(② 에서 T2 11~12% · T3 7%). 값은 문헌 가정(외부 정량 근거 없음) — 근거·실측: docs/decisions/DR-196-sleeping-dog-path.md.",
-    "sim-gen-v6(#198, 2026-10-30): behavior.aux_events 추가 — 부수 이벤트 4종(search·return_visit·review·cs_contact)을 전용 스트림에서 생성한다. 리뷰 배율 40 · 검색 의도 가중 175 는 실측으로 외부 근거 범위에 맞췄고 CS · 검색 배율은 원문 100 이다 — 근거·실측: docs/decisions/DR-198-aux-events.md."
+    "sim-gen-v6(#198, 2026-10-30): behavior.aux_events 추가 — 부수 이벤트 4종(search·return_visit·review·cs_contact)을 전용 스트림에서 생성한다. 리뷰 배율 40 · 검색 의도 가중 175 는 실측으로 외부 근거 범위에 맞췄고 CS · 검색 배율은 원문 100 이다 — 근거·실측: docs/decisions/DR-198-aux-events.md.",
+    "sim-gen-v7(#282, 2026-11-13): GATE 1 봉인 전 재보정 — T3 팔 고유 계수만 T1 + α(T3 − T1), α 0.25 로 낮췄다(방문 22 · 구매 의도 28 · 이탈 보호 52 · 회복 35,000ppm). 쿠폰 · 다른 팔 · 전역 계수는 그대로. 후보군과 선택 규칙은 탐색 전에 고정했고 보정 seed 42~46 만 썼다 — 근거: docs/decisions/DR-282-t3-recalibration.md."
   ],
   "personas": [
     {
@@ -430,10 +431,10 @@
         },
         "T3": {
           "sensitivity": "coupon_sensitivity",
-          "visit_boost_pct": 30,
-          "intent_boost_pct": 35,
-          "onset_protect_pct": 60,
-          "recovery_ppm": 50000,
+          "visit_boost_pct": 22,
+          "intent_boost_pct": 28,
+          "onset_protect_pct": 52,
+          "recovery_ppm": 35000,
           "coupon": {
             "discount_krw": 7000,
             "min_order_krw": 50000,
