@@ -72,7 +72,7 @@ git submodule update --init
 핵심 금지 사항:
 
 - `simulator/`에서 작업할 때 **`results/`와 모델 리포트를 읽지 않는다.** AI 성능을 이유로 시뮬레이터 파라미터를 조정하지 않는다.
-- `decision/`에서 작업할 때 **`data/hidden/`·`data/ground_truth/`·`src/simulator/`를 읽지 않는다.**
+- `decision/`에서 작업할 때 **`data/hidden/`·`data/ground_truth/`·`src/simulator/`를 읽지 않는다.** 시뮬레이터 생성 규칙 · 보정값 문서(페르소나 · `config/simulator*.yaml` · 일부 DR)도 읽지 않는다 — 전체 목록은 `docs/team_boundaries.json` 의 `teams.sys.must_not_read`.
 - **AUC·Qini·Incremental Profit 이야기가 시뮬레이터 작업 중에 나오면 멈추고 사용자에게 보고한다.**
 
 가장 위험한 누수는 코드가 파일을 훔쳐보는 것이 아니라 **결과를 본 뒤 시뮬레이터를 고치는 것**이다 (PRD §80 Risk 1). 이 규칙은 `tests/test_isolation.py`가 강제한다.
