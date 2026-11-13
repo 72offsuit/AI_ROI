@@ -1616,7 +1616,8 @@ def run(config: SprintConfig) -> Path:
             skip_if_not_run(log, "rct_assign")
             # 모집단 = t1 의 Eligible(#194 · DR-234). 가입일 명부는 본선 세계가 t1 에 있을 때 받는다.
             observed = sorted(ctx["events_t1"]["customer_id"].dropna().unique().tolist())
-            judged = eligibility(ctx["events_t1"], ctx["t1"], observed, customer_signups(ctx["t1"]))
+            ctx["signups_t1"] = customer_signups(ctx["t1"])  # #215 — 홀드아웃 Eligible(t2) 판정에도 쓴다
+            judged = eligibility(ctx["events_t1"], ctx["t1"], observed, ctx["signups_t1"])
             eligible = [cid for cid, flag in judged["flags"].items() if flag]
             if not eligible:
                 raise NotRun(f"t1 의 Eligible 고객이 0명이다 — {judged['counts']}")
@@ -2111,7 +2112,18 @@ def run(config: SprintConfig) -> Path:
                 raise NotRun("S0 분기의 유효한 churn 라벨이 없다")
             # #215 — 학습 모집단(Eligible(t1) 중 RCT 무처치 T0 군)과 같은 정의로 평가한다: Eligible(t2) 이면서
             # t1 실험에서 쿠폰 · 알림(T1~T4)을 받지 않은 고객. 전체 고객 기준은 참고로만 싣는다(멘토 피드백).
-            eligible = set(ctx.get("eligible_t2") or [])
+            if ctx.get("eligible_t2") is not None:
+                eligible, eligible_source = set(ctx["eligible_t2"]), "scores_t2 단계 판정"
+            else:
+                # --mode evaluate 는 scores_t2 를 돌지 않는다 — 여기서 같은 정의로 판정한다. t1 이후 가입자는 t2 에
+                # 가입 42일이라 Eligible(가입 60일 이상)일 수 없으므로 t1 명부로 충분하다(시뮬레이터 추가 호출 없음).
+                if not ctx.get("purchase_generated"):
+                    raise NotRun("이 시뮬레이터 판이 purchase 를 만들지 않아 Eligible(t2) 를 판정할 수 없다")
+                if "signups_t1" not in ctx or "events_t2" not in ctx:
+                    raise NotRun("Eligible(t2) 판정 입력(t1 가입일 명부 · t2 이벤트)이 없다")
+                judged = eligibility(ctx["events_t2"], ctx["t2"], ctx["X2"].index, ctx["signups_t1"])
+                eligible = {cid for cid, flag in judged["flags"].items() if flag}
+                eligible_source = "churn_temporal_holdout 단계 판정 (t1 가입일 명부)"
             if not eligible:
                 raise NotRun("Eligible(t2) 가 없다 — 학습 모집단과 같은 범위로 평가할 수 없다")
             treated = {cid for cid, arm in (ctx.get("rct_assignment") or {}).items() if arm != "T0"}
@@ -2133,13 +2145,15 @@ def run(config: SprintConfig) -> Path:
             holdout = call_by_name(decision_fn("evaluate_temporal_holdout"), pool)
             holdout = {**holdout, "population_audit": audit,
                        "population": "Eligible(t2) ∩ t1 실험 무처치(T0 · 미배정) — 학습 모집단과 같은 정의",
+                       "eligible_source": eligible_source,
                        "n_labeled_all": int(len(labels_all)),
                        "n_excluded_not_eligible": int(sum(1 for cid in labels_all.index if cid not in eligible)),
                        "n_excluded_rct_treated": int(sum(1 for cid in labels_all.index
                                                          if cid in eligible and cid in treated))}
             churn_eval["temporal_holdout"] = holdout  # 확정 모델 1회 평가 — 전체 고객으로 다시 재지 않는다
             # 대시보드 ChurnModel.temporal_holdout — 같은 이름의 모델 행에 지표만 붙인다
-            meta_keys = {"name", "scheme", "n_train", "n_test", "pos_rate_train", "pos_rate_test", "threshold"}
+            meta_keys = {"name", "scheme", "n_train", "n_test", "pos_rate_train", "pos_rate_test", "threshold",
+                         "n_labeled_all", "n_excluded_not_eligible", "n_excluded_rct_treated"}  # #215 범위 기록
             models = churn_eval.get("models")
             for model in models if isinstance(models, list) else []:
                 if isinstance(model, dict) and isinstance(holdout, Mapping) and model.get("name") == holdout.get("name"):
