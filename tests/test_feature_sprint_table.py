@@ -575,7 +575,7 @@ class TestOutcomeObservationContract(unittest.TestCase):
         self.assertIsNone(row["guardrails"]["retention_up_cost_surge"]["triggered"])
 
     def run_fake_contract(self, *, states=None, rejected=None, read_fail=None, include_uplift=False,
-                          real_margin=False, profile="smoke", warmup_days=90):
+                          real_margin=False, profile="smoke", warmup_days=90, include_lifetime=False):
         """가짜 생성·가짜 모델과 실제 run/build_outcomes/집계/ROI를 연결한다. 실제 학습·E2E 아님.
 
         ``profile`` · ``warmup_days`` 는 SprintConfig 로 그대로 넘긴다. ``warmup_days=None`` 이면 run() 이
@@ -720,6 +720,23 @@ class TestOutcomeObservationContract(unittest.TestCase):
                        evaluate_uplift_models=evaluate_uplift,
                        fit_uplift=lambda X, treatment, y, method, seed=0: object())
             selected = selected | {"uplift"}
+        if include_lifetime:  # #217 2부 · PR #293 리뷰 N2 — 12개월 CLV 단계만(42일 단기 clv 단계는 범위 밖)
+            from src.decision.clv_lifetime import clv_table
+
+            def fit_lifetime(events, index_time, *, horizon_months, annual_discount_rate):
+                captured["lifetime_fit"] = {"index_time": index_time, "horizon_months": horizon_months}
+                return SimpleNamespace(name="fixture_lifetime", bgnbd={}, gamma_gamma={}, fitted_at=str(index_time),
+                                       n_customers=1, notes={})
+
+            def evaluate_lifetime(model, events, index_time, actual, *, window_days, high_value_share, sensitivity=()):
+                return {"window_days": int(window_days), "n": int(len(actual)), "revenue": {}}
+
+            def predict_lifetime(model, events, index_time, customers=None):
+                return pd.Series(1000.0, index=pd.Index(list(customers)), name="clv_12m")
+
+            fns.update(fit_lifetime=fit_lifetime, evaluate_lifetime=evaluate_lifetime,
+                       predict_lifetime=predict_lifetime, clv_table=clv_table)
+            selected = selected | {"clv_12m"}
         with tempfile.TemporaryDirectory() as temp, contextlib.ExitStack() as stack:
             patches = {"sim": api, "decision_fn": decision, "decision_available": lambda name: name in fns,
                                 "verify_event_run": verify,
@@ -815,6 +832,17 @@ class TestOutcomeObservationContract(unittest.TestCase):
         self.assertEqual(("main", windows[1][1] - timedelta(days=42), windows[1][1]), windows[2])
         self.assertEqual(["main", "main", "main", "S0", "S1"], calls)
         self.assertEqual(["margin_rate", "s1_purchase_gate"], result["run_meta"]["main_metric_windows"]["history"]["uses"])
+
+    def test_lifetime_clv_stage_runs_without_the_short_term_clv_stage(self):
+        """PR #293 리뷰 N2 — 12개월 CLV(전략 가치)는 42일 단기 CLV 단계와 독립된 단계다."""
+        result, captured, _, _ = self.run_fake_contract(include_lifetime=True)
+        stages = {s["name"]: s for s in result["run_meta"]["stages"]}
+        self.assertEqual("not_run", stages["clv"]["status"])                 # 실행 범위 밖 — 단기 모형 없음
+        self.assertEqual("ok", stages["clv_12m"]["status"], stages["clv_12m"])
+        self.assertEqual("ok", result["clv_eval"]["clv_12m"]["status"])
+        self.assertEqual(12, captured["lifetime_fit"]["horizon_months"])
+        self.assertIn("clv", captured["scores"])                              # t2 가치 점수는 12개월 CLV
+        self.assertEqual("ok", result["clv_eval"]["clv_predictions_file"]["status"])
 
     def test_prior_label_uses_its_own_window_state(self):
         """PR #281 리뷰 Q1 — 앞 기준일 라벨의 구매 관측은 그 창의 metrics 상태로 판정한다(이력 · 본선 라벨과 독립)."""

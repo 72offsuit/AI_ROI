@@ -56,7 +56,7 @@ CONFIG_FILES = ("config/model_config.yaml", "config/experiment_config.yaml")
 
 TRAIN_STAGES = frozenset({
     "simulate_warmup", "read_events_t1", "rct_assign", "features_t1", "simulate_rct",
-    "read_events_t2", "outcomes_t1", "training_set", "churn", "uplift", "clv",
+    "read_events_t2", "outcomes_t1", "training_set", "churn", "uplift", "clv", "clv_12m",
 })
 SCORING_STAGES = frozenset({"features_t2", "scores_t2", "segments"})
 EVALUATION_STAGES = frozenset({"ab_test", "features_t2", "snapshot_t2", "strategy_S0", "churn_temporal_holdout"})

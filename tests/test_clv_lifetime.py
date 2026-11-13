@@ -22,16 +22,17 @@ def _event(cid, ts, order, amount, *, event_type="purchase", event_id=None):
             "order_id": order, "order_amount": amount, "timestamp": ts}
 
 
-def _simulate_summary(n, seed, T_max=365.0):
+def _simulate_summary(n, seed, T_max=365.0, params=None):
     """BG/NBD 생성 과정 그대로(연속 시간) — 첫 거래 시각 0, 반복 거래 뒤에만 이탈."""
     import numpy as np
     import pandas as pd
 
+    bg = params or TRUE_BG
     rng = np.random.default_rng(seed)
     rows = []
     for i in range(n):
-        lam = rng.gamma(TRUE_BG["r"], 1 / TRUE_BG["alpha"])
-        p = rng.beta(TRUE_BG["a"], TRUE_BG["b"])
+        lam = rng.gamma(bg["r"], 1 / bg["alpha"])
+        p = rng.beta(bg["a"], bg["b"])
         T = rng.uniform(T_max / 2, T_max)
         t, x, tx = 0.0, 0, 0.0
         while True:
@@ -146,8 +147,22 @@ class TestModels(unittest.TestCase):
         self.assertTrue((long > short).all())
         # 같은 구매 수라도 최근에 산 고객이 더 살아 있을 가능성이 높다
         self.assertGreater(long[0], long[1])
-        with self.assertRaises(ValueError):
-            expected_purchases({**TRUE_BG, "a": 0.9}, 30.0, x, tx, T)
+        with self.assertRaises(ValueError):  # 모수는 양수여야 한다(a ≤ 1 은 허용 — 아래 TestExpectedPurchasesEveryA)
+            expected_purchases({**TRUE_BG, "a": 0.0}, 30.0, x, tx, T)
+
+    def test_fitted_a_below_one_still_predicts(self) -> None:
+        """PR #293 리뷰 R1 — 참 a < 1 인 생성 과정에서 정상 수렴한 모형(a < 1)의 12개월 예측이 거부되지 않는다."""
+        import numpy as np
+
+        from src.decision.clv_lifetime import expected_purchases, fit_bgnbd
+
+        train = _simulate_summary(2000, seed=22, params={"r": 0.8, "alpha": 20.0, "a": 0.6, "b": 2.0})
+        bg = fit_bgnbd(train)
+        self.assertTrue(bg["converged"])
+        self.assertLess(bg["a"], 1.0)
+        x, tx, T = (train[c].to_numpy() for c in ("frequency", "recency", "T"))
+        values = expected_purchases(bg, 365.0, x, tx, T)
+        self.assertTrue(np.isfinite(values).all() and (values >= 0).all())
 
     def test_gamma_gamma_population_fallback_and_shrinkage(self) -> None:
         import numpy as np
@@ -183,6 +198,89 @@ class TestModels(unittest.TestCase):
             fit_bgnbd(tiny)
         with self.assertRaises(ValueError):
             fit_gamma_gamma(tiny)
+
+
+def _closed_form(bg, t, x, tx, T):
+    """FHL 2005 식 (10) 닫힌 식 — a > 1 에서만 쓰는 독립 기준값."""
+    from scipy.special import hyp2f1
+
+    r, alpha, a, b = bg["r"], bg["alpha"], bg["a"], bg["b"]
+    num = (a + b + x - 1) / (a - 1) * (1 - ((alpha + T) / (alpha + T + t)) ** (r + x)
+                                       * hyp2f1(r + x, b + x, a + b + x - 1, t / (alpha + T + t)))
+    return num / (1 + (a / (b + x - 1) * ((alpha + T) / (alpha + tx)) ** (r + x) if x > 0 else 0.0))
+
+
+def _adaptive(bg, t, x, tx, T):
+    """p 적분을 적응 구적(scipy.integrate.quad)으로 — 구현의 Gauss–Jacobi 와 다른 계산 경로의 기준값."""
+    import math
+
+    from scipy import integrate
+    from scipy.special import betaln
+
+    r, alpha, a, b = bg["r"], bg["alpha"], bg["a"], bg["b"]
+    k, c = r + x, t / (alpha + T)
+    density = lambda p: math.exp((a - 1) * math.log(p) + (b + x - 1) * math.log1p(-p) - betaln(a, b + x))  # noqa: E731
+    value = integrate.quad(lambda p: -math.expm1(-k * math.log1p(c * p)) / p * density(p), 0, 1,
+                           limit=500, epsabs=1e-13, epsrel=1e-12)[0]
+    return value / (1 + (a / (b + x - 1) * ((alpha + T) / (alpha + tx)) ** (r + x) if x > 0 else 0.0))
+
+
+@unittest.skipUnless(HAVE_DEPS, SKIP_REASON)
+class TestExpectedPurchasesEveryA(unittest.TestCase):
+    """PR #293 리뷰 R1 — 유한 기간 기대 거래 수는 a ≤ 1 에서도 유한하다(FHL 2022 정정 노트). 거부하지 않고 계산한다."""
+
+    CASES = ((0.0, 0.0, 10.0), (3.0, 95.0, 100.0), (1.0, 5.0, 300.0), (40.0, 360.0, 365.0))
+
+    def value(self, bg, t, x, tx, T):
+        from src.decision.clv_lifetime import expected_purchases
+
+        return float(expected_purchases(bg, t, [x], [tx], [T])[0])
+
+    def test_reviewer_reference_values(self) -> None:
+        """리뷰어가 양의 적분으로 따로 낸 값(r=.8, α=20, b=3, x=3, t_x=95, T=100, 30일)."""
+        base = {"r": 0.8, "alpha": 20.0, "b": 3.0}
+        for a, expected, places in ((0.5, 0.8142143, 7), (0.9, 0.7290014, 7), (1.0, 0.7102242, 7),
+                                    (1.5, 0.6284125507528046, 12)):
+            with self.subTest(a=a):
+                self.assertAlmostEqual(expected, self.value({**base, "a": a}, 30.0, 3.0, 95.0, 100.0), places=places)
+
+    def test_matches_the_closed_form_where_it_holds(self) -> None:
+        for bg in ({"r": 0.8, "alpha": 20.0, "a": 1.5, "b": 3.0}, {"r": 2.0, "alpha": 0.3, "a": 3.0, "b": 0.7},
+                   {"r": 0.2, "alpha": 1.0, "a": 1.05, "b": 9.0}):
+            for t in (1.0, 30.0, 365.0):
+                for x, tx, T in self.CASES:
+                    with self.subTest(bg=bg, t=t, x=x):
+                        ref = _closed_form(bg, t, x, tx, T)
+                        self.assertLess(abs(self.value(bg, t, x, tx, T) - ref), 1e-9 * max(1.0, abs(ref)))
+
+    def test_matches_an_independent_integral_for_a_at_or_below_one(self) -> None:
+        for bg in ({"r": 0.8, "alpha": 20.0, "a": 0.3, "b": 3.0}, {"r": 2.0, "alpha": 0.3, "a": 0.7, "b": 0.7},
+                   {"r": 0.5, "alpha": 0.05, "a": 1.0, "b": 2.0}):
+            for t in (1.0, 30.0, 365.0):
+                for x, tx, T in self.CASES:
+                    with self.subTest(bg=bg, t=t, x=x):
+                        ref = _adaptive(bg, t, x, tx, T)
+                        self.assertLess(abs(self.value(bg, t, x, tx, T) - ref), 1e-8 * max(1.0, abs(ref)))
+
+    def test_continuous_through_a_equal_one(self) -> None:
+        base = {"r": 0.8, "alpha": 20.0, "b": 3.0}
+        at_one = self.value({**base, "a": 1.0}, 30.0, 3.0, 95.0, 100.0)
+        for eps in (1e-3, 1e-6):
+            for a in (1 - eps, 1 + eps):
+                with self.subTest(a=a):
+                    self.assertLess(abs(self.value({**base, "a": a}, 30.0, 3.0, 95.0, 100.0) - at_one), 10 * eps)
+
+    def test_increases_with_the_horizon(self) -> None:
+        import numpy as np
+
+        from src.decision.clv_lifetime import expected_purchases
+
+        x, tx, T = np.array([0.0, 3.0, 12.0]), np.array([0.0, 95.0, 50.0]), np.array([50.0, 100.0, 200.0])
+        for a in (0.4, 1.0, 2.5):
+            values = np.array([expected_purchases({"r": 0.8, "alpha": 20.0, "a": a, "b": 3.0}, t, x, tx, T)
+                               for t in (1, 7, 30, 90, 180, 365)])
+            with self.subTest(a=a):
+                self.assertTrue((np.diff(values, axis=0) > 0).all())
 
 
 @unittest.skipUnless(HAVE_DEPS, SKIP_REASON)
@@ -255,7 +353,8 @@ class TestLifetimeEndToEnd(unittest.TestCase):
                                 sensitivity=(0.8, 1.2))
         self.assertEqual((42, len(ids), 0, 0),
                          (out["window_days"], out["n"], out["n_revenue_missing"], out["n_purchases_missing"]))
-        self.assertEqual({"predicted_mean", "actual_mean", "mae", "spearman"}, set(out["purchases"]))
+        self.assertEqual({"unit", "predicted_mean", "actual_mean", "actual_orders_mean", "mae", "spearman"},
+                         set(out["purchases"]))
         self.assertEqual({"predicted_total", "actual_total", "mae", "spearman"}, set(out["revenue"]))
         # 같은 생성 과정이므로 42일 매출 합이 크게 어긋나지 않는다(합성 데이터 기준 점검일 뿐)
         self.assertLess(abs(out["revenue"]["predicted_total"] / out["revenue"]["actual_total"] - 1), 0.25)
@@ -279,8 +378,35 @@ class TestLifetimeEndToEnd(unittest.TestCase):
         self.assertNotIn("discount_sensitivity", out)
         self.assertEqual((50, 10), (out["n_revenue_missing"], out["n_purchases_missing"]))
         self.assertIsNone(out["revenue"]["mae"])
-        self.assertEqual(0.0, out["purchases"]["actual_mean"])  # 결손 10명은 빼고 40명으로
+        # PR #293 리뷰 R2 — 비교할 실제 매출이 없으면 합계도 null 과 사유(빈 합 0 을 남기지 않는다)
+        self.assertEqual((None, None), (out["revenue"]["predicted_total"], out["revenue"]["actual_total"]))
+        self.assertIn("관측 미완료", out["revenue"]["reason"])
+        # 결손 10명은 빼고 40명으로 — 주문 수는 넘긴 actual 그대로, 구매일 수는 같은 창의 이벤트에서 센다(N1)
+        self.assertEqual(0.0, out["purchases"]["actual_orders_mean"])
+        window = self.events[(self.events["timestamp"] >= self.t1)
+                             & (self.events["timestamp"] < self.t1 + pd.Timedelta(days=42))
+                             & self.events["customer_id"].isin(ids[:40])]
+        days = window.assign(day=window["timestamp"].dt.tz_convert("Asia/Seoul").dt.date) \
+            .groupby("customer_id")["day"].nunique().reindex(ids[:40], fill_value=0)
+        self.assertAlmostEqual(float(days.mean()), out["purchases"]["actual_mean"])
         self.assertGreater(out["purchases"]["mae"], 0.0)
+
+    def test_purchases_are_compared_in_purchase_days(self) -> None:
+        """PR #293 리뷰 N1 — 모형 단위(KST 날짜당 1 거래)로 비교한다. 같은 날 두 주문은 1 거래다."""
+        import pandas as pd
+
+        from src.decision.clv_lifetime import evaluate_lifetime
+
+        day = self.t1 + pd.Timedelta(days=3)
+        extra = pd.DataFrame([_event("C00000", day + pd.Timedelta(hours=1), "same-1", 5000.0),
+                              _event("C00000", day + pd.Timedelta(hours=5), "same-2", 7000.0),
+                              _event("C00001", day + pd.Timedelta(hours=2), "single", 3000.0)])
+        events = pd.concat([self.events[self.events["timestamp"] < self.t1], extra], ignore_index=True)
+        actual = pd.DataFrame({"purchases": [2.0, 1.0], "revenue": [12000.0, 3000.0]}, index=["C00000", "C00001"])
+        out = evaluate_lifetime(self.model, events, self.t1, actual, window_days=42, high_value_share=0.2)
+        self.assertIn("구매일", out["purchases"]["unit"])
+        self.assertEqual(1.5, out["purchases"]["actual_orders_mean"])   # 주문 수 평균(2, 1)
+        self.assertEqual(1.0, out["purchases"]["actual_mean"])          # 구매일 수 평균(1, 1)
 
     def test_model_pickles(self) -> None:
         clone = pickle.loads(pickle.dumps(self.model))
