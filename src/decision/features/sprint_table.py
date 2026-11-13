@@ -535,34 +535,63 @@ def summarize_outcomes(outcomes: pd.DataFrame, population) -> dict:
     return result
 
 
+_QUANTILE_CLIPPER: type | None = None
+
+
+def _quantile_clipper_class() -> type:
+    """`QuantileClipper` 클래스를 한 번만 만든다 — sklearn 은 처음 쓸 때 import 한다.
+
+    ★ #214 — 예전에는 이 클래스를 `make_preprocessor` **안에서** 정의해 학습한 파이프라인을
+    pickle 로 저장할 수 없었다(`Can't pickle local object 'make_preprocessor.<locals>.QuantileClipper'`).
+    모듈 최상위 이름 `QuantileClipper` 로 등록하고(아래 `__getattr__`), sklearn import 는 그대로
+    지연한다 — 의존성 없는 격리 CI(isolation.yml)에서도 이 모듈을 import 할 수 있어야 한다.
+    계산은 예전과 한 글자도 다르지 않다.
+    """
+    global _QUANTILE_CLIPPER
+    if _QUANTILE_CLIPPER is None:
+        from sklearn.base import BaseEstimator, TransformerMixin
+
+        class QuantileClipper(BaseEstimator, TransformerMixin):
+            def __init__(self, low=0.01, high=0.99):
+                self.low, self.high = low, high
+
+            def fit(self, X, y=None):
+                arr = np.asarray(X, dtype=float)
+                with np.errstate(all="ignore"):
+                    self.lo_ = np.nanquantile(arr, self.low, axis=0) if arr.size else np.array([])
+                    self.hi_ = np.nanquantile(arr, self.high, axis=0) if arr.size else np.array([])
+                return self
+
+            def transform(self, X):
+                arr = np.asarray(X, dtype=float)
+                lo = np.where(np.isnan(self.lo_), -np.inf, self.lo_)
+                hi = np.where(np.isnan(self.hi_), np.inf, self.hi_)
+                return np.where(np.isnan(arr), np.nan, np.clip(arr, lo, hi))
+
+        # pickle 은 `모듈.__qualname__` 으로 클래스를 찾는다 — 최상위 이름으로 보이게 한다.
+        QuantileClipper.__module__ = __name__
+        QuantileClipper.__qualname__ = "QuantileClipper"
+        _QUANTILE_CLIPPER = QuantileClipper
+    return _QUANTILE_CLIPPER
+
+
+def __getattr__(name: str):
+    """PEP 562 — `sprint_table.QuantileClipper` 를 처음 찾을 때 만든다(저장한 모델을 불러올 때)."""
+    if name == "QuantileClipper":
+        return _quantile_clipper_class()
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+
 def make_preprocessor(clip_quantiles: tuple[float, float] = (0.01, 0.99)):
     """결측·이상치 처리 — **학습 fold 에서만 fit** 한다 (sklearn transformer).
 
     순서: 분위수 절단(학습 분위 1%·99%) → 중앙값 대치 + 결측 지시자 컬럼.
     지시자를 남기는 이유: "값이 없다" 자체가 신호다(예: 구매 이력 없음 → recency NaN).
     """
-    from sklearn.base import BaseEstimator, TransformerMixin
     from sklearn.impute import SimpleImputer
     from sklearn.pipeline import make_pipeline
 
-    class QuantileClipper(BaseEstimator, TransformerMixin):
-        def __init__(self, low=0.01, high=0.99):
-            self.low, self.high = low, high
-
-        def fit(self, X, y=None):
-            arr = np.asarray(X, dtype=float)
-            with np.errstate(all="ignore"):
-                self.lo_ = np.nanquantile(arr, self.low, axis=0) if arr.size else np.array([])
-                self.hi_ = np.nanquantile(arr, self.high, axis=0) if arr.size else np.array([])
-            return self
-
-        def transform(self, X):
-            arr = np.asarray(X, dtype=float)
-            lo = np.where(np.isnan(self.lo_), -np.inf, self.lo_)
-            hi = np.where(np.isnan(self.hi_), np.inf, self.hi_)
-            return np.where(np.isnan(arr), np.nan, np.clip(arr, lo, hi))
-
     return make_pipeline(
-        QuantileClipper(*clip_quantiles),
+        _quantile_clipper_class()(*clip_quantiles),
         SimpleImputer(strategy="median", add_indicator=True, keep_empty_features=True),
     )

@@ -377,6 +377,22 @@ def predict_churn_proba(model: ChurnModel, X: pd.DataFrame) -> pd.Series:
     return pd.Series(proba, index=X.index, name="churn_proba")
 
 
+def evaluate_fitted_churn(model: ChurnModel, X: pd.DataFrame, y) -> dict:
+    """저장해 둔 **학습된** 모델을 새 데이터로 **평가만** 한다 (#214 — GATE 4 Final Holdout 전제).
+
+    다시 학습하지 않고, 임계도 그 모델이 학습 데이터에서 정한 값을 그대로 쓴다. 이 데이터로 아무것도
+    고르지 않는다(모델 · 임계 · Feature 모두 저장된 그대로). 학습 때 있던 Feature 가 없으면 멈춘다.
+    """
+    if not isinstance(model, ChurnModel):
+        raise TypeError(f"ChurnModel 이 아니다: {type(model).__name__}")
+    Xp, yv = _prepare(X, y)
+    score = predict_churn_proba(model, Xp).to_numpy()
+    return {"name": model.name, "scheme": "fitted_model_evaluation", "model_source": "loaded (재학습 없음)",
+            "n": int(len(yv)), "pos_rate": float(yv.mean()) if len(yv) else float("nan"),
+            "threshold": float(model.threshold), "threshold_rule": model.threshold_rule,
+            **_metrics(yv, score, model.threshold)}
+
+
 def evaluate_temporal_holdout(model_factory=None, X_train: pd.DataFrame | None = None, y_train=None,
                               X_test: pd.DataFrame | None = None, y_test=None, *, model=None,
                               seed: int = 0) -> dict:

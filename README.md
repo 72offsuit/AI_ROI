@@ -54,8 +54,16 @@ python src/main.py --help                                            # 모드별
 
 모드는 `train` · `uplift` · `optimize --budget <KRW>` · `evaluate` · `full`(SRS SYS-004 · PRD §73). 실행 루프
 (`src/orchestration/run_sprint.py`)의 단계 중 무엇을 돌릴지만 고르는 디스패처이고, 모델 하이퍼파라미터 · 세그먼트 경계 ·
-실험 값은 `config/model_config.yaml` · `config/experiment_config.yaml` 에서 읽는다. **모델을 저장하지 않으므로 모드
-사이에 넘기는 것이 없다** — 모든 모드가 같은 seed 로 다시 시뮬레이션 · 학습한다. 근거와 한계: `docs/decisions/DR-206-main-cli-config.md`.
+실험 값은 `config/model_config.yaml` · `config/experiment_config.yaml` 에서 읽는다. 근거와 한계: `docs/decisions/DR-206-main-cli-config.md`.
+
+**학습한 모델과 Feature 는 기본으로 남는다**(#214) — 모델은 `models/<run_id>/`(ML-008 메타데이터와 SHA-256), Feature ·
+라벨은 `data/processed/<run_id>/`(FS-002 메타 열을 붙인 parquet). `--no-persist` 로 끈다. 저장한 모델은 다른 seed 실행이
+**다시 학습하지 않고** 불러와 평가만 할 수 있다 — Final Holdout(GATE 4)의 전제다. 결정 기록: `docs/decisions/DR-214-model-feature-store.md`.
+
+```bash
+python src/main.py --mode full --seed 42                                      # 학습 · 저장 → models/<run_id>/
+python src/main.py --mode full --seed 7 --load-models models/<run_id>          # 불러와 평가만 (다시 학습 없음)
+```
 
 ### 대시보드까지
 

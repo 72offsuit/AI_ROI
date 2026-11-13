@@ -169,6 +169,17 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "what_if_budgets": ("src.decision.optimize", "what_if_budgets"),
     "summarize_strategy": ("src.decision.roi", "summarize_strategy"),
     "analyze_ab": ("src.decision.ab_test", "analyze_ab"),
+    # #214 — 저장 · 불러오기 · 평가만 · NFR-01 버전
+    "evaluate_fitted_churn": ("src.decision.churn", "evaluate_fitted_churn"),
+    "evaluate_fitted_uplift": ("src.decision.uplift", "evaluate_fitted_uplift"),
+    "evaluate_fitted_clv": ("src.decision.clv", "evaluate_fitted_clv"),
+    "save_model": ("src.decision.model_store", "save_model"),
+    "write_model_manifest": ("src.decision.model_store", "write_manifest"),
+    "load_models": ("src.decision.model_store", "load_models"),
+    "frame_digest": ("src.decision.model_store", "frame_digest"),
+    "write_feature_table": ("src.decision.feature_store", "write_table"),
+    "feature_version": ("src.decision.versions", "feature_version"),
+    "versions_record": ("src.decision.versions", "versions_record"),
 }
 
 
@@ -1244,6 +1255,10 @@ class SprintConfig:
     scope: str = ""                        # 범위 밖 단계의 not_run 사유에 쓰는 이름 (예: "--mode train")
     capture: dict[str, Any] | None = None  # 실행 뒤 ctx(점수 · 예산)·비용·결과 폴더를 넘겨받을 곳
     require_clean: bool = False            # #262 — 커밋 전 변경이 있으면 시뮬레이션 전에 멈춘다(DirtyRepoError)
+    # #214 — None 이면 이전과 같다(저장 · 불러오기 없음). src/main.py 는 기본으로 저장한다.
+    models_root: Path | None = None        # 학습한 모델을 <models_root>/<run_id>/ 에 저장(ML-008)
+    feature_store_root: Path | None = None  # Feature · 라벨을 <root>/<run_id>/ 에 저장(FS-001/002)
+    load_models: Path | None = None        # 저장된 모델 폴더 — 주면 다시 학습하지 않고 불러와 평가만 한다
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -1352,6 +1367,165 @@ def _outcome_metrics(outcomes: Any, population: Any) -> dict[str, Any]:
     return result
 
 
+# ── #214 모델 · Feature 저장과 불러오기 ─────────────────────────────────────
+
+
+class ModelLoadError(Exception):
+    """``--load-models`` 폴더를 쓸 수 없다 — 시뮬레이션 **전에** 멈춘다(종료 코드 6)."""
+
+    exit_code = 6
+
+
+def load_saved_models(path: Path) -> tuple[dict[str, tuple[Any, dict[str, Any]]], dict[str, Any]]:
+    """저장된 모델을 시뮬레이션 전에 불러온다 — 한 시간 넘게 돈 뒤에야 못 쓴다는 것을 알면 늦다.
+
+    저장 당시 feature_version 이 지금 코드와 다르면 멈춘다(`model_store.load_models`)."""
+    try:
+        expected = decision_fn("feature_version")()
+        if expected is None:  # PR #279 리뷰 R2 — 대조를 건너뛰지 않는다
+            raise ModelLoadError("지금 코드의 feature_version 을 잴 수 없다(정의 소스를 읽지 못했다) — 저장 모델과 "
+                                 "호환되는지 확인할 수 없어 불러오지 않는다")
+        loaded, manifest = decision_fn("load_models")(Path(path), expected_feature_version=expected)
+    except ModelLoadError:
+        raise
+    except NotRun as reason:
+        raise ModelLoadError(f"모델 불러오기 함수를 쓸 수 없다 — {reason}") from reason
+    except Exception as error:  # ModelStoreError · unpickle 오류 — 사유를 그대로 올린다
+        raise ModelLoadError(f"{path} 의 모델을 불러올 수 없다 — {error}") from error
+    if not loaded:
+        raise ModelLoadError(f"{path} 에 불러올 모델이 없다")
+    return loaded, manifest
+
+
+def _loaded_record(path: Path, meta: Mapping[str, Any], manifest: Mapping[str, Any]) -> dict[str, Any]:
+    return {"model_source": "loaded (재학습 없음)", "loaded_from": str(path),
+            "model_version": meta.get("model_version"), "model_sha256": meta.get("sha256"),
+            "trained_run": (manifest.get("run") or {}).get("run_id")}
+
+
+def _fitted_evaluation(key: str, *args: Any) -> dict[str, Any]:
+    """불러온 모델 평가만. 함수가 없으면 ``NotRun`` 을 올려 **단계가 not_run** 이 된다(PR #279 리뷰 N2 — 평가 없이
+    ok 로 끝나지 않게). 평가 중 오류는 단계 실패로 올린다(삼키지 않는다)."""
+    return {"status": "ok", **decision_fn(key)(*args)}
+
+
+def _pick(row: Any, keys: tuple[str, ...]) -> dict[str, Any] | None:
+    if not isinstance(row, Mapping):
+        return None
+    picked = {k: row[k] for k in keys if k in row}
+    return picked or None
+
+
+def model_scores(kind: str, evaluation: Mapping[str, Any], name: Any) -> tuple[Any, Any, dict[str, str]]:
+    """ML-008 ``cv_score`` · ``test_score`` — 이 실행의 평가 결과에서 옮긴다. 없으면 None 과 사유."""
+    models = evaluation.get("models")
+    row = next((m for m in models if isinstance(m, Mapping) and m.get("name") == name), None) \
+        if isinstance(models, list) else None
+    if kind == "churn":
+        cv = None
+        if row and isinstance(row.get("cv"), Mapping):
+            cv = {k: v.get("mean") for k, v in row["cv"].items() if isinstance(v, Mapping)}
+        test = _pick(evaluation.get("temporal_holdout"), ("roc_auc", "pr_auc", "f1", "lift_at_10", "n_test"))
+        return cv, test, {
+            "cv_score": f"교차검증 평균 — {evaluation.get('cv_scheme') or 'churn_eval.cv_scheme'}",
+            "test_score": ("시간 홀드아웃 — 학습 · 선택에 쓰지 않은 t2 이후 무처치(S0) 분기 1회 평가" if test
+                           else "시간 홀드아웃 결과가 없다(단계 미실행 · 실패) — null"),
+        }
+    if kind == "uplift":
+        selection = evaluation.get("best_method_selection")
+        cv = _pick(selection, ("validation_qini", "basis", "n_validation"))
+        test = _pick(row, ("qini", "auuc", "uplift_at_k"))
+        return cv, test, {
+            "cv_score": "학습 데이터 안 검증 분할의 Qini — 방법 선택 근거",
+            "test_score": ("분할 모델의 test 추정치(탐색 RCT test 분할 — 그 분할 모델의 학습 · 선택에 쓰지 않음). 저장한 "
+                           "객체는 전체 RCT 로 다시 학습했으므로 이 점수가 저장 객체의 미학습 점수는 아니다"
+                           if test else "test 분할 점수가 없다 — null"),
+        }
+    cv = _pick(row, ("mae", "rmse", "spearman", "top20_hit"))
+    return cv, None, {
+        "cv_score": f"교차검증 OOF — {evaluation.get('cv_scheme') or 'clv_eval.cv_scheme'}",
+        "test_score": "CLV 는 학습에 쓰지 않은 데이터의 평가가 아직 없다 — null",
+    }
+
+
+def persist_models(root: Path, run_id: str, ctx: Mapping[str, Any],
+                   evaluations: Mapping[str, Mapping[str, Any]], run_info: Mapping[str, Any]) -> dict[str, Any]:
+    """학습한 모델을 ``<root>/<run_id>/`` 에 남긴다. 종류마다 성패를 따로 적는다 — 하나가 실패해도 나머지는 남긴다."""
+    target = Path(root) / run_id
+    feature_version = decision_fn("feature_version")()
+    digest = decision_fn("frame_digest")
+    save = decision_fn("save_model")
+    plan = {
+        "churn": ("churn_model", lambda: ctx["churn_train"],
+                  getattr(ctx.get("churn_model"), "name", None) or evaluations["churn"].get("best_proposed")),
+        "uplift": ("uplift_model", lambda: (ctx["X_rct"], ctx["treatment"], 1 - ctx["Y_rct"]["churn"]),
+                   evaluations["uplift"].get("fitted_method")),
+        "clv": ("clv_model", lambda: (ctx["X_rct"], ctx["Y_rct"]["revenue"]), "hist_gb"),
+    }
+    records: dict[str, Any] = {}
+    results: dict[str, Any] = {}
+    for kind, (key, data, name) in plan.items():
+        if key not in ctx:
+            results[kind] = {"status": "not_run", "reason": f"{kind} 모델이 없다 — 단계 미실행 또는 실패"}
+            continue
+        try:
+            frames = data()
+            cv, test, notes = model_scores(kind, evaluations[kind], name)
+            meta = save(target, kind, ctx[key], model_version=f"{kind}-{name}-{run_id}",
+                        dataset_version=f"rct-t1-{digest(*frames)[:12]}", feature_version=feature_version,
+                        cv_score=cv, test_score=test, score_notes=notes,
+                        extra={"run_id": run_id, "method": name, "training_rows": int(len(frames[0]))})
+        except Exception as error:  # 저장 실패를 삼키지 않는다 — failed 로 적고 종료 코드에 반영한다
+            results[kind] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
+            continue
+        records[kind] = meta
+        results[kind] = {"status": "ok", "file": str(target / meta["file"]), "model_version": meta["model_version"],
+                         "sha256": meta["sha256"], "bytes": meta["bytes"]}
+    if records:
+        decision_fn("write_model_manifest")(target, records, run_info)
+    return {"root": str(target), "feature_version": feature_version, "models": results}
+
+
+def persist_features(root: Path, run_id: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
+    """Feature(t1 · t2)와 라벨(t1)을 ``<root>/<run_id>/`` 에 parquet 로 남긴다 (FS-001 · FS-002)."""
+    target = Path(root) / run_id
+    write = decision_fn("write_feature_table")
+    version = decision_fn("feature_version")()
+    results: dict[str, Any] = {}
+    for name, key, at, kind in (("features_t1", "X1", "t1", "feature"), ("labels_t1", "Y1", "t1", "label"),
+                                ("features_t2", "X2", "t2", "feature")):
+        if key not in ctx or ctx.get(at) is None:
+            results[name] = {"status": "not_run", "reason": f"{key} 가 없다 — 단계 미실행 또는 실패"}
+            continue
+        try:
+            record = write(target, name, ctx[key], feature_version=version if kind == "feature" else None,
+                           cutoff_time=ctx[at], kind=kind)
+        except Exception as error:  # 삼키지 않는다 — failed
+            results[name] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
+            continue
+        results[name] = {"status": "ok", "file": str(target / record["file"]), "rows": record["rows"]}
+    return {"root": str(target), "feature_version": version, "tables": results}
+
+
+def persistence_status(record: Mapping[str, Any]) -> str:
+    """하위 결과 중 failed 가 하나라도 있으면 failed. 요청이 없었으면 not_requested."""
+    statuses: list[str] = []
+    for part in ("models", "features"):
+        value = record.get(part)
+        if not isinstance(value, Mapping):
+            continue
+        if "status" in value:
+            statuses.append(value["status"])
+        for item in (value.get("models") or value.get("tables") or {}).values():
+            if isinstance(item, Mapping):
+                statuses.append(item.get("status"))
+    if not statuses:
+        return "not_requested"
+    if "failed" in statuses:
+        return "failed"
+    return "ok" if "ok" in statuses else "not_run"
+
+
 def run(config: SprintConfig) -> Path:
     """전 구간을 돌리고 결과 폴더 경로를 돌려준다. 단계 실패는 기록하고 다음으로 간다."""
     run_id = config.run_id or new_run_id()
@@ -1360,6 +1534,12 @@ def run(config: SprintConfig) -> Path:
     start_state = repo_state()
     if config.require_clean:
         check_clean(start_state)
+    # #214 — 불러올 모델은 시뮬레이션 전에 확인한다. 못 쓰면 ModelLoadError 로 바로 멈춘다.
+    loaded_models: dict[str, tuple[Any, dict[str, Any]]] = {}
+    loaded_manifest: dict[str, Any] = {}
+    if config.load_models is not None:
+        loaded_models, loaded_manifest = load_saved_models(config.load_models)
+        _log(f"모델 불러옴 {config.load_models} ({' · '.join(sorted(loaded_models))}) — 다시 학습하지 않는다")
 
     log = StageLog(config.stages, config.scope)
     out = Path(config.out)
@@ -1513,20 +1693,32 @@ def run(config: SprintConfig) -> Path:
             if not two_classes(y):
                 raise NotRun("T0 군 churn 라벨이 한 값뿐이다 — 학습·평가 불가 (구매 이벤트 유무 확인)")
             churn_eval["positive_rate"] = float(y.mean())
-            X, y, churn_eval["training_sample"] = stratified_cap(X, y, config.max_train_rows, config.seed)
-            evaluate = decision_fn("evaluate_churn_models")
-            fit = decision_fn("fit_best_churn")
-            with override_attr(DECISION_API["evaluate_churn_models"][0], "N_SPLITS", config.cv_folds) as folds:
-                churn_eval["cv_folds_override"] = folds
-                evaluation = evaluate(X, y, config.seed)
-                churn_eval.update(evaluation)  # label_def · n · pos_rate · models · shap_top … (대시보드 ChurnEval)
-                if "eval_result" in inspect.signature(fit).parameters:
-                    ctx["churn_model"] = fit(X, y, config.seed, eval_result=evaluation)
-                else:
-                    ctx["churn_model"] = fit(X, y, config.seed)
-            ctx["churn_train"] = (X, y)
-            if isinstance(evaluation, Mapping) and evaluation.get("best_proposed") is not None:
-                ctx["churn_best_name"] = evaluation["best_proposed"]
+            if config.load_models is not None:  # #214 — 다시 학습하지 않고 불러온 모델을 평가만 한다
+                if "churn" not in loaded_models:
+                    raise NotRun(f"{config.load_models} 에 churn 모델이 없다 — 다시 학습하지 않는다")
+                model, meta = loaded_models["churn"]
+                churn_eval.update(_loaded_record(config.load_models, meta, loaded_manifest))
+                churn_eval["best_proposed"] = getattr(model, "name", None)
+                churn_eval["fitted_evaluation"] = _fitted_evaluation("evaluate_fitted_churn", model, X, y)
+                ctx["churn_model"] = model
+                ctx["churn_train"] = (X, y)  # 시간 홀드아웃의 모집단 대조용 — 학습 모집단은 trained_run 쪽이다
+                if churn_eval["best_proposed"] is not None:
+                    ctx["churn_best_name"] = churn_eval["best_proposed"]
+            else:
+                X, y, churn_eval["training_sample"] = stratified_cap(X, y, config.max_train_rows, config.seed)
+                evaluate = decision_fn("evaluate_churn_models")
+                fit = decision_fn("fit_best_churn")
+                with override_attr(DECISION_API["evaluate_churn_models"][0], "N_SPLITS", config.cv_folds) as folds:
+                    churn_eval["cv_folds_override"] = folds
+                    evaluation = evaluate(X, y, config.seed)
+                    churn_eval.update(evaluation)  # label_def · n · pos_rate · models · shap_top … (대시보드 ChurnEval)
+                    if "eval_result" in inspect.signature(fit).parameters:
+                        ctx["churn_model"] = fit(X, y, config.seed, eval_result=evaluation)
+                    else:
+                        ctx["churn_model"] = fit(X, y, config.seed)
+                ctx["churn_train"] = (X, y)
+                if isinstance(evaluation, Mapping) and evaluation.get("best_proposed") is not None:
+                    ctx["churn_best_name"] = evaluation["best_proposed"]
 
         # uplift — 전 군 -----------------------------------------------------
         with log.stage("uplift", requires=("training_set",)):
@@ -1537,29 +1729,40 @@ def run(config: SprintConfig) -> Path:
                                 "arm_counts": dict(sorted(Counter(ctx["treatment"].tolist()).items()))})
             if not two_classes(retention):
                 raise NotRun("retention 라벨이 한 값뿐이다 — CATE 추정 불가 (구매 이벤트 유무 확인)")
-            try:
-                risk_factory = decision_fn("make_risk_model_factory")(config.seed)
-            except NotRun:
-                risk_factory = None  # 위험도 기준선만 not_run, 정상 S/T/X는 유지한다.
-            evaluation = call_by_name(decision_fn("evaluate_uplift_models"), {
-                "X": ctx["X_rct"], "treatment": ctx["treatment"], "y": retention,
-                "seed": config.seed, "risk_model_factory": risk_factory,
-            })
-            uplift_eval.update(evaluation)  # n · arms · ate · models … (대시보드 UpliftEval)
-            fit = decision_fn("fit_uplift")
-            params = inspect.signature(fit).parameters
-            kwargs: dict[str, Any] = {"seed": config.seed} if "seed" in params else {}
-            method = _pick_method(evaluation)
-            if method is None:
-                if "method" in params and params["method"].default is inspect.Parameter.empty:
-                    raise NotRun("evaluate_uplift_models 가 best_method 를 내지 않았고 fit_uplift 의 method 에 기본값이 없다")
-                ctx["uplift_model"] = fit(ctx["X_rct"], ctx["treatment"], retention, **kwargs)
-                uplift_eval["fitted_method"] = params["method"].default if "method" in params else None
-                uplift_eval["fitted_method_source"] = "fit_uplift 기본값 (평가 결과에 best_method 없음)"
+            if config.load_models is not None:  # #214 — 불러온 메타러너를 평가만
+                if "uplift" not in loaded_models:
+                    raise NotRun(f"{config.load_models} 에 uplift 모델이 없다 — 다시 학습하지 않는다")
+                model, meta = loaded_models["uplift"]
+                uplift_eval.update(_loaded_record(config.load_models, meta, loaded_manifest))
+                uplift_eval["fitted_method"] = getattr(model, "method", None)
+                uplift_eval["fitted_method_source"] = "불러온 모델 (재학습 없음)"
+                uplift_eval["fitted_evaluation"] = _fitted_evaluation(
+                    "evaluate_fitted_uplift", model, ctx["X_rct"], ctx["treatment"], retention)
+                ctx["uplift_model"] = model
             else:
-                ctx["uplift_model"] = fit(ctx["X_rct"], ctx["treatment"], retention, method, **kwargs)
-                uplift_eval["fitted_method"] = method
-                uplift_eval["fitted_method_source"] = "evaluate_uplift_models 의 best_method"
+                try:
+                    risk_factory = decision_fn("make_risk_model_factory")(config.seed)
+                except NotRun:
+                    risk_factory = None  # 위험도 기준선만 not_run, 정상 S/T/X는 유지한다.
+                evaluation = call_by_name(decision_fn("evaluate_uplift_models"), {
+                    "X": ctx["X_rct"], "treatment": ctx["treatment"], "y": retention,
+                    "seed": config.seed, "risk_model_factory": risk_factory,
+                })
+                uplift_eval.update(evaluation)  # n · arms · ate · models … (대시보드 UpliftEval)
+                fit = decision_fn("fit_uplift")
+                params = inspect.signature(fit).parameters
+                kwargs: dict[str, Any] = {"seed": config.seed} if "seed" in params else {}
+                method = _pick_method(evaluation)
+                if method is None:
+                    if "method" in params and params["method"].default is inspect.Parameter.empty:
+                        raise NotRun("evaluate_uplift_models 가 best_method 를 내지 않았고 fit_uplift 의 method 에 기본값이 없다")
+                    ctx["uplift_model"] = fit(ctx["X_rct"], ctx["treatment"], retention, **kwargs)
+                    uplift_eval["fitted_method"] = params["method"].default if "method" in params else None
+                    uplift_eval["fitted_method_source"] = "fit_uplift 기본값 (평가 결과에 best_method 없음)"
+                else:
+                    ctx["uplift_model"] = fit(ctx["X_rct"], ctx["treatment"], retention, method, **kwargs)
+                    uplift_eval["fitted_method"] = method
+                    uplift_eval["fitted_method_source"] = "evaluate_uplift_models 의 best_method"
 
         # CLV — 전 군 42일 매출 ----------------------------------------------
         with log.stage("clv", requires=("training_set",)):
@@ -1569,20 +1772,29 @@ def run(config: SprintConfig) -> Path:
                              "target": f"t1 이후 {LABEL_WINDOW_DAYS}일 매출(원) — 12개월 CLV 가 아니다"})
             if future_value.dropna().nunique() < 2:
                 raise NotRun("미래 매출이 한 값뿐이다 — CLV 학습 불가 (구매 이벤트 유무 확인)")
-            fit = decision_fn("fit_clv")
-            if "seed" in inspect.signature(fit).parameters:
-                ctx["clv_model"] = fit(ctx["X_rct"], future_value, seed=config.seed)
+            if config.load_models is not None:  # #214 — 불러온 CLV 모델을 평가만
+                if "clv" not in loaded_models:
+                    raise NotRun(f"{config.load_models} 에 clv 모델이 없다 — 다시 학습하지 않는다")
+                model, meta = loaded_models["clv"]
+                clv_eval.update(_loaded_record(config.load_models, meta, loaded_manifest))
+                clv_eval["fitted_evaluation"] = _fitted_evaluation(
+                    "evaluate_fitted_clv", model, ctx["X_rct"], future_value)
+                ctx["clv_model"] = model
             else:
-                ctx["clv_model"] = fit(ctx["X_rct"], future_value)
-            try:
-                evaluate = decision_fn("evaluate_clv")
-                clv_eval.update(call_by_name(
-                    evaluate, {"X": ctx["X_rct"], "future_value": future_value, "y": future_value,
-                               "model": ctx["clv_model"], "seed": config.seed,
-                               "horizon_days": LABEL_WINDOW_DAYS},
-                ))  # horizon_days · models … (대시보드 ClvEval)
-            except NotRun as reason:
-                clv_eval["evaluation_status"] = {"status": "not_run", "reason": str(reason)}
+                fit = decision_fn("fit_clv")
+                if "seed" in inspect.signature(fit).parameters:
+                    ctx["clv_model"] = fit(ctx["X_rct"], future_value, seed=config.seed)
+                else:
+                    ctx["clv_model"] = fit(ctx["X_rct"], future_value)
+                try:
+                    evaluate = decision_fn("evaluate_clv")
+                    clv_eval.update(call_by_name(
+                        evaluate, {"X": ctx["X_rct"], "future_value": future_value, "y": future_value,
+                                   "model": ctx["clv_model"], "seed": config.seed,
+                                   "horizon_days": LABEL_WINDOW_DAYS},
+                    ))  # horizon_days · models … (대시보드 ClvEval)
+                except NotRun as reason:
+                    clv_eval["evaluation_status"] = {"status": "not_run", "reason": str(reason)}
 
         # A/B — 탐색 RCT 자체 분석 -------------------------------------------
         with log.stage("ab_test", requires=("training_set",)):
@@ -1876,6 +2088,13 @@ def run(config: SprintConfig) -> Path:
                 pool["model_factory"] = ctx["churn_best_name"]
             holdout = call_by_name(decision_fn("evaluate_temporal_holdout"), pool)
             holdout = {**holdout, "population_audit": audit}
+            if config.load_models is not None and "churn" in loaded_models:  # PR #279 리뷰 N1
+                holdout["training_cohort"] = {
+                    "source": "불러온 모델 — 학습은 원래 실행에서 했다(재학습 없음)",
+                    "trained_run": (loaded_manifest.get("run") or {}).get("run_id"),
+                    "training_rows": loaded_models["churn"][1].get("training_rows"),
+                }
+                holdout["n_train_meaning"] = "이 실행의 t1 T0 비교 군(모집단 감사용) — 불러온 모델의 학습 군이 아니다"
             churn_eval["temporal_holdout"] = holdout
             # 대시보드 ChurnModel.temporal_holdout — 같은 이름의 모델 행에 지표만 붙인다
             meta_keys = {"name", "scheme", "n_train", "n_test", "pos_rate_train", "pos_rate_test", "threshold"}
@@ -1885,6 +2104,8 @@ def run(config: SprintConfig) -> Path:
                     model["temporal_holdout"] = {k: v for k, v in holdout.items()
                                                  if k not in meta_keys and isinstance(v, (int, float))}
             churn_eval["temporal_holdout_design"] = (
+                "불러온 모델(재학습 없음) → Feature(t2) · S0 분기(무처치) 42일 churn 으로 1회 평가"
+                if config.load_models is not None else
                 "t1 T0군으로 학습(best_proposed) → Feature(t2) · S0 분기(무처치) 42일 churn 으로 1회 평가"
             )
     finally:
@@ -1922,6 +2143,47 @@ def run(config: SprintConfig) -> Path:
         random_seed = observed_values(events_frame, "random_seed") or ctx.get("random_seed")
         header = _header(run_id, generated_at)
         versions = [str(v) for v in (simulator_version or [])]
+
+        # #214 — 모델(ML-008) · Feature(FS-001/002) 저장. 요청이 없으면 아무것도 쓰지 않는다.
+        persistence: dict[str, Any] = {
+            "requested": {"models_root": config.models_root, "feature_store_root": config.feature_store_root,
+                          "load_models": config.load_models},
+            "models": None, "features": None,
+        }
+        if config.models_root is not None:
+            if config.load_models is not None:
+                persistence["models"] = {"status": "not_run",
+                                         "reason": "--load-models 실행 — 불러온 모델을 다시 저장하지 않는다"}
+            else:
+                run_info = {"run_id": run_id, "seed": config.seed, "num_customers": config.num_customers,
+                            "profile": config.profile, "t1": ctx["timeline"].get("t1"),
+                            "repo_commit": start_state.get("head"), "simulator_versions": versions}
+                try:
+                    persistence["models"] = persist_models(
+                        Path(config.models_root), run_id, ctx,
+                        {"churn": churn_eval, "uplift": uplift_eval, "clv": clv_eval}, run_info)
+                except Exception as error:  # NotRun(모듈 없음) 포함 — 삼키지 않고 failed 로 적는다
+                    persistence["models"] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
+        if config.feature_store_root is not None:
+            try:
+                persistence["features"] = persist_features(Path(config.feature_store_root), run_id, ctx)
+            except Exception as error:
+                persistence["features"] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
+        persistence["status"] = persistence_status(persistence)
+
+        model_versions: dict[str, Any] = {
+            kind: record.get("model_version")
+            for kind, record in ((persistence.get("models") or {}).get("models") or {}).items()
+            if isinstance(record, Mapping) and record.get("status") == "ok"
+        }
+        model_versions.update({kind: meta.get("model_version") for kind, (_, meta) in loaded_models.items()})
+        try:  # NFR-01 — 8개 키. 모르는 값은 null
+            nfr01 = decision_fn("versions_record")(
+                service_version=start_state.get("head"), simulator_version=", ".join(versions) if versions else None,
+                customer_seed=config.seed, random_seed=random_seed or None, model_versions=model_versions or None)
+        except NotRun as reason:
+            nfr01 = {"status": "not_run", "reason": str(reason)}
+
         run_meta = {
             **header,
             "seed": config.seed,
@@ -1972,6 +2234,12 @@ def run(config: SprintConfig) -> Path:
                                        "strategy_details.*.measured_economics (DR-169)",
             },
             "decision_modules": {k: decision_available(k) for k in DECISION_API},
+            "versions": nfr01,           # NFR-01 (#214)
+            "persistence": persistence,  # ML-008 · FS-001/002 (#214)
+            "models_loaded_from": {
+                "path": config.load_models, "trained_run": (loaded_manifest.get("run") or {}).get("run_id"),
+                "kinds": sorted(loaded_models),
+            } if config.load_models is not None else None,
             "provenance": provenance(start_state, require_clean=config.require_clean),
             "stages": log.stages,
         }
@@ -2025,6 +2293,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--require-clean", action="store_true",
                         help="저장소에 커밋 전 변경(추적 파일 변경 · .gitignore 밖 새 파일)이 있으면 시뮬레이션 전에 "
                              "멈춘다(종료 코드 4). 봉인 실행(GATE 2 Baseline)은 이 옵션으로 돌린다 (#262)")
+    parser.add_argument("--models-root", type=Path, default=None,
+                        help="학습한 모델을 <경로>/<run_id>/ 에 저장한다(ML-008, #214). 기본: 저장하지 않음 — "
+                             "src/main.py 는 기본으로 models/ 에 저장한다")
+    parser.add_argument("--feature-store-root", type=Path, default=None,
+                        help="Feature · 라벨을 <경로>/<run_id>/ 에 parquet 로 저장한다(FS-001/002). 기본: 저장하지 않음")
+    parser.add_argument("--load-models", type=Path, default=None,
+                        help="저장된 모델 폴더(<models-root>/<run_id>) — 다시 학습하지 않고 불러와 이 실행의 데이터로 "
+                             "평가만 한다(GATE 4 전제). 못 쓰면 시뮬레이션 전에 멈춘다(종료 코드 6)")
     return parser
 
 
@@ -2035,17 +2311,19 @@ def main(argv: list[str] | None = None) -> int:
         results_root=args.results_root, warmup_days=args.warmup_days, budget_krw=args.budget_krw,
         run_id=args.run_id, realism_report=args.realism_report,
         cv_folds=args.cv_folds, max_train_rows=args.max_train_rows, require_clean=args.require_clean,
+        models_root=args.models_root, feature_store_root=args.feature_store_root, load_models=args.load_models,
     )
     started = time.perf_counter()
     try:
         run_dir = run(config)
-    except DirtyRepoError as error:
+    except (DirtyRepoError, ModelLoadError) as error:
         _log(str(error))
         return error.exit_code
     meta = json.loads((run_dir / "run_meta.json").read_text(encoding="utf-8"))
     counts = Counter(stage["status"] for stage in meta["stages"])
-    _log(f"완료 {time.perf_counter() - started:.1f}s — 단계 {dict(sorted(counts.items()))}")
-    return 1 if counts.get("failed") else 0
+    saved = (meta.get("persistence") or {}).get("status")
+    _log(f"완료 {time.perf_counter() - started:.1f}s — 단계 {dict(sorted(counts.items()))} · 저장 {saved}")
+    return 1 if counts.get("failed") or saved == "failed" else 0
 
 
 if __name__ == "__main__":
