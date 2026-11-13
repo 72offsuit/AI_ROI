@@ -61,10 +61,16 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 | `src/decision/**` | `data/ground_truth/**` |
 | `docs/model_report.md` | `src/simulator/**` (`api.py` 포함) |
 | `docs/uplift_analysis.md` | `src/diagnostics/**` |
-| `docs/ab_test_report.md` | |
-| `docs/sprint1_report.md` (스프린트 1 결과 보고 — 모델 리포트) | |
+| `docs/ab_test_report.md` | `docs/persona*.md` · `config/persona*.yaml` |
+| `docs/sprint1_report.md` (스프린트 1 결과 보고 — 모델 리포트) | `config/simulator*.yaml` |
+| | `docs/decisions/DR-S2-*.md` (Hidden Trait · 페르소나 구성) |
+| | `docs/decisions/DR-183-churn-config` · `-purchase-calibration` · `-repeat-exposure` |
+| | `docs/decisions/DR-196-sleeping-dog-path` · `DR-208-gate1-acceptance-criteria` |
+| | `docs/research/sim_mechanism_evidence.md` |
 
 > **예외 하나 — S8 채점 입력 (#224 · DR-S8 결정 3, 2026-11-09).** 시뮬 팀의 `results/**` 금지는 S8 채점 입력(고객별 τ̂ `cate.jsonl` · 분기 목록)에 한해 **GATE 4 결과 커밋 뒤에만, S8 CLI 로만** 풀린다. 사람이 파일을 직접 열지 않고, 리포트에는 집계값만 싣는다(DR-S8 V4). 기계가독 판본은 `docs/team_boundaries.json` 의 `teams.sim.must_not_read_exceptions` 다.
+
+> **시스템 팀 금지 추가 (#163, 2026-11-13 리드 결정).** 시뮬레이터의 **생성 규칙 · 보정값 · 가드레일 실측값**(참 효과 크기)이 든 문서를 더했다. 공유 계약이 섞인 문서(`DR-S1-*` · `DR-S3-*` · `DR-183-experiment-config` · `DR-194-population` · `DR-198-aux-events` · `docs/research/realism_report.*`)는 시뮬 팀이 계약/내부로 나눈 뒤 더한다 — 계약 부분은 공유 문서로 옮긴다. `DR-S8-scoring-metrics.md` 는 두 팀 공용이다.
 
 **가장 위험한 누수는 코드가 파일을 훔쳐보는 것이 아니다.** AI 성능이 낮다는 이유로 시뮬레이터를 고치는 것이다 (PRD §80 Risk 1). 사람도 에이전트도 이 유혹에 빠진다.
 

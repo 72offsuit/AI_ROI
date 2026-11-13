@@ -75,6 +75,9 @@ matplotlib==3.11.2
 # two weeks old at pin time). The manylinux xgboost wheel is large (bundles GPU code), so CI install
 # time grows. A CPU-only distribution would need per-platform pins; not evaluated here — one pin for
 # every platform keeps tests/test_runtime_declaration simple.
+# macOS: both wheels need the OpenMP runtime (`brew install libomp`). Without it the packages install
+# but fail to import (XGBoostError / OSError); churn.model_unavailable then records that reason and the
+# two models drop out of the comparison (PR #281 review R1).
 xgboost==3.4.1
 lightgbm==4.7.0
 

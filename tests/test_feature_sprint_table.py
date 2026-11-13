@@ -643,7 +643,9 @@ class TestOutcomeObservationContract(unittest.TestCase):
         def metrics(start, end):
             world = key(clock["root"])
             metric_calls.append(world)
-            purpose = ("main_history" if start == datetime(2026, 1, 1, tzinfo=KST) else "main_label")
+            # 본선 창 세 개 — 이력 [시작, t2) · 라벨 [t1, t2) · 앞 기준일 라벨 [t1−42, t1)(끝이 지금 t2 보다 앞, #281 Q1)
+            purpose = ("main_history" if start == datetime(2026, 1, 1, tzinfo=KST)
+                       else "main_prior_label" if end < clock["now"] else "main_label")
             status = states.get(purpose if world == "main" else world, states.get(world, "ok"))
             captured.setdefault("metric_windows", []).append((world, start, end))
             if status == "error":
@@ -766,7 +768,7 @@ class TestOutcomeObservationContract(unittest.TestCase):
         self.assertEqual([], [s for s in stages.values() if s["status"] == "failed"])
         self.assertEqual("ok", stages["outcomes_t1"]["status"])
         self.assertEqual("ok", stages["churn_temporal_holdout"]["status"])
-        self.assertEqual(["main", "main", "S0", "S1"], calls)
+        self.assertEqual(["main", "main", "main", "S0", "S1"], calls)  # 본선: 이력 · 라벨 · 앞 기준일 라벨
         self.assertEqual(1, len(holdout))
         # #215 — 시간 홀드아웃은 학습 모집단과 같은 정의(Eligible(t2) ∩ t1 실험 무처치)로 잰다.
         # 이 세계는 40명 전원이 Eligible 이고 t1 실험에서 절반(20명)이 T1~T4 를 받았다 → 20명.
@@ -798,7 +800,7 @@ class TestOutcomeObservationContract(unittest.TestCase):
                 self.assertIsNone(rows["S0"]["event_outcomes"]["revenue_krw"])
                 self.assertEqual(240000, rows["S1"]["event_outcomes"]["revenue_krw"])
                 self.assertEqual(500, rows["S0"]["metrics"]["measured_contribution_profit"])
-                self.assertEqual(["main", "main", "S0", "S1"], calls)
+                self.assertEqual(["main", "main", "main", "S0", "S1"], calls)  # 본선 창 3개(#281 Q1)
 
     def test_margin_uses_history_window_and_actual_margin_calculation(self):
         result, captured, calls, _ = self.run_fake_contract(real_margin=True)
@@ -809,8 +811,24 @@ class TestOutcomeObservationContract(unittest.TestCase):
         self.assertEqual(windows[0][1] + timedelta(days=90), windows[1][1])
         self.assertEqual(windows[0][2], windows[1][2])
         self.assertEqual(timedelta(days=42), windows[1][2] - windows[1][1])
-        self.assertEqual(["main", "main", "S0", "S1"], calls)
+        # #281 Q1 — 앞 기준일 라벨 창 [t1 − 42, t1) 를 따로 조회한다(이력 창 상태로 대신하지 않는다)
+        self.assertEqual(("main", windows[1][1] - timedelta(days=42), windows[1][1]), windows[2])
+        self.assertEqual(["main", "main", "main", "S0", "S1"], calls)
         self.assertEqual(["margin_rate", "s1_purchase_gate"], result["run_meta"]["main_metric_windows"]["history"]["uses"])
+
+    def test_prior_label_uses_its_own_window_state(self):
+        """PR #281 리뷰 Q1 — 앞 기준일 라벨의 구매 관측은 그 창의 metrics 상태로 판정한다(이력 · 본선 라벨과 독립)."""
+        reasons = {}
+        for state in ("ok", "unknown"):
+            result, _, _, _ = self.run_fake_contract(warmup_days=120, states={"main_prior_label": state})
+            stages = {s["name"]: s for s in result["run_meta"]["stages"]}
+            self.assertEqual("ok", stages["outcomes_t1"]["status"], state)  # 본선 라벨은 영향 없음
+            windows = result["run_meta"]["main_metric_windows"]
+            self.assertEqual(["churn_prior_origin_label_observation"], windows["prior_label"]["uses"])
+            self.assertEqual(state == "ok", windows["prior_label"]["purchase_generated"] is True)
+            reasons[state] = result["churn_eval"]["prior_origin"]["reason"]
+        self.assertIn("관측 근거", reasons["unknown"])        # 창 상태가 불명이면 관측 근거에서 멈춘다
+        self.assertNotIn("관측 근거", reasons["ok"])          # ok 면 그 관문을 지나 다음 사유(라벨 한 값)로 간다
 
     def test_main_history_and_label_purchase_states_are_independent(self):
         for history_state, label_state in (("unknown", "ok"), ("ok", "unknown"), ("error", "ok"), ("ok", "error")):

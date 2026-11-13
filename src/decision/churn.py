@@ -131,12 +131,25 @@ OPTIONAL_PACKAGES = {"xgboost": "xgboost", "lightgbm": "lightgbm"}
 
 
 def model_unavailable(name: str) -> str | None:
-    """모델을 만들 수 없는 사유(패키지 미설치) — 있으면 문자열, 없으면 None. 조용히 건너뛰지 않고 결과에 적는다."""
+    """모델을 만들 수 없는 사유 — 있으면 문자열, 없으면 None. 조용히 건너뛰지 않고 결과에 적는다.
+
+    ① 패키지 미설치(``find_spec``)뿐 아니라 ② **설치됐지만 불러오지 못함**도 사유다 — 예: macOS 에 OpenMP 런타임
+    (libomp)이 없으면 ``import xgboost`` 는 ``XGBoostError``, ``import lightgbm`` 은 ``OSError`` 로 실패한다(PR #281
+    리뷰 R1). **import 시점의 실패만** 환경 사유로 분류한다 — 학습 · 예측 중 오류는 삼키지 않고 그대로 올라간다.
+    """
+    import importlib
     import importlib.util
 
     package = OPTIONAL_PACKAGES.get(name)
-    if package and importlib.util.find_spec(package) is None:
+    if not package:
+        return None
+    if importlib.util.find_spec(package) is None:
         return f"{package} 미설치 — pip install -r requirements.txt (requirements.txt 에 고정돼 있다)"
+    try:
+        importlib.import_module(package)
+    except Exception as error:  # 공유 라이브러리 로드 실패 등 — import 시점만(위 docstring)
+        return (f"{package} 를 불러오지 못한다({type(error).__name__}: {error}) — 설치는 됐다. "
+                "macOS 는 OpenMP 런타임이 필요하다: brew install libomp")[:400]
     return None
 
 
@@ -266,6 +279,11 @@ def threshold_table(y, score) -> list[dict]:
 
     행: F1 최대(기본 — ``predicted_label`` 에 쓰는 규칙) · 확률 0.5 · 상위 10/20/30% · 재현율 80%.
     **학습 데이터 안의 검증 예측(OOF)** 으로만 계산한다 — 시험 데이터로 임계를 고르지 않는다.
+
+    열은 SRS ML-006 최소 비교 항목 ``threshold · precision · recall · f1 · target_count · expected_campaign_cost``
+    (+ ``flagged_share``). ``target_count`` 는 **넘긴 점수의 모집단**(실행 루프: 학습 T0 군 CV OOF)에서 임계 이상인
+    고객 수 — t2 캠페인 대상 수가 아니다. ``expected_campaign_cost`` 는 None — 이 표에는 처치 · 단가 근거가 없다
+    (0 이나 임의 단가로 채우지 않는다, #280 리뷰 R2). 사유는 ``THRESHOLD_COLUMNS_NOTE``.
     """
     y = np.asarray(y).astype(int)
     s = np.asarray(score, dtype=float)
@@ -280,7 +298,8 @@ def threshold_table(y, score) -> list[dict]:
         f1 = (2 * precision * recall / (precision + recall)
               if n_flagged and positives and (precision + recall) > 0 else 0.0)
         return {"rule": rule, "threshold": float(threshold), "flagged_share": n_flagged / len(y) if len(y) else None,
-                "precision": precision, "recall": recall, "f1": float(f1)}
+                "precision": precision, "recall": recall, "f1": float(f1),
+                "target_count": n_flagged, "expected_campaign_cost": None}
 
     rows = [row("f1_max", _best_f1_threshold(y, s)), row("probability_0.5", 0.5)]
     for share in THRESHOLD_TOP_SHARES:
@@ -301,6 +320,28 @@ THRESHOLD_SELECTION = {
                "비율(재현율 목표)에 따른 대안을 이 표로 함께 낸다"),
     "basis": "학습 데이터 교차검증의 검증 fold 예측(OOF) — 시험 · 홀드아웃 데이터 미사용",
 }
+
+#: 임계값표의 대상 수 · 비용 열 설명과 SRS ML-006 충족 범위(#280 리뷰 R2) — churn_eval.threshold_table 에 싣는다.
+THRESHOLD_COLUMNS_NOTE = {
+    "target_count_population": ("넘긴 학습 데이터(실행 루프: 탐색 RCT T0 군)의 교차검증 OOF 에서 임계 이상인 고객 수 — "
+                                "t2 캠페인 대상 수가 아니다"),
+    "expected_campaign_cost": ("null — 이 표에는 처치 · 단가 근거가 없다. 누구에게 어떤 처치를 줄지는 전략(S2~S5)이 예산 "
+                               "안에서 정하고, 그 계획 비용은 측정 계층 단가로 strategy_comparison 에 계산된다. 0 이나 "
+                               "임의 단가로 채우지 않는다"),
+    "srs_ml006": ("부분 충족 — threshold · precision · recall · f1 · target_count 는 채우고 expected_campaign_cost 는 null"
+                  "(위 사유). 남은 범위: 임계별 비용은 처치 · 단가가 정해지는 전략 단계(S2 계획 비용)와 연결할 때 채운다"),
+}
+
+#: TreeExplainer 기본 출력(model_output="raw")의 단위 — 기여 합 + 기대값이 무엇을 복원하나(#280 리뷰 N2).
+#: 실측(shap 0.54.1 · sklearn 1.9 · xgboost 3.4.1 · lightgbm 4.7.0): random_forest = 양성 확률(오차 ~1e-15),
+#: hist_gb · lightgbm = 양성 로그오즈(~1e-14), xgboost = 양성 로그오즈(float32 — ~3e-6).
+#: 표에 없는 모델은 None — 확인하지 않은 단위를 적지 않는다.
+SHAP_UNITS = {"random_forest": "probability", "hist_gb": "log_odds", "xgboost": "log_odds", "lightgbm": "log_odds"}
+
+
+def shap_unit(name: str) -> str | None:
+    """SHAP 기여값의 단위(``SHAP_UNITS``) — 크기를 해석하는 화면이 모델마다 다르게 읽어야 한다."""
+    return SHAP_UNITS.get(name)
 
 
 def _metrics(y: np.ndarray, score: np.ndarray, threshold: float) -> dict[str, float]:
@@ -388,25 +429,41 @@ def _score_fn(metric: str):
     return roc_auc_score if metric == "roc_auc" else average_precision_score
 
 
+def inner_folds(y: np.ndarray) -> int:
+    """내부 교차검증 fold 수 — ``INNER_SPLITS`` 와 소수 클래스 수 중 작은 쪽(임계 선택과 같은 규칙). 2 미만이면 불가."""
+    return min(INNER_SPLITS, int(np.bincount(np.asarray(y).astype(int), minlength=2).min()))
+
+
 def _validation_score(name: str, overrides: Mapping[str, Any], X: pd.DataFrame, y: np.ndarray, seed: int,
-                      prior: tuple[pd.DataFrame, np.ndarray] | None, metric: str) -> float:
-    """한 조합의 **검증** 점수. 시험 · 홀드아웃은 보지 않는다.
+                      prior: tuple[pd.DataFrame, np.ndarray] | None, metric: str) -> float | None:
+    """한 조합의 **검증** 점수 — 유한한 값이 없으면 None(계산 불가). 시험 · 홀드아웃은 보지 않는다.
 
     ``prior`` 가 있으면 시간 순서 검증 — 앞 기준일 데이터로 학습하고 (X, y)(t1 학습 모집단)로 잰다.
-    없으면 (X, y) 안의 ``INNER_SPLITS``-fold 교차검증 평균.
+    없으면 (X, y) 안의 ``inner_folds(y)``-fold 교차검증(소수 클래스 수로 제한) 중 **유한한 fold 점수의 평균**.
+    한 클래스 fold · NaN 은 평균에 넣지 않는다(PR #281 리뷰 R2).
     """
     score = _score_fn(metric)
     if prior is not None:
         Xp, yp = prior
+        if len(np.unique(y)) < 2:
+            return None
         model = make_model(name, seed, overrides).fit(Xp, yp)
-        return float(score(y, _score(model, X[list(Xp.columns)])))
+        value = float(score(y, _score(model, X[list(Xp.columns)])))
+        return value if math.isfinite(value) else None
     from sklearn.model_selection import StratifiedKFold
 
+    folds = inner_folds(y)
+    if folds < 2:
+        return None
     values = []
-    for tr, va in StratifiedKFold(INNER_SPLITS, shuffle=True, random_state=seed).split(X, y):
+    for tr, va in StratifiedKFold(folds, shuffle=True, random_state=seed).split(X, y):
+        if len(np.unique(y[va])) < 2 or len(np.unique(y[tr])) < 2:
+            continue
         model = make_model(name, seed, overrides).fit(X.iloc[tr], y[tr])
-        values.append(score(y[va], _score(model, X.iloc[va])))
-    return float(np.mean(values))
+        value = float(score(y[va], _score(model, X.iloc[va])))
+        if math.isfinite(value):
+            values.append(value)
+    return float(np.mean(values)) if values else None
 
 
 def tune_model(name: str, X: pd.DataFrame, y: np.ndarray, seed: int,
@@ -422,15 +479,23 @@ def tune_model(name: str, X: pd.DataFrame, y: np.ndarray, seed: int,
     if not TUNING.get("enabled") or not grid:
         return {"status": "not_run", "reason": "튜닝이 꺼져 있거나 이 모델의 격자가 없다 — config 기본값", "params": {}}
     keys = list(grid)
+    folds = None if prior is not None else inner_folds(y)
+    basis = "temporal_validation" if prior is not None else f"inner_cv_{folds}fold"
     rows = []
     for combo in itertools.product(*(grid[k] for k in keys)):
         overrides = dict(zip(keys, combo))
         rows.append({"params": overrides,
                      "score": _validation_score(name, overrides, X, y, seed, prior, TUNING["metric"])})
-    best = max(range(len(rows)), key=lambda i: (rows[i]["score"], -i))
-    return {"status": "ok", "metric": TUNING["metric"],
-            "basis": "temporal_validation" if prior is not None else f"inner_cv_{INNER_SPLITS}fold",
-            "params": rows[best]["params"], "grid": rows}
+    valid = [i for i, row in enumerate(rows) if row["score"] is not None]
+    common = {"metric": TUNING["metric"], "basis": basis, "n_folds": folds, "grid": rows,
+              "n_invalid": len(rows) - len(valid)}
+    if not valid:  # PR #281 리뷰 R2 — 유효한 검증 없이 첫 후보를 고르지 않는다
+        reason = (f"유효한 검증 점수가 없다(소수 클래스 {int(np.bincount(np.asarray(y).astype(int), minlength=2).min())}명"
+                  f" · fold {folds})" if prior is None else "유효한 검증 점수가 없다(검증 데이터가 한 클래스 등)")
+        return {"status": "not_run", "reason": reason + " — config 기본값을 쓴다", "params": {},
+                "used_defaults": True, **common}
+    best = max(valid, key=lambda i: (rows[i]["score"], -i))
+    return {"status": "ok", "params": rows[best]["params"], "used_defaults": False, **common}
 
 
 def temporal_validation(name: str, overrides: Mapping[str, Any] | None, X: pd.DataFrame, y: np.ndarray,
@@ -551,8 +616,13 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
         "importance_method": importance["method"],
         "importance_model": best["name"],
         "importance_note": importance["note"],
-        # #215 — 확정 모델(best_proposed)의 검증 fold 예측으로 만든 표. 시험 데이터를 보지 않는다.
-        "threshold_table": {"model": best["name"], "rows": threshold_table(yv, best_oof), **THRESHOLD_SELECTION},
+        # #215 — 고른 모델 **종류**(best_proposed)의 바깥 CV 검증 fold 예측으로 만든 표. 시험 데이터를 보지 않는다.
+        # 배치 객체의 임계는 fit_best_churn 이 전체 학습 데이터 내부 OOF 로 따로 정한다(#280 리뷰 R1 — 근거가 다르다).
+        "threshold_table": {"model": best["name"], "rows": threshold_table(yv, best_oof), **THRESHOLD_SELECTION,
+                            "basis_model": (f"{best['name']} 종류의 바깥 {len(folds)}-fold CV 검증 예측(OOF) — 배치 "
+                                            f"객체의 임계는 fit_best_churn 이 전체 학습 데이터 내부 {INNER_SPLITS}-fold "
+                                            "OOF 로 따로 정한다(같은 F1 최대 규칙, 다른 OOF — 값이 다를 수 있다)"),
+                            **THRESHOLD_COLUMNS_NOTE},
         "calibration": {"model": best["name"], "basis": THRESHOLD_SELECTION["basis"],
                         "class_weight_note": "class_weight 로 양성 가중을 했으므로 확률이 실제 비율보다 높게 "
                                              "나올 수 있다 — 순서(ROC-AUC)와 별개로 본다",
@@ -609,7 +679,8 @@ SHAP_LOCAL_CUSTOMERS = 200
 def _tree_shap(model: "ChurnModel", X: pd.DataFrame) -> pd.DataFrame:
     """확정 모델(`ChurnModel`)의 고객별 SHAP 값 — 원 Feature 이름으로 묶는다(결측 지시자는 원 Feature 에 합산).
 
-    값은 이탈(양성) 쪽 로그오즈 기여다. 다시 학습하지 않는다 — 배치될 모델 그 자체를 설명한다.
+    값은 이탈(양성) 쪽 기여이고 **단위는 모델마다 다르다** — ``SHAP_UNITS``(RF 는 확률, HistGB 는 로그오즈).
+    다시 학습하지 않는다 — 배치될 모델 그 자체를 설명한다.
     """
     import shap
 
@@ -650,16 +721,21 @@ def explain_top_risk(model: "ChurnModel", X: pd.DataFrame, *, candidates=None,
                      n: int = SHAP_LOCAL_CUSTOMERS, top: int = SHAP_LOCAL_TOP) -> dict:
     """이탈 확률 상위 ``n`` 명의 SHAP Local — 대시보드 Target List 의 "왜 이 고객인가" (#215).
 
-    ``candidates`` 가 있으면(예: Eligible) 그 안에서만 고른다. 없거나 비면 ``X`` 전체에서 고르고 그렇게 적는다.
+    ``candidates`` 가 있으면(예: Eligible) 그 안에서만 고른다. ``None`` 이면(후보를 정하지 않음) ``X`` 전체에서 고르고
+    그렇게 적는다. **후보가 비면(빈 목록 · X 와 교집합 0) 넓히지 않고 빈 결과**다 — Eligible 밖 고객을 설명하지 않는다
+    (#280 리뷰 N1). ``shap_unit`` 은 기여값의 단위(``SHAP_UNITS``).
     """
-    pool = X.index if candidates is None else X.index.intersection(pd.Index(list(candidates)))
-    scope = "candidates" if candidates is not None and len(pool) else "all_scored"
-    if scope == "all_scored":
-        pool = X.index
+    if candidates is None:
+        pool, scope = X.index, "all_scored"
+    else:
+        pool, scope = X.index.intersection(pd.Index(list(candidates))), "candidates"
+    head = {"population": scope, "n_pool": int(len(pool)), "top_features": int(top), "model": model.name,
+            "shap_unit": shap_unit(model.name)}
+    if not len(pool):
+        return {**head, "n": 0, "rows": [], "note": "후보가 비어 있다 — 전체 고객으로 넓히지 않는다"}
     proba = predict_churn_proba(model, X.loc[pool])
     chosen = proba.sort_values(ascending=False, kind="mergesort").index[:n]
-    return {"population": scope, "n_pool": int(len(pool)), "n": int(len(chosen)), "top_features": int(top),
-            "model": model.name, "rows": explain_local(model, X.loc[chosen], top=top)}
+    return {**head, "n": int(len(chosen)), "rows": explain_local(model, X.loc[chosen], top=top)}
 
 
 def write_shap_summary(model: "ChurnModel", X: pd.DataFrame, path, *, seed: int,
@@ -684,7 +760,8 @@ def write_shap_summary(model: "ChurnModel", X: pd.DataFrame, path, *, seed: int,
     plt.savefig(target, dpi=150)
     plt.close("all")
     return {"status": "ok", "file": target.name, "model": model.name, "n_sample": int(len(picked)),
-            "max_display": int(max_display), "method": "TreeExplainer · 확정 모델(재학습 없음)"}
+            "max_display": int(max_display), "method": "TreeExplainer · 확정 모델(재학습 없음)",
+            "shap_unit": shap_unit(model.name)}
 
 
 # ── 학습·예측 ───────────────────────────────────────────────────────────────

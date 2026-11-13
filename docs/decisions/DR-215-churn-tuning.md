@@ -32,16 +32,17 @@ GATE 3 모델 동결(11/27)에서 동결할 모델이 FR-14 의 후보를 다 �
 |---|---|---|
 | SRS FR-14 · ML-005 | XGBoost · LightGBM 필수, Optuna 또는 Grid 튜닝, Test 반복 조정 금지 | Grid 로 충족 |
 | 산업체 멘토 피드백(2026-11-13) | 시간 순서로 나눈 실험이면 검증도 시간 순서로 | 검증 A 의 직접 근거 |
-| 저장소 실행 구조(`run_sprint`) | t1 은 워밍업 끝(처치 전), 라벨 관측 근거는 실행 단위(워밍업 실행이 [시작, t1) 을 덮는다) | 앞 기준일 라벨 [t1−42, t1) 은 워밍업 안 — 시뮬레이터를 더 부르지 않고 기존 근거로 만든다 |
+| 저장소 실행 구조(`run_sprint`) | t1 은 워밍업 끝(처치 전), 라벨 관측 근거는 실행 단위(워밍업 실행이 [시작, t1) 을 덮는다) | 앞 기준일 라벨 [t1−42, t1) 은 워밍업 안 — 새로 시뮬레이션하지 않는다. 구매 관측 상태는 그 창의 metrics 로 확인한다(PR #281 Q1 번복 — 아래) |
 | `uplift.py` 의 OpenMP 상한 실측 | 작은 모델 여러 번 학습 시 스레드 경합으로 8배 느려짐 | churn 에서도 같은 현상을 재현했다(합성 1,500명 평가 465 s → 상한 후 59 s, 고른 모델 · 값 동일) |
 | PyPI 판 선택 | 고정 판은 최소 2주 전 출시 | `--exclude-newer 2026-10-30` 으로 해석 → xgboost 3.4.1(Requires-Python ≥ 3.12) · lightgbm 4.7.0(≥ 3.10) — 선언 런타임 3.12 와 맞다 |
 
 ## 결정
 
 1. **모델.** `PROPOSED = random_forest · hist_gb · xgboost · lightgbm`. 기본값은 hist_gb 와 같은 크기(학습률 0.05 · 300 회 · 잎 15 안팎)로 둬 비교를 공정하게 한다(`config/model_config.yaml`). XGBoost 는 class_weight 가 없어 가중 없이 둔다 — 학습 모집단의 이탈 비율이 50% 안팎이다. LightGBM 은 `deterministic` · `force_row_wise` 로 같은 seed 면 같은 나무가 나오게 한다(NFR-01). 두 모델은 `n_jobs: 1`(수만 행에서 단일 스레드가 더 빠르고 다른 OpenMP 와 겹치지 않는다).
-2. **패키지가 없으면** 그 모델만 비교에서 빠지고 `churn_eval.models_unavailable` 에 사유가 남는다. 조용히 건너뛰지 않는다. `requirements.txt` 에 고정했다.
+2. **패키지가 없으면** 그 모델만 비교에서 빠지고 `churn_eval.models_unavailable` 에 사유가 남는다. 조용히 건너뛰지 않는다. `requirements.txt` 에 고정했다. **설치됐지만 불러오지 못하는 경우**(macOS 에 OpenMP 런타임 libomp 가 없으면 `import xgboost` 는 `XGBoostError`, `import lightgbm` 은 `OSError`)도 같은 사유로 분류한다 — `model_unavailable` 이 실제 import 까지 확인한다. import 시점의 실패만 환경 사유이고, 학습 · 예측 중 오류는 삼키지 않는다. 설치 안내(README · requirements.txt)에 `brew install libomp` 를 적었다(PR #281 리뷰 R1).
 3. **튜닝 = 안 A(Grid).** `churn.tuning.grids` 의 조합을 전부 비교하고 격자 전체 점수를 `models[].tuning.grid` 에 남긴다. 각 축은 기본값을 포함한다 — 검증 기준으로 기본보다 나빠지지 않는다. 같은 점수면 격자에 먼저 적힌 조합. 지표는 `roc_auc`(전략이 점수 **순서**로 고르므로).
-4. **검증 = 안 A(시간 순서).** 앞 기준일 = t1 − 42일. 그 시점 Eligible 고객(같은 정의, t1 가입일 명부로 판정 — t1 이후 가입자는 그때 고객이 아니다)의 Feature 와 [t1−42, t1) 라벨. 튜닝 · 모델 선택을 이것으로 하고, 모든 모델(기준선 포함)에 같은 시간 순서 검증 점수를 싣는다(`models[].temporal_validation`). 앞 기준일 데이터를 못 만들면 not_run 사유를 남기고 무작위 교차검증으로 고르며 그렇게 적는다(`selection_basis`).
+   **유효한 점수만 비교한다(PR #281 리뷰 R2).** 무작위 교차검증 대체 경로의 내부 fold 수는 `min(threshold_inner_folds, 소수 클래스 수)`(임계 선택과 같은 규칙)이고 실제 수를 `basis`(예: `inner_cv_2fold`) · `n_folds` 에 적는다. 한 클래스 fold · NaN 은 평균에 넣지 않고, 유한한 점수가 없는 조합은 `score: null` 로 남겨 고르지 않는다(`n_invalid`). 모든 조합이 무효면 `tuning.status = not_run` · 사유 · `used_defaults: true` — config 기본값을 쓰고 그렇게 적는다.
+4. **검증 = 안 A(시간 순서).** 앞 기준일 = t1 − 42일. 그 시점 Eligible 고객(같은 정의, t1 가입일 명부로 판정 — t1 이후 가입자는 그때 고객이 아니다)의 Feature 와 [t1−42, t1) 라벨. 튜닝 · 모델 선택을 이것으로 하고, 모든 모델(기준선 포함)에 같은 시간 순서 검증 점수를 싣는다(`models[].temporal_validation`). **라벨의 구매 관측 근거는 그 창 [t1−42, t1) 의 `sim.metrics`**(본선 세계, `run_meta.main_metric_windows.prior_label`)다 — 본선 라벨이 [t1, t2) 를 따로 조회하는 것과 같은 규칙(PR #281 리뷰 Q1, 아래 기각 표의 번복). 앞 기준일 데이터를 못 만들면 not_run 사유를 남기고 무작위 교차검증으로 고르며 그렇게 적는다(`selection_basis`).
 5. **확정 모델**은 고른 모델을 튜닝 값(`best_params`)으로 t1 학습 모집단 전체에 다시 학습한다. 학습에 안 쓴 성능은 시간 홀드아웃(t2, 1부)이 말한다 — 같은 t1 데이터의 교차검증 점수는 선택에 쓰인 데이터라 낙관적이라고 `selection_note` 에 적는다.
 6. **OpenMP 상한.** `evaluate_churn_models` · `fit_best_churn` · `evaluate_temporal_holdout` 을 스레드 1 개 상한 안에서 돌린다(`uplift.py` 와 같은 방식). 값은 스레드 수와 무관하다.
 
@@ -52,7 +53,7 @@ GATE 3 모델 동결(11/27)에서 동결할 모델이 FR-14 의 후보를 다 �
 | 튜닝 B(Optuna) | 의존성이 하나 더 늘고 시도 순서에 따라 결과가 달라질 수 있다. 우리 격자는 모델당 3~6 조합이라 Grid 로 충분하다 |
 | 검증 B(무작위 교차검증만) | 멘토 지적 그대로다 — 시간 흐름을 반영하지 않는다. 앞 기준일 데이터가 없을 때의 대체로만 둔다 |
 | 시험 · 홀드아웃으로 튜닝 | 시험을 보고 고르면 시험이 아니다(`src/decision/AGENTS.md`) |
-| 앞 기준일 라벨을 위해 시뮬레이터를 한 번 더 부르기 | 워밍업 실행 기록과 본선 이력 관측 근거가 이미 그 창을 덮는다. 호출을 늘리면 실행 계약(분기당 호출 수) 시험이 바뀐다 |
+| ~~앞 기준일 라벨을 위해 시뮬레이터를 한 번 더 부르기~~ — **번복(2026-11-14, PR #281 리뷰 Q1)** | 처음에는 본선 이력 창 [시작, t2) 의 `events.purchase` 상태로 대신했다. 공개 계약(`docs/simulator_api.md` `metrics`)은 창 `[start, end)` 단위이고 상태가 판 단위라는 명시가 없다 — 이력 창의 ok 가 [t1−42, t1) 창의 관측을 증명하지 않는다. 그래서 그 창을 본선 세계에서 한 번 더 조회한다(새 시뮬레이션은 없다). 분기당 호출 수는 그대로이고 본선 창 목록 계약 시험(`test_real_runner_uses_separate_main_windows_and_one_call_per_branch`)을 3개로 고쳤다 |
 | xgboost 를 CPU 전용 배포판으로 | 플랫폼별 고정이 필요하다 — 이번에는 평가하지 않았다(설치 크기 증가를 감수) |
 
 ## 이 결정이 틀렸다면 어떻게 드러나나
