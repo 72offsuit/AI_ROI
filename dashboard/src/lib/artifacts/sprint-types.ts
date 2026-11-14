@@ -126,8 +126,8 @@ export interface AbTest extends SprintHeader {
 }
 
 /**
- * `docs/research/realism_report.json`, read from its copy in `results/sprint-v0/latest/`
- * (DG-1 — the dashboard reads `results/` only). It is produced by research, not by the
+ * The public research version `docs/research/realism_public.json`, read from the run loop's copy
+ * `results/sprint-v0/latest/realism_report.json` (DG-1 — the dashboard reads `results/` only; #163). It is produced by research, not by the
  * pipeline run, so it carries no `run_id` and is not compared against `run_meta`.
  */
 export interface RealismReport {

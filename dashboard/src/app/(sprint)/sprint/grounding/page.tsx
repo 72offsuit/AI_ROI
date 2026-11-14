@@ -2,9 +2,11 @@
  * Data grounding (issue 147): generated vs real-data reference values with the
  * research team's verdict per metric, and a link to the grounding write-up.
  *
- * ★ Source: `docs/research/realism_report.json` is outside what the dashboard may read
- *   (DG-1, DB-014), so the screen reads its copy in `results/sprint-v0/latest/`. The
- *   verdict is the file's own field; the screen does not compare the two numbers.
+ * ★ Source: the public research version `docs/research/realism_public.json`, which the run loop
+ *   copies into `results/sprint-v0/latest/realism_report.json` (DG-1, DB-014 — the dashboard reads
+ *   `results/` only). Without the public version the screen shows "미생성". The internal research
+ *   report is not linked or bundled — the system team may not read it (#163). The verdict is the
+ *   file's own field; the screen does not compare the two numbers.
  * ★ Metric order is the file's order — "deviates" rows are not pushed down (DG-11).
  */
 import type { Metadata } from "next";
@@ -21,7 +23,7 @@ export const metadata: Metadata = { title: "스프린트 결과 · 데이터 근
 const GROUNDING_DOC =
   "https://github.com/72offsuit/AI_ROI/blob/main/docs/research/data_grounding.md";
 const REPORT_DOC =
-  "https://github.com/72offsuit/AI_ROI/blob/main/docs/research/realism_report.json";
+  "https://github.com/72offsuit/AI_ROI/blob/main/docs/research/realism_public.json";
 
 // realism_check.py writes its own verdict (pass · borderline · fail · no_data) and the same
 // verdict in the dashboard vocabulary (dashboard_verdict). The raw word is shown so that
@@ -92,10 +94,11 @@ export default async function GroundingPage() {
           </li>
           <li>
             <a href={REPORT_DOC} className="text-primary underline" target="_blank" rel="noreferrer">
-              docs/research/realism_report.json
+              docs/research/realism_public.json
             </a>{" "}
             <span className="text-text-secondary">
-              — 원본. 대시보드는 사본 <code className="font-mono">{SPRINT_DIR}/realism_report.json</code> 을 읽습니다
+              — 공개판. 실행 루프가 사본 <code className="font-mono">{SPRINT_DIR}/realism_report.json</code> 을 두고 대시보드는 그것을
+              읽습니다. 공개판이 없으면 미생성입니다(목업 모드도 같음)
             </span>
           </li>
         </ul>

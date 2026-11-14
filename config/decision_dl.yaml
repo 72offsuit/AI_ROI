@@ -1,0 +1,19 @@
+# #218 로컬 준비 사양. 실제 성능 최적값이나 공통 분할 승인값이 아니다.
+schema_version: 1
+sequence:
+  lookback_days: 180
+  max_events: 128
+lstm:
+  embedding_dim: 16
+  hidden_dim: 32
+  dropout: 0.2
+training:
+  max_epochs: 30
+  patience: 5
+  min_delta: 0.0001
+  batch_size: 128
+  learning_rate: 0.001
+  seed: 42
+  cpu_threads: 2
+comparison:
+  alpha_grid: [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]

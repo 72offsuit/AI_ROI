@@ -32,13 +32,18 @@ import mockUplift from "../../../fixtures/sprint-v0/uplift_eval.json";
 import mockSegments from "../../../fixtures/sprint-v0/segments.json";
 import mockStrategy from "../../../fixtures/sprint-v0/strategy_comparison.json";
 import mockAb from "../../../fixtures/sprint-v0/ab_test.json";
-import mockRealism from "../../../fixtures/sprint-v0/realism_report.json";
 
 export type SprintSource = "results" | "mock";
 
 export const SPRINT_DIR = "results/sprint-v0/latest";
 
-const MOCK: Record<SprintFileName, unknown> = {
+/**
+ * ★ `realism_report` has no mock (#163, PR #291 review R1). Its research-side original and the old
+ *   fixture copy carry measured treatment effects and the true quadrant mix, which the system team
+ *   may not read. In mock mode the grounding screen therefore shows "미생성" — the same as a results
+ *   run without the public version (`docs/research/realism_public.json`).
+ */
+const MOCK: Partial<Record<SprintFileName, unknown>> = {
   run_meta: mockRunMeta,
   churn_eval: mockChurn,
   clv_eval: mockClv,
@@ -46,10 +51,9 @@ const MOCK: Record<SprintFileName, unknown> = {
   segments: mockSegments,
   strategy_comparison: mockStrategy,
   ab_test: mockAb,
-  realism_report: mockRealism,
 };
 
-/** Files produced by the pipeline run. `realism_report` comes from research instead. */
+/** Files produced by the pipeline run. `realism_report` is the run loop's copy of the public research version. */
 const RUN_FILES: ReadonlySet<SprintFileName> = new Set([
   "run_meta",
   "churn_eval",

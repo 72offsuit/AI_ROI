@@ -169,7 +169,7 @@ required_run_days  = warmup_days + max(label_window_days, clv_horizon_days) + ta
 <tr><td><b>예측 기준일 T0</b></td><td>Day 273 = <code>2025-10-01</code></td><td>시점</td><td>스코어링 시점이자 캠페인 집행일. 세 모델 모두 동일한 T0를 쓴다.</td></tr>
 <tr><td>Treatment 집행</td><td>T0 당일 09:00 발송</td><td>1일</td><td>쿠폰/메시지 1회 노출. 반복 발송 없음.</td></tr>
 <tr><td><b>반응 관찰기간</b> (Response Window)</td><td>T0 ~ T0+13</td><td>14일</td><td>쿠폰 유효기간과 동일. 쿠폰 클릭·사용·즉시 전환 집계 구간.</td></tr>
-<tr><td><b>이탈 관찰기간</b> (Label Window)</td><td>T0+1 ~ T0+42</td><td>42일</td><td>Churn / Retention 라벨 확정 구간. Primary KPI 산정 구간.</td></tr>
+<tr><td><b>이탈 관찰기간</b> (Label Window)</td><td>[T0, T0+42) — T0 포함 · T0+42 제외 (#163, 두 팀 구현과 같다)</td><td>42일</td><td>Churn / Retention 라벨 확정 구간. Primary KPI 산정 구간.</td></tr>
 <tr><td><b>CLV Horizon</b></td><td>T0+1 ~ T0+365</td><td>365일</td><td>12개월 기여이익 실측. Secondary KPI 산정 구간.</td></tr>
 <tr><td>Tail Buffer</td><td>Day 639 ~ 640</td><td>2일</td><td>경계 이벤트 정산 여유.</td></tr>
 </tbody></table></div>
@@ -727,7 +727,7 @@ cooldown_days = 28                              # 직전 캠페인 대상 고객
 
 각 T0ᵏ 마다:
     - Eligible 재평가 → 층화 무작위 재배정 (배정은 캠페인마다 독립)
-    - Feature Cutoff = T0ᵏ − 1일,  라벨 = (T0ᵏ, T0ᵏ + 42]
+    - Feature Cutoff = T0ᵏ 미만,  라벨 = [T0ᵏ, T0ᵏ + 42)   (#163 — 시뮬레이터 · 시스템 구현과 같은 반열린 구간)
     - 직전 캠페인에서 처치받은 고객은 cooldown 기간 동안 배정 대상에서 제외
 
 분할:
