@@ -309,6 +309,20 @@ class TestModesEndToEnd(unittest.TestCase):
         self.assertEqual(cli.EXIT_MODEL_LOAD, code)
         self.assertFalse((base / "out").exists(), "멈춘 실행이 시뮬레이터 출력을 만들었다")
 
+    def test_full_writes_cate_file_in_the_s8_contract(self) -> None:
+        """#217 · DR-S8 결정 1 — 고객별 τ̂ ``cate.jsonl`` 은 정해진 열만, t1 · t2 두 기준 시각, 계산 불가는 null."""
+        _, run_dir = self.runs["full"]
+        record = _read(run_dir / "uplift_eval.json")["cate_file"]
+        self.assertEqual("ok", record["status"], record)
+        self.assertEqual({"t1", "t2"}, set(record["rows"]))
+        self.assertIs(True, record["in_sample_t1"])  # 같은 실행에서 학습했다 — 채점은 Final Holdout 파일로
+        rows = [json.loads(line) for line in (run_dir / "cate.jsonl").read_text(encoding="utf-8").splitlines()]
+        self.assertEqual(sum(record["rows"].values()), len(rows))
+        for row in rows:
+            self.assertEqual(["customer_id", "t0", "cate_T1", "cate_T2", "cate_T3", "cate_T4"], list(row))
+        timeline = _read(run_dir / "run_meta.json")["timeline"]
+        self.assertEqual({timeline["t1"], timeline["t2"]}, {row["t0"] for row in rows})
+
     def test_train_trains_and_scores_nothing(self) -> None:
         _, run_dir = self.runs["train"]
         for name in ("churn_eval", "uplift_eval", "clv_eval"):
