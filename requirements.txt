@@ -63,6 +63,11 @@ scipy==1.18.1
 # TreeExplainer feature attribution for the churn report. Failure is tolerated:
 # churn.churn_importance() falls back to permutation importance and records that it did.
 shap==0.54.1
+# shap_summary.png (SRS FR-16 · #215) — shap.summary_plot draws with it. Imported lazily inside
+# churn.write_shap_summary() only, on the headless Agg backend. A drawing failure does not fail the
+# churn stage; run_sprint records status "failed" with the reason in churn_eval.shap_summary.
+# Pinned to the version the dev venv (Python 3.12) already ran.
+matplotlib==3.11.2
 
 # ── Deliberately absent ───────────────────────────────────────────────────────
 # torch                          -> optional DL (src/decision/churn_dl.py). Lives in

@@ -127,6 +127,7 @@ def _epilog() -> str:
         "출력 (모든 모드):",
         "  <results-root>/sprint-v0/<run_id>/  run_meta · churn_eval · clv_eval · uplift_eval · segments ·",
         "      strategy_comparison · ab_test (.json 7종 — 범위 밖 단계는 status=not_run 과 사유) + latest 링크",
+        "      + shap_summary.png (churn 단계가 그렸을 때 — 상태는 churn_eval.shap_summary, #215)",
         f"      + {MANIFEST} (모드 · 실행한 단계 · 산출물 상태) + 모드별 파일({UPLIFT_SCORES} · {BUDGET_ALLOCATION})",
         "      results-root 기본: full 은 results/ (대시보드가 읽는 곳), 나머지는 results/cli/<mode>/",
         "      — 부분 실행이 대시보드의 latest 를 덮지 않게 한다",

@@ -768,10 +768,15 @@ class TestOutcomeObservationContract(unittest.TestCase):
         self.assertEqual("ok", stages["churn_temporal_holdout"]["status"])
         self.assertEqual(["main", "main", "S0", "S1"], calls)
         self.assertEqual(1, len(holdout))
-        self.assertEqual(40, len(holdout[0]))
+        # #215 — 시간 홀드아웃은 학습 모집단과 같은 정의(Eligible(t2) ∩ t1 실험 무처치)로 잰다.
+        # 이 세계는 40명 전원이 Eligible 이고 t1 실험에서 절반(20명)이 T1~T4 를 받았다 → 20명.
+        self.assertEqual(20, len(holdout[0]))
+        scoped = result["churn_eval"]["temporal_holdout"]
+        self.assertEqual((40, 0, 20), (scoped["n_labeled_all"], scoped["n_excluded_not_eligible"],
+                                       scoped["n_excluded_rct_treated"]))
         audit = result["churn_eval"]["temporal_population_audit"]
         self.assertEqual(audit["training_and_selection"]["n_labeled"], audit["intersection_n"])
-        self.assertEqual(40, audit["future_evaluation"]["n_labeled"])
+        self.assertEqual(20, audit["future_evaluation"]["n_labeled"])
         self.assertEqual("not_established_by_this_audit", audit["split_compliance"])
         self.assertEqual("ok", captured["Y1"].attrs["outcome_observation"]["status"])
         for strategy in ("S0", "S1"):
