@@ -18,7 +18,10 @@
   "처치군 중 창 안 구매자" 분모도 함께 싣는다(판정하지 않는다)
 - 잠재결과 4분면(arm 마다, 창 내 구매 여부 Y): Persuadable = Y(T_k)=1·Y(T0)=0, Sleeping Dog = 0·1,
   Sure Thing = 1·1, Lost Cause = 0·0. 판정 — Sleeping Dog 8~15%, Persuadable 11~21%(2026-10-22 사용자 확정,
-  §3-2 — PRD 원문 20~30% 폐기), 항등식 P − D = ATE(±0.5%p, ATE 는 τ 평균으로 따로 계산)
+  §3-2 — PRD 원문 20~30% 폐기)
+- 4분면 일관성(`quadrant_consistency_*`, ±0.5%p): P − D − Σ τ / n. 4분면과 τ 를 같은 반사실 실행 결과
+  (treatment.potential_outcomes 의 `arms`)에서 세므로 **구조적으로 항상 0** 이다 — 잠재결과가 맞는지의 독립
+  검증이 아니라 4분면 분류 · τ 집계 코드의 회귀 검사(산술 일관성)다(#208)
 - 반응 성향(Trait 유형)은 4분면과 정의가 달라 판정에 쓰지 않는다 — 참고값이다
 """
 
@@ -153,7 +156,7 @@ def _split(checks: list[dict[str, object]]) -> tuple[list[dict[str, object]], li
 
 
 def _quadrants(rows: list[dict[str, object]], tid: str) -> dict[str, object]:
-    """창 내 구매 여부의 잠재결과 4분면(만분율). ATE 는 τ 평균으로 따로 세어 항등식 P − D = ATE 를 검사한다."""
+    """창 내 구매 여부의 잠재결과 4분면(만분율)과 τ 평균 ATE. 둘의 산술 일관성 gap 도 싣는다(모듈 docstring)."""
     n = len(rows)
     cells = {"persuadable": 0, "sleeping_dog": 0, "sure_thing": 0, "lost_cause": 0}
     for row in rows:
@@ -169,6 +172,8 @@ def _quadrants(rows: list[dict[str, object]], tid: str) -> dict[str, object]:
     found: dict[str, object] = {f"{name}_bp": _bp(count, n) for name, count in cells.items()}
     found["ate_bp"] = _bp(ate_count, n)
     gap_bp = _bp(gap_count, n)
+    # 같은 `outcomes` 에서 τ 를 만들었으므로 gap 은 구조적으로 항상 0 — 산술 일관성 값이다.
+    # 필드 이름 `identity_gap_*` 은 scripts/research/realism_check.py 가 읽으므로 유지한다.
     found["identity_gap_bp"] = gap_bp
     # 부동소수를 쓰지 않으므로 %p 값은 정확한 십진 문자열로 싣는다(만분율 100 = 1%p).
     found["identity_gap_pp"] = None if gap_bp is None else _percent(gap_bp).rstrip("%")
@@ -196,9 +201,10 @@ def _checks(result: dict[str, object], p: params.Params) -> list[dict[str, objec
     for t, quadrant in result["potential_outcome_quadrants"].items():
         add(f"sleeping_dog_{t}", quadrant["sleeping_dog_bp"], "sleeping_dog_bp")
         add(f"persuadable_{t}", quadrant["persuadable_bp"], "persuadable_bp")
+        # 4분면 일관성(구조적으로 0 인 산술 검사, 옛 이름 identity_*). 참고 쪽 이름은 active42_ 가 붙는다.
         gap = quadrant["identity_gap_bp"]
         checks.append({
-            "name": f"identity_{t}", "value_bp": gap, "range_bp": [-50, 50],
+            "name": f"quadrant_consistency_{t}", "value_bp": gap, "range_bp": [-50, 50],
             "status": "not_run" if gap is None else ("pass" if -50 <= gap <= 50 else "fail"),
         })
     return checks
