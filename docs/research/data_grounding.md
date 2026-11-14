@@ -214,6 +214,8 @@ Hidden Trait 16종만 보면 정량 근거 7 · 방향 근거 5 · 근거 없음
 
 **판정 방식.** 각 항목을 통과 / 경계(띠에서 ±20% 이내 이탈) / 실패로 적는다. 실패 항목은 원인 Trait 을 §2 에서 찾아 **GATE 1 전에** 해당 DR 을 재개한다. 근거는 이 표와 외부 자료뿐이고 AI 결과는 쓰지 않는다.
 
+> **GATE 1 판정 규칙은 `docs/decisions/DR-208-gate1-acceptance-criteria.md` 가 정한다**(seed · 표본 · 필수/기록 구분 · seed 집계, 기계가독 판본 `config/simulator_gate1_acceptance.yaml`). 띠 값의 정본은 이 표 그대로다. 단 기록 검사 항목(F1~F11 · F13 · F17)의 실패와 값 없음(no_data)은 위 "GATE 1 전에 DR 재개" 대신 **봉인 PR 전 DR 기록 + 후속 이슈**로 다룬다(DR-208, 리드 결정 2026-11-13).
+
 **발표용 한 줄.** "생성 데이터는 실제 장보기 데이터 2종(Instacart 340만 주문, dunnhumby 2,469가구 1년), 공개 업리프트 실험 4종(Hillstrom·Criteo·X5·Lenta), 국내 통계(오픈서베이·국가데이터처·컬리 공개 수치)에서 뽑은 17개 stylized fact 와 대조해 검증한다."
 
 ---
