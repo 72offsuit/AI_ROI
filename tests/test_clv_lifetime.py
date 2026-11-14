@@ -304,16 +304,21 @@ class TestExpectedPurchasesEveryA(unittest.TestCase):
         self.assertAlmostEqual(2.1e6 / (2.1e6 + 1.87e8), float(weights @ p), places=12)
 
     def test_a_fitted_huge_shape_model_still_predicts(self) -> None:
-        """PR #293 2차 리뷰 — fit_bgnbd 가 수렴으로 보고한 거대 모수 모형(a ~ 1e6)의 기대 거래 수 · 12개월 CLV 가 유한하다."""
+        """PR #293 2차 리뷰 — fit_bgnbd 가 수렴으로 보고한 거대 모수 모형의 기대 거래 수 · 12개월 CLV 가 유한하다."""
         import numpy as np
+        from scipy.special import roots_jacobi
 
-        from src.decision.clv_lifetime import LifetimeModel, clv_from_summary, expected_purchases, fit_bgnbd
+        from src.decision.clv_lifetime import QUAD_NODES, LifetimeModel, clv_from_summary, expected_purchases, fit_bgnbd
 
         train = _simulate_summary(2000, seed=14, params={"r": 0.8, "alpha": 20.0, "a": 20.0, "b": 2000.0})
         bg = fit_bgnbd(train)
         self.assertTrue(bg["converged"])
-        self.assertGreater(bg["a"], 1e5)
         x, tx, T = (train[c].to_numpy() for c in ("frequency", "recency", "T"))
+        # 거대 모수의 정확한 크기는 플랫폼마다 다르다(로컬 a ≈ 2.1e6, CI a ≈ 9.7e4 — 극단으로 가는 우도라 최적화가
+        # 멈추는 곳이 수치 연산에 따라 다르다). 지켜야 하는 것은 "이전 경로(roots_jacobi)라면 넘쳤을 영역"이라는 사실이다.
+        with np.errstate(all="ignore"):
+            _, old_weights = roots_jacobi(QUAD_NODES, bg["b"] + float(x.max()) - 1.0, bg["a"] - 1.0)
+        self.assertFalse(np.isfinite(old_weights).all(), "overflow 영역에 들지 않았다 — 이 시험이 회귀를 덮지 못한다")
         self.assertTrue(np.isfinite(expected_purchases(bg, 365.0, x, tx, T)).all())
         model = LifetimeModel(bgnbd=bg, gamma_gamma=dict(TRUE_GG), fitted_at="t1", horizon_months=12,
                               annual_discount_rate=0.12, n_customers=len(train))
