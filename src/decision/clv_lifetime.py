@@ -147,9 +147,12 @@ def _beta_nodes(a: float, shape_b: float, n: int = QUAD_NODES) -> tuple[np.ndarr
     diag[0] = (be - al) / (al + be + 2.0)
     s = 2.0 * k + al + be
     diag[1:] = (be - al) * (be + al) / (s * (s + 2.0))
-    off2 = 4.0 * k * (k + al) * (k + be) * (k + al + be) / (s * s * (s + 1.0) * (s - 1.0))
-    # k = 1 은 (k + α + β) / (2k + α + β − 1) = 1 로 약분해 둔다 — α + β + 1 이 0 근처여도 0/0 이 되지 않게
+    off2 = np.empty(n - 1)
+    # k = 1 은 (k + α + β) / (2k + α + β − 1) = 1 로 약분한 식만 쓴다 — 일반식을 먼저 계산하면 α + β + 1 = 0(a + b + x = 1)
+    # 에서 0/0 경고가 난다(PR #293 3차 리뷰 P3). 일반식은 k ≥ 2 에만.
     off2[0] = 4.0 * (1.0 + al) * (1.0 + be) / ((2.0 + al + be) ** 2 * (3.0 + al + be))
+    k2, s2 = k[1:], s[1:]
+    off2[1:] = 4.0 * k2 * (k2 + al) * (k2 + be) * (k2 + al + be) / (s2 * s2 * (s2 + 1.0) * (s2 - 1.0))
     z, vectors = eigh_tridiagonal(diag, np.sqrt(off2))
     weights = vectors[0] ** 2
     return (z + 1.0) / 2.0, weights / weights.sum()
