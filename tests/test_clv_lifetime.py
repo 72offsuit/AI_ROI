@@ -283,6 +283,16 @@ class TestExpectedPurchasesEveryA(unittest.TestCase):
                     got = self.value({**base, "a": a, "b": b}, 30.0, 3.0, 95.0, 100.0)
                     self.assertLess(abs(got - expected), 1e-10)
 
+    def test_a_plus_b_equal_one_raises_no_warning(self) -> None:
+        """PR #293 3차 리뷰 P3 — a + b + x = 1(α + β + 1 = 0)에서도 0/0 경고 없이 계산한다(리뷰 기준값 ≈ .1807927254)."""
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            got = self.value({"r": 0.8, "alpha": 20.0, "a": 0.5, "b": 0.5}, 30.0, 0.0, 0.0, 100.0)
+        self.assertAlmostEqual(0.1807927254, got, places=9)
+        self.assertLess(abs(got - _adaptive({"r": 0.8, "alpha": 20.0, "a": 0.5, "b": 0.5}, 30.0, 0.0, 0.0, 100.0)), 1e-9)
+
     def test_beta_nodes_are_normalized_gauss_nodes(self) -> None:
         """구적 노드 · 가중치가 정규화한 scipy Gauss–Jacobi 와 같고, 가중치 합 1 · 평균 a/(a+b) 를 지킨다."""
         import numpy as np
