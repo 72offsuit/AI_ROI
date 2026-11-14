@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
+from unittest import mock
 from importlib.util import find_spec
 from pathlib import Path
 
@@ -81,8 +82,12 @@ class TestBenchmarkRunner(unittest.TestCase):
             frame = _hillstrom_like(2400, seed=1)
             frame.to_csv(data, index=False)
             out = Path(tmp) / "out.json"
-            self.assertEqual(0, main(["--hillstrom", str(data), "--out", str(out)]))
+            with mock.patch.dict("src.decision.uplift_benchmarks.INTEGRITY", clear=True):  # 합성 CSV — 기준 없음
+                self.assertEqual(0, main(["--hillstrom", str(data), "--out", str(out)]))
             report = json.loads(out.read_text(encoding="utf-8"))
+        self.assertEqual("no_reference", report["integrity"]["hillstrom"]["status"])
+        self.assertTrue(report["run"]["started_at"] <= report["run"]["finished_at"])
+        self.assertIn("commit", report["run"]["code"])
         self.assertEqual("not_run", report["results"]["lenta_response_att"]["status"])
         self.assertEqual({"file": "hillstorm_like.csv", "rows": 2400},
                          {k: report["datasets"]["hillstrom"][k] for k in ("file", "rows")})
@@ -98,6 +103,24 @@ class TestBenchmarkRunner(unittest.TestCase):
             self.assertNotIn("qini_curve", run["test"]["t_learner"])
         text = json.dumps(report)
         self.assertNotIn("customer_ids", text)  # 고객 ID · 곡선 없이 집계만
+
+    def test_integrity_mismatch_refuses_to_run(self) -> None:
+        """PR #294 리뷰 2 — 사전 고정 무결성 기준(행 수 · 처치별 결과 비율)과 다르면 실행하지 않는다."""
+        from src.decision import uplift_benchmarks as ub
+
+        frame = _hillstrom_like(600, seed=2)
+        record = ub.check_integrity("hillstrom", frame)  # 실제 기준(64,000행 · 18.28/15.14/10.62%)과 다르다
+        self.assertEqual("mismatch", record["status"])
+        self.assertEqual(600, record["rows"])
+        with tempfile.TemporaryDirectory() as tmp:
+            data = Path(tmp) / "h.csv"
+            frame.to_csv(data, index=False)
+            with self.assertRaises(ValueError):
+                ub.run({"hillstrom": data})
+        rates = {k: round(float(v) * 100, 2) for k, v in frame.groupby("segment")["visit"].mean().items()}
+        spec = {"hillstrom": {"rows": 600, "group_col": "segment", "outcome": "visit", "rates": rates}}
+        with mock.patch.dict(ub.INTEGRITY, spec, clear=True):
+            self.assertEqual("ok", ub.check_integrity("hillstrom", frame)["status"])
 
 
 if __name__ == "__main__":

@@ -124,9 +124,10 @@ def _regressor(seed: int, params: Mapping[str, Any]):
 
 def regularization_candidates(base: Mapping[str, Any] | None = None,
                               tuning: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
-    """규제 후보 목록 — **현행값(base) 이 첫째**, 이어서 격자 곱집합(축 이름 순 · 값은 적은 순서). 중복은 한 번만.
+    """규제 후보 목록 — **현행값(base) 이 첫째**, 이어서 격자 곱집합(축 이름 순 · 값은 오름차순). 중복은 한 번만.
 
-    ``tuning.enabled`` 가 거짓이면 현행값 하나뿐이다(DR-217-uplift-tuning).
+    값 순서는 config 배열 순서가 아니라 **오름차순으로 정렬**한다 — 동점이면 앞선 후보가 이기므로 순서가 규약이다
+    (PR #294 리뷰 4 · DR-217-uplift-tuning 구현 명확화 2). ``tuning.enabled`` 가 거짓이면 현행값 하나뿐이다.
     """
     base = dict(BASE_LEARNER if base is None else base)
     tuning = TUNING if tuning is None else tuning
@@ -134,7 +135,7 @@ def regularization_candidates(base: Mapping[str, Any] | None = None,
     if tuning.get("enabled"):
         grid = tuning["grid"]
         keys = sorted(grid)
-        for values in itertools.product(*(tuple(grid[k]) for k in keys)):
+        for values in itertools.product(*(tuple(sorted(grid[k])) for k in keys)):
             cand = {**base, **dict(zip(keys, values))}
             if cand not in out:
                 out.append(cand)
@@ -579,8 +580,13 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
         sel_p = t_te.isin([CONTROL, primary_arm]).to_numpy()
         current_row = _score_row(f"{best_m}@current", METHOD_KIND[best_m], current[primary_arm].to_numpy()[sel_p],
                                  (t_te[sel_p] == primary_arm).to_numpy(), y_te[sel_p].to_numpy(), False)
+    # PR #294 리뷰 3 — "고르는 데 성공했나"와 "실제로 쓴 규제"를 나눠 적는다. 고르지 못하면 현행값으로 학습한다.
+    selected = selection.get("base_learner") is not None
     tuning_report = {
-        "chosen_base_learner": chosen, "chosen_is_current": bool(selection.get("base_learner_is_current")),
+        "selection_ok": selected,
+        "selection_reason": None if selected else (selection.get("reason") or "유효한 Validation Qini 가 없다 — 현행값을 쓴다"),
+        "chosen_base_learner": selection.get("base_learner"), "chosen_is_current": bool(selection.get("base_learner_is_current")),
+        "used_base_learner": chosen, "used_is_current": chosen == dict(BASE_LEARNER),
         "current_base_learner": dict(BASE_LEARNER),
         "test_current_regularization": current_row,
         "note": "Test 는 선택에 쓰지 않았다 — 고른 규제의 Test 지표는 models 의 해당 행, 현행값은 위 행(보고만)",

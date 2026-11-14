@@ -321,6 +321,36 @@ class TestRegularizationTuning(unittest.TestCase):
         self.assertIs(False, sel["tuning"]["enabled"])
         self.assertEqual(dict(uplift.BASE_LEARNER), r["base_learner"])
 
+    def test_grid_values_are_sorted_whatever_the_config_order(self) -> None:
+        """PR #294 리뷰 4 — 동점이면 앞선 후보가 이기므로 값 순서는 규약이다: config 배열 순서와 무관하게 오름차순."""
+        from src.decision import uplift
+
+        base = dict(uplift.BASE_LEARNER)
+        shuffled = {"enabled": True, "metric": "qini", "grid": {"min_samples_leaf": (200, 40, 80), "max_depth": (3, 2)}}
+        got = [(c["max_depth"], c["min_samples_leaf"]) for c in uplift.regularization_candidates(base, shuffled)]
+        self.assertEqual([(3, 80), (2, 40), (2, 80), (2, 200), (3, 40), (3, 200)], got)
+
+    def test_failed_selection_is_told_apart_from_choosing_the_current_value(self) -> None:
+        """PR #294 리뷰 3 — 고르지 못해 현행값을 쓴 경우: selection_ok=False 이고 실제로 쓴 규제(used_*)가 따로 남는다."""
+        from unittest import mock
+
+        from src.decision import uplift
+
+        failed = {"best_method": None, "base_learner": None, "base_learner_is_current": False,
+                  "basis": "test", "candidates": ["t_learner"], "validation_qini": {}, "tuning": {"grid": []}}
+        with mock.patch.object(uplift, "_select_method", return_value=failed):
+            r = evaluate_uplift_models(self.X.iloc[:1200], self.t.iloc[:1200], self.y.iloc[:1200], seed=0,
+                                       methods=("t_learner",))
+        report = r["tuning_report"]
+        self.assertIs(False, report["selection_ok"])
+        self.assertIn("현행값", report["selection_reason"])
+        self.assertIsNone(report["chosen_base_learner"])
+        self.assertEqual((dict(uplift.BASE_LEARNER), True), (report["used_base_learner"], report["used_is_current"]))
+        self.assertEqual(dict(uplift.BASE_LEARNER), r["base_learner"])
+        ok = self.res["tuning_report"]
+        self.assertIs(True, ok["selection_ok"])
+        self.assertEqual(ok["chosen_base_learner"], ok["used_base_learner"])
+
     def test_fit_records_and_uses_the_given_regularization(self) -> None:
         from src.decision import uplift
 

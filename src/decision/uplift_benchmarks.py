@@ -35,6 +35,44 @@ BENCHMARKS: tuple[dict[str, Any], ...] = (
 )
 
 
+#: 사전 고정한 무결성 기준(DR-217-uplift-tuning 「외부 검증」 · docs/research/raw_uplift.md 원자료 집계) — 처치 열별 결과
+#: 비율(%, 소수 둘째 자리)과 행 수. 다르면 실행하지 않는다(PR #294 리뷰 2 — 2026-11-14 첫 실행은 별도 스크립트로 수동 확인했다).
+INTEGRITY: dict[str, dict[str, Any]] = {
+    "hillstrom": {"rows": 64000, "group_col": "segment", "outcome": "visit",
+                  "rates": {"Mens E-Mail": 18.28, "Womens E-Mail": 15.14, "No E-Mail": 10.62}},
+    "lenta": {"rows": None, "group_col": LENTA_TREATMENT, "outcome": LENTA_OUTCOME,
+              "rates": {"test": 11.01, "control": 10.26}},
+}
+
+
+def check_integrity(name: str, frame) -> dict[str, Any]:
+    """내려받은 원자료가 사전 고정 기준과 같은지 — 행 수 · 처치 열별 결과 비율. 기준이 없으면 ``no_reference``."""
+    spec = INTEGRITY.get(name)
+    if spec is None:
+        return {"status": "no_reference", "rows": int(len(frame))}
+    observed = {str(k): round(float(v) * 100, 2)
+                for k, v in frame.groupby(spec["group_col"])[spec["outcome"]].mean().items()}
+    rows_ok = spec["rows"] is None or int(len(frame)) == spec["rows"]
+    rates_ok = all(observed.get(k) == v for k, v in spec["rates"].items())
+    return {"status": "ok" if rows_ok and rates_ok else "mismatch", "rows": int(len(frame)),
+            "expected": {"rows": spec["rows"], "rates_pct": spec["rates"]}, "observed_rates_pct": observed}
+
+
+def _code_commit() -> dict[str, Any]:
+    """실행한 코드의 커밋과 작업 트리가 깨끗한지 — 결과 JSON 에 남긴다(PR #294 리뷰 2)."""
+    import subprocess
+
+    root = Path(__file__).resolve().parents[2]
+    try:
+        head = subprocess.run(["git", "-C", str(root), "rev-parse", "HEAD"], capture_output=True, text=True,
+                              check=True).stdout.strip()
+        dirty = bool(subprocess.run(["git", "-C", str(root), "status", "--porcelain"], capture_output=True, text=True,
+                                    check=True).stdout.strip())
+    except (OSError, subprocess.CalledProcessError) as error:
+        return {"commit": None, "dirty": None, "reason": f"{type(error).__name__}: {error}"[:200]}
+    return {"commit": head, "dirty": dirty}
+
+
 def load_hillstrom(path) -> tuple[Any, list[str]]:
     """Hillstrom(scikit-uplift 미러) — ``segment`` · ``visit`` · ``conversion`` 과 공변량 8개."""
     import pandas as pd
@@ -96,10 +134,17 @@ def run(paths: dict[str, Path], threads: int | None = 1) -> dict[str, Any]:
 
     from src.decision import uplift
 
+    from datetime import datetime, timedelta, timezone
+
+    started_at = datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="seconds")
     previous, uplift.N_THREADS = uplift.N_THREADS, threads  # 끝나면 되돌린다(실행 루프 기본값을 남기지 않는다)
     try:
         loaders = {"hillstrom": load_hillstrom, "lenta": load_lenta}
         frames = {name: loaders[name](path) for name, path in paths.items()}
+        integrity = {name: check_integrity(name, frames[name][0]) for name in frames}
+        bad = {name: rec for name, rec in integrity.items() if rec["status"] == "mismatch"}
+        if bad:  # 사전 고정: 기준과 다르면 실행하지 않는다
+            raise ValueError(f"원자료 무결성 불일치 — 실행하지 않는다: {bad}")
         results: dict[str, Any] = {}
         for spec in BENCHMARKS:
             if spec["dataset"] not in frames:
@@ -119,6 +164,10 @@ def run(paths: dict[str, Path], threads: int | None = 1) -> dict[str, Any]:
         uplift.N_THREADS = previous
     return {
         "decision_record": "docs/decisions/DR-217-uplift-tuning.md",
+        "run": {"started_at": started_at,
+                "finished_at": datetime.now(timezone(timedelta(hours=9))).isoformat(timespec="seconds"),
+                "code": _code_commit()},
+        "integrity": integrity,
         "procedure": "evaluate_on_benchmark — 실행 루프와 같은 분할 · 규제 격자 · Validation Qini 선택(Test 미사용)",
         "base_learner_current": dict(uplift.BASE_LEARNER), "tuning": json.loads(json.dumps(dict(uplift.TUNING),
                                                                                              default=dict)),

@@ -2040,7 +2040,6 @@ def run(config: SprintConfig) -> Path:
                 fit = decision_fn("fit_uplift")
                 params = inspect.signature(fit).parameters
                 kwargs = uplift_fit_kwargs(fit, evaluation, config.seed)
-                uplift_eval["fitted_base_learner"] = kwargs.get("params")
                 method = _pick_method(evaluation)
                 if method is None:
                     if "method" in params and params["method"].default is inspect.Parameter.empty:
@@ -2052,6 +2051,12 @@ def run(config: SprintConfig) -> Path:
                     ctx["uplift_model"] = fit(ctx["X_rct"], ctx["treatment"], retention, method, **kwargs)
                     uplift_eval["fitted_method"] = method
                     uplift_eval["fitted_method_source"] = "evaluate_uplift_models 의 best_method"
+                # PR #294 리뷰 3 — 실제로 쓴 규제는 학습된 객체에서 읽는다(고르지 못해 기본값으로 학습한 경우도 값이 남는다)
+                used = getattr(ctx["uplift_model"], "base_learner", None)
+                uplift_eval["fitted_base_learner"] = dict(used) if used else kwargs.get("params")
+                uplift_eval["fitted_base_learner_source"] = (
+                    "Validation 으로 고른 규제" if "params" in kwargs
+                    else "fit_uplift 기본값(고른 규제 없음 · 넘기지 않음)" if used else "기록 없음(이 fit 은 규제를 남기지 않는다)")
 
         # CLV — 전 군 42일 매출 ----------------------------------------------
         with log.stage("clv", requires=("training_set",)):
