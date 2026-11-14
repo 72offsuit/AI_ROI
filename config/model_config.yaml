@@ -42,6 +42,53 @@ churn:
       l2_regularization: 1.0
       class_weight: balanced
       early_stopping: false
+    # #215 · SRS FR-14 — 기본값은 hist_gb 와 같은 크기(학습률 0.05 · 300 회 · 잎 15 안팎)로 맞춰 비교를 공정하게 둔다.
+    # XGBoost 는 class_weight 가 없다 — 학습 모집단(T0 군)의 이탈 비율이 50% 안팎이라 가중 없이 둔다(DR-215).
+    xgboost:
+      n_estimators: 300
+      learning_rate: 0.05
+      max_depth: 4
+      subsample: 0.8
+      colsample_bytree: 0.8
+      reg_lambda: 1.0
+      tree_method: hist
+      n_jobs: 1
+    # deterministic · force_row_wise — 같은 seed 면 같은 나무가 나오게 한다(NFR-01). verbose -1 은 로그 끔.
+    # n_jobs 1 — 수만 행 규모에서는 단일 스레드가 더 빠르다. -1 이면 sklearn · OpenMP 스레드와 겹쳐 느려진다(#215 실측).
+    lightgbm:
+      n_estimators: 300
+      learning_rate: 0.05
+      num_leaves: 15
+      min_child_samples: 20
+      subsample: 0.8
+      subsample_freq: 1
+      colsample_bytree: 0.8
+      reg_lambda: 1.0
+      class_weight: balanced
+      deterministic: true
+      force_row_wise: true
+      n_jobs: 1
+      verbose: -1
+  # #215 — Validation 튜닝(Grid). 축마다 후보를 적고, 그 곱의 조합을 **검증 데이터로만** 비교한다:
+  # 앞 기준일(t1 − 42일)로 학습 → t1 학습 모집단으로 평가(시간 순서 검증). 그 데이터가 없으면 학습 데이터
+  # 내부 교차검증. 시험 · 홀드아웃은 보지 않는다. 각 축은 위 기본값을 포함한다 — 검증 기준으로 기본보다
+  # 나빠지지 않게. 고른 값은 churn_eval.models[].tuning 에 격자 전체 점수와 함께 남는다.
+  tuning:
+    enabled: true
+    metric: roc_auc
+    grids:
+      random_forest:
+        min_samples_leaf: [1, 3, 10]
+        n_estimators: [300]
+      hist_gb:
+        learning_rate: [0.03, 0.05, 0.1]
+        max_leaf_nodes: [15, 31]
+      xgboost:
+        max_depth: [3, 4, 6]
+        learning_rate: [0.05, 0.1]
+      lightgbm:
+        num_leaves: [15, 31]
+        learning_rate: [0.05, 0.1]
 
 clv:
   # evaluate_clv 의 KFold OOF fold 수.

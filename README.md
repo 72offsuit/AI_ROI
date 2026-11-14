@@ -52,6 +52,9 @@ python src/main.py --mode train --customers 2000 --profile small     # 스모크
 python src/main.py --help                                            # 모드별 입력 · 출력 · 종료 코드
 ```
 
+> macOS 는 Churn 제안 모델 XGBoost · LightGBM 에 OpenMP 런타임이 필요하다 — `brew install libomp`. 없으면 두 패키지가
+> 설치돼도 불러오지 못하고, 두 모델은 비교에서 빠지며 `churn_eval.models_unavailable` 에 사유가 남는다(PR #281).
+
 모드는 `train` · `uplift` · `optimize --budget <KRW>` · `evaluate` · `full`(SRS SYS-004 · PRD §73). 실행 루프
 (`src/orchestration/run_sprint.py`)의 단계 중 무엇을 돌릴지만 고르는 디스패처이고, 모델 하이퍼파라미터 · 세그먼트 경계 ·
 실험 값은 `config/model_config.yaml` · `config/experiment_config.yaml` 에서 읽는다. 근거와 한계: `docs/decisions/DR-206-main-cli-config.md`.

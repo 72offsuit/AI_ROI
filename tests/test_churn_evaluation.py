@@ -146,7 +146,8 @@ class TestEvaluationCarriesTheNewTables(unittest.TestCase):
 
         from src.decision import churn
 
-        for name in ("random_forest", "hist_gb"):
+        names = ["random_forest", "hist_gb"] + [n for n in ("xgboost", "lightgbm") if churn.model_unavailable(n) is None]
+        for name in names:
             model = churn.make_model(name, 3).fit(self.X, self.y)
             Xt = model[:-1].transform(self.X.iloc[:15].astype(float))
             explainer = shap.TreeExplainer(model[-1])
@@ -158,7 +159,7 @@ class TestEvaluationCarriesTheNewTables(unittest.TestCase):
             proba = model.predict_proba(self.X.iloc[:15].astype(float))[:, 1]
             target = {"probability": proba, "log_odds": np.log(proba / (1 - proba))}[churn.shap_unit(name)]
             with self.subTest(name):
-                self.assertTrue(np.allclose(total, target, atol=1e-8))
+                self.assertTrue(np.allclose(total, target, atol=1e-5))  # xgboost 는 float32
 
     @unittest.skipUnless(HAVE_PLOT, "BLOCKED: matplotlib/shap 미설치 — 그림 미생성(통과가 아니다)")
     def test_summary_plot_is_written(self) -> None:

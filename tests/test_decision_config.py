@@ -62,6 +62,30 @@ PRE_206_MODEL = {
 # #179는 기존 모델 수치를 그대로 두고 사전 고정 위험도 기준선 이름만 추가한다.
 MODEL_NOW = copy.deepcopy(PRE_206_MODEL)
 MODEL_NOW["churn"]["risk_baseline_model"] = "logistic_regression"
+# #215 — 기존 세 모델 값은 그대로 두고 XGBoost · LightGBM 과 Validation 튜닝 격자를 더했다.
+#: #215 에서 더한 키 — PRE_206 대조 때 걷어낸다.
+ADDED_215 = {
+    "models": {
+        "xgboost": {"n_estimators": 300, "learning_rate": 0.05, "max_depth": 4, "subsample": 0.8,
+                    "colsample_bytree": 0.8, "reg_lambda": 1.0, "tree_method": "hist", "n_jobs": 1},
+        "lightgbm": {"n_estimators": 300, "learning_rate": 0.05, "num_leaves": 15, "min_child_samples": 20,
+                     "subsample": 0.8, "subsample_freq": 1, "colsample_bytree": 0.8, "reg_lambda": 1.0,
+                     "class_weight": "balanced", "deterministic": True, "force_row_wise": True, "n_jobs": 1,
+                     "verbose": -1},
+    },
+    "tuning": {
+        "enabled": True,
+        "metric": "roc_auc",
+        "grids": {
+            "random_forest": {"min_samples_leaf": (1, 3, 10), "n_estimators": (300,)},
+            "hist_gb": {"learning_rate": (0.03, 0.05, 0.1), "max_leaf_nodes": (15, 31)},
+            "xgboost": {"max_depth": (3, 4, 6), "learning_rate": (0.05, 0.1)},
+            "lightgbm": {"num_leaves": (15, 31), "learning_rate": (0.05, 0.1)},
+        },
+    },
+}
+MODEL_NOW["churn"]["models"].update(copy.deepcopy(ADDED_215["models"]))
+MODEL_NOW["churn"]["tuning"] = copy.deepcopy(ADDED_215["tuning"])
 
 #: #206 이전 — run_sprint.py(RCT_CONTROL_SHARE · DEFAULT_ACTIVE_DAYS · --seed/--customers/--profile 기본값) ·
 #: ab_test.py(alpha · power · SRM threshold 기본값).
@@ -129,7 +153,7 @@ class TestSchema(unittest.TestCase):
         cases = {
             "최상위": _model(extra=1),
             "섹션": _model(churn__cv_fold=5),                      # 오타 — 조용히 버려지면 기본값이 쓰인다
-            "모델": _model(churn__models__xgboost={"n_estimators": 3}),
+            "모델": _model(churn__models__catboost={"n_estimators": 3}),   # #215 에서 xgboost 는 정식 모델이 됐다
             "하이퍼파라미터": _model(churn__models__hist_gb__max_depth=3),
         }
         for label, raw in cases.items():
@@ -211,6 +235,9 @@ class TestRepositoryFiles(unittest.TestCase):
         self.assertEqual(MODEL_NOW, checked)
         previous = copy.deepcopy(checked)
         del previous["churn"]["risk_baseline_model"]
+        del previous["churn"]["tuning"]
+        for name in ADDED_215["models"]:
+            del previous["churn"]["models"][name]
         self.assertEqual(PRE_206_MODEL, previous)
 
     def test_experiment_config_equals_pre_206_constants(self) -> None:

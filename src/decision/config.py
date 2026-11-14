@@ -56,8 +56,11 @@ class Rule:
     hi_open: bool = False
     also: tuple[Any, ...] = ()       # 범위 밖이어도 받는 값 (n_jobs = -1)
     choices: tuple[str, ...] = ()
+    item: "Rule | None" = None       # kind == "list" 일 때 각 원소의 규칙 (#215 튜닝 격자)
 
     def describe(self) -> str:
+        if self.kind == "list":
+            return f"비어 있지 않은 목록, 원소는 {self.item.describe()}, 중복 없음"
         if self.kind == "choice":
             return f"다음 중 하나: {list(self.choices)}"
         if self.kind in ("bool", "text"):
@@ -71,6 +74,13 @@ class Rule:
 
     def check(self, value: Any) -> Any:
         """통과하면 정규화한 값(float 칸의 int → float), 아니면 ``ValueError``(사유)."""
+        if self.kind == "list":
+            if not isinstance(value, (list, tuple)) or not value:  # YAML 은 list, 코드로 만든 설정은 tuple 일 수 있다
+                raise ValueError("비어 있지 않은 목록이어야 한다")
+            checked = tuple(self.item.check(v) for v in value)
+            if len(set(checked)) != len(checked):
+                raise ValueError("목록에 같은 값이 두 번 있다")
+            return checked
         if self.kind == "bool":
             if type(value) is not bool:
                 raise ValueError("bool 이어야 한다")
@@ -124,6 +134,11 @@ def _choice(*values: str) -> Rule:
     return Rule("choice", choices=values)
 
 
+def _list(item: Rule) -> Rule:
+    """튜닝 격자 한 축 — 비어 있지 않고 중복 없는 목록. 원소마다 ``item`` 규칙을 지킨다(#215)."""
+    return Rule("list", item=item)
+
+
 #: config/model_config.yaml. 하이퍼파라미터 키는 sklearn 생성자 인자 이름 그대로다(그대로 ``**`` 로 넘긴다).
 #: 새 키를 받으려면 여기에 먼저 선언한다 — 선언 없는 키는 거부된다.
 MODEL_SCHEMA: Mapping[str, Any] = {
@@ -152,6 +167,46 @@ MODEL_SCHEMA: Mapping[str, Any] = {
                 "l2_regularization": _float(0.0),
                 "class_weight": _choice("balanced"),
                 "early_stopping": _BOOL,
+            },
+            # #215 — FR-14. 키는 xgboost · lightgbm 의 sklearn 생성자 인자 이름 그대로다.
+            "xgboost": {
+                "n_estimators": _int(1),
+                "learning_rate": _float(0.0, 1.0, lo_open=True),
+                "max_depth": _int(1),
+                "subsample": _float(0.0, 1.0, lo_open=True),
+                "colsample_bytree": _float(0.0, 1.0, lo_open=True),
+                "reg_lambda": _float(0.0),
+                "tree_method": _choice("hist"),
+                "n_jobs": _int(1, also=(-1,)),
+            },
+            "lightgbm": {
+                "n_estimators": _int(1),
+                "learning_rate": _float(0.0, 1.0, lo_open=True),
+                "num_leaves": _int(2),
+                "min_child_samples": _int(1),
+                "subsample": _float(0.0, 1.0, lo_open=True),
+                "subsample_freq": _int(0),
+                "colsample_bytree": _float(0.0, 1.0, lo_open=True),
+                "reg_lambda": _float(0.0),
+                "class_weight": _choice("balanced"),
+                "deterministic": _BOOL,
+                "force_row_wise": _BOOL,
+                "n_jobs": _int(1, also=(-1,)),
+                "verbose": _int(-1),
+            },
+        },
+        # #215 — Validation 튜닝(Grid). 각 축의 후보를 곱한 조합을 검증 데이터로만 비교한다(시험 · 홀드아웃 미사용).
+        "tuning": {
+            "enabled": _BOOL,
+            "metric": _choice("roc_auc", "pr_auc"),
+            "grids": {
+                "random_forest": {"min_samples_leaf": _list(_int(1)), "n_estimators": _list(_int(1))},
+                "hist_gb": {"learning_rate": _list(_float(0.0, 1.0, lo_open=True)),
+                            "max_leaf_nodes": _list(_int(2))},
+                "xgboost": {"max_depth": _list(_int(1)),
+                            "learning_rate": _list(_float(0.0, 1.0, lo_open=True))},
+                "lightgbm": {"num_leaves": _list(_int(2)),
+                             "learning_rate": _list(_float(0.0, 1.0, lo_open=True))},
             },
         },
     },
@@ -273,6 +328,8 @@ class ChurnConfig:
     shap_sample: int
     #: 모델 이름 → sklearn 생성자 인자(읽기 전용). random_state 는 실행 seed 에서 온다.
     models: Mapping[str, Mapping[str, Any]]
+    #: #215 — {enabled, metric, grids: {모델: {인자: (후보, …)}}}. 검증 데이터로만 고른다.
+    tuning: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -336,6 +393,7 @@ def model_config_from(raw: Any, source: str = "<model_config>", path: Path = MOD
             threshold_inner_folds=churn["threshold_inner_folds"],
             shap_sample=churn["shap_sample"],
             models=_frozen(churn["models"]),
+            tuning=_frozen(churn["tuning"]),
         ),
         clv=ClvConfig(cv_folds=clv["cv_folds"], hist_gb=_frozen(clv["hist_gb"])),
         segmentation=_frozen(v["segmentation"]),

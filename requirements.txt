@@ -5,9 +5,9 @@
 # Measurement-layer floor: Python 3.10
 #
 #   전체 파이프라인(이 파일 전체를 설치하는 실행)은 **3.12** 다. 아래 고정 버전의 Requires-Python:
-#     numpy==2.5.4 · scipy==1.18.1 · shap==0.54.1  → >=3.12
+#     numpy==2.5.4 · scipy==1.18.1 · shap==0.54.1 · xgboost==3.4.1  → >=3.12
 #     pandas==3.0.6 · scikit-learn==1.9.1          → >=3.11
-#     pyarrow==25.0.1 · PyYAML==6.0.3              → >=3.10 · >=3.8
+#     pyarrow==25.0.1 · PyYAML==6.0.3 · lightgbm==4.7.0 → >=3.10 · >=3.8 · >=3.10
 #   그래서 3.10·3.11 에서 `pip install -r requirements.txt` 는 **설치 단계에서 실패한다.**
 #   PRD NFR-04 `Python >= 3.10` 은 3.12 로 충족한다(3.12 ≥ 3.10).
 #   측정 계층과 의존성 없는 테스트 스위트는 3.10 에서도 돈다 — python-compat.yml 이 매 PR 확인한다.
@@ -69,6 +69,18 @@ shap==0.54.1
 # churn stage; run_sprint records status "failed" with the reason in churn_eval.shap_summary.
 # Pinned to the version the dev venv (Python 3.12) already ran.
 matplotlib==3.11.2
+# Churn proposed models XGBoost · LightGBM (SRS FR-14 · #215), tuned on validation data only
+# (src/decision/churn.py). Imported lazily inside churn.make_model(); if absent, that model is left
+# out of the comparison and churn_eval.models_unavailable records why — never a silent skip.
+# Resolved on the dev 3.12 venv with `uv pip install --exclude-newer 2026-10-30` (releases at least
+# two weeks old at pin time). The manylinux xgboost wheel is large (bundles GPU code), so CI install
+# time grows. A CPU-only distribution would need per-platform pins; not evaluated here — one pin for
+# every platform keeps tests/test_runtime_declaration simple.
+# macOS: both wheels need the OpenMP runtime (`brew install libomp`). Without it the packages install
+# but fail to import (XGBoostError / OSError); churn.model_unavailable then records that reason and the
+# two models drop out of the comparison (PR #281 review R1).
+xgboost==3.4.1
+lightgbm==4.7.0
 
 # ── Deliberately absent ───────────────────────────────────────────────────────
 # torch                          -> optional DL (src/decision/churn_dl.py). Lives in

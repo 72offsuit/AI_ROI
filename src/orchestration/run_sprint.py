@@ -1513,6 +1513,56 @@ def persist_features(root: Path, run_id: str, ctx: Mapping[str, Any]) -> dict[st
     return {"root": str(target), "feature_version": version, "tables": results}
 
 
+def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any]:
+    """#215 — 시간 순서 검증용 **앞 기준일**(t1 − 42일) 데이터: 그 시점 Eligible 고객의 Feature 와 [t1−42, t1) 라벨.
+
+    두 기준일 모두 처치 전(워밍업 안)이고 Eligible 정의가 같다. 새로 시뮬레이션하지 않는다 — t2 까지 읽은
+    이벤트 · t1 가입일 명부(그 시점 Eligible 판정에 충분하다) · 워밍업 실행 기록(라벨 창을 덮는다)을 다시 쓰고,
+    라벨의 구매 관측 근거는 **그 창 [t1−42, t1) 의 metrics**(``ctx["prior_label_metrics"]``)다 — 본선 라벨이
+    [t1, t2) 창을 따로 조회하는 것과 같은 규칙이다. 공개 계약(docs/simulator_api.md ``metrics``)은 창 단위
+    ``[start, end)`` 이고 상태가 판 단위라는 명시는 없다 — 이력 창의 상태로 대신하지 않는다(PR #281 리뷰 Q1).
+    못 만들면 not_run 과 사유 — 무작위 교차검증으로 대신했다고 적힌다.
+    """
+    t_prior = ctx["t1"] - timedelta(days=LABEL_WINDOW_DAYS)
+    record: dict[str, Any] = {"index_time": t_prior, "label_window": {"start": t_prior, "end": ctx["t1"]}}
+    try:
+        if not ctx.get("purchase_generated"):
+            raise NotRun("이 시뮬레이터 판이 purchase 를 만들지 않아 라벨 · Eligible 을 판정할 수 없다")
+        if "signups_t1" not in ctx or "events_t2" not in ctx or "warmup_summary" not in ctx:
+            raise NotRun("입력(t1 가입일 명부 · t2 까지 이벤트 · 워밍업 실행 기록)이 없다")
+        events = ctx["events_t2"]
+        stamps = _timestamps(events)
+        cutoff = t_prior if stamps.dt.tz is not None else t_prior.astimezone(KST).replace(tzinfo=None)
+        observed = sorted(events.loc[stamps < cutoff, "customer_id"].dropna().unique().tolist())
+        judged = eligibility(events, t_prior, observed, ctx["signups_t1"])
+        record["eligibility"] = judged["counts"]
+        eligible = [cid for cid, flag in judged["flags"].items() if flag]
+        if not eligible:
+            raise NotRun(f"앞 기준일의 Eligible 고객이 0명이다 — {judged['counts']}")
+        X_prior = decision_fn("build_feature_table")(events, t_prior)
+        X_prior.attrs["event_read_evidence"] = (ctx.get("event_read_evidence") or {}).get("t2")
+        observation = outcome_observation(ctx["warmup_summary"], main_root, ctx.get("prior_label_metrics"),
+                                          (ctx.get("event_read_evidence") or {}).get("t1"))
+        Y_prior = decision_fn("build_outcomes")(events, t_prior, window_days=LABEL_WINDOW_DAYS,
+                                                observation=observation, allow_incomplete=True)
+        status = Y_prior.attrs.get("outcome_observation", {}).get("status")
+        record["label_observation"] = status
+        if status != "ok":
+            raise NotRun(f"앞 기준일 라벨 관측 근거 미충족: {Y_prior.attrs.get('outcome_observation')}")
+        pd = _pd()
+        index = X_prior.index.intersection(Y_prior.index).intersection(pd.Index(eligible))
+        y = Y_prior.loc[index, "churn"].dropna()
+        if not two_classes(y):
+            raise NotRun("앞 기준일 라벨이 한 값뿐이다")
+        record.update(status="ok", reason=None, n=int(len(y)), pos_rate=float(y.mean()),
+                      X=X_prior.loc[y.index], y=y)
+    except NotRun as reason:
+        record.update(status="not_run", reason=str(reason))
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유. churn 은 무작위 교차검증으로 고른다
+        record.update(status="failed", reason=f"{type(error).__name__}: {error}"[:300])
+    return record
+
+
 def shap_summary_file(model: Any, X: Any, out: Path, seed: int, extra_files: dict[str, Path]) -> dict[str, Any]:
     """#215 — ``shap_summary.png`` 를 ``<out>/artifacts/`` 에 그리고 결과 폴더 사본 목록에 올린다.
 
@@ -1698,12 +1748,23 @@ def run(config: SprintConfig) -> Path:
             except Exception as error:  # noqa: BLE001 — 라벨만 미확정으로 남긴다
                 label_metrics = None
                 _log(f"  본선 라벨 sim.metrics 실패: {type(error).__name__}: {error}")
+            # #215 · PR #281 리뷰 Q1 — 앞 기준일(t1 − 42일) 라벨도 그 42일 창의 별도 원본으로 확인한다.
+            t_prior = ctx["t1"] - timedelta(days=LABEL_WINDOW_DAYS)
+            try:
+                prior_label_metrics = (sim.metrics(t_prior, ctx["t1"])
+                                       if t_prior >= ctx["timeline"]["start"] else None)
+            except Exception as error:  # noqa: BLE001 — 앞 기준일 라벨만 미확정으로 남긴다
+                prior_label_metrics = None
+                _log(f"  앞 기준일 라벨 sim.metrics 실패: {type(error).__name__}: {error}")
+            ctx["prior_label_metrics"] = prior_label_metrics
             ctx["main_metric_windows"] = {
                 "history": {"start": ctx["timeline"]["start"], "end": ctx["t2"],
                             "uses": ["margin_rate", "s1_purchase_gate"],
                             "purchase_generated": ctx["purchase_generated"]},
                 "label": {"start": ctx["t1"], "end": ctx["t2"], "uses": ["Y1_purchase_observation"],
                           "purchase_generated": purchase_generated(label_metrics)[0]},
+                "prior_label": {"start": t_prior, "end": ctx["t1"], "uses": ["churn_prior_origin_label_observation"],
+                                "purchase_generated": purchase_generated(prior_label_metrics)[0]},
             }
             ctx["outcome_observation"] = outcome_observation(
                 ctx["rct_summary"], main_root, label_metrics, ctx["events_t2"].attrs.get("run_read_evidence"))
@@ -1716,6 +1777,8 @@ def run(config: SprintConfig) -> Path:
             ctx["label_observation"] = ctx["Y1"].attrs.get("outcome_observation", {})
             if ctx["label_observation"].get("status") != "ok":
                 raise NotRun(f"본선 라벨 관측 근거 미충족: {ctx['label_observation']}")
+            # #215 — 시간 순서 검증용 앞 기준일 데이터. 없거나 못 만들어도 이 단계는 실패하지 않는다(사유를 남긴다).
+            ctx["churn_prior"] = churn_prior_origin(ctx, main_root)
 
         with log.stage("training_set", requires=("rct_assign", "features_t1", "outcomes_t1")):
             skip_if_not_run(log, "training_set")
@@ -1757,9 +1820,13 @@ def run(config: SprintConfig) -> Path:
                 X, y, churn_eval["training_sample"] = stratified_cap(X, y, config.max_train_rows, config.seed)
                 evaluate = decision_fn("evaluate_churn_models")
                 fit = decision_fn("fit_best_churn")
+                prior = ctx.get("churn_prior") or {"status": "not_run", "reason": "앞 기준일 단계에 도달하지 않았다"}
+                churn_eval["prior_origin"] = {k: v for k, v in prior.items() if k not in ("X", "y")}
+                extra = ({"prior": (prior["X"], prior["y"])}
+                         if prior.get("status") == "ok" and "prior" in inspect.signature(evaluate).parameters else {})
                 with override_attr(DECISION_API["evaluate_churn_models"][0], "N_SPLITS", config.cv_folds) as folds:
                     churn_eval["cv_folds_override"] = folds
-                    evaluation = evaluate(X, y, config.seed)
+                    evaluation = evaluate(X, y, config.seed, **extra)
                     churn_eval.update(evaluation)  # label_def · n · pos_rate · models · shap_top … (대시보드 ChurnEval)
                     if "eval_result" in inspect.signature(fit).parameters:
                         ctx["churn_model"] = fit(X, y, config.seed, eval_result=evaluation)
