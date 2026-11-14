@@ -270,6 +270,71 @@ class TestExpectedPurchasesEveryA(unittest.TestCase):
                 with self.subTest(a=a):
                     self.assertLess(abs(self.value({**base, "a": a}, 30.0, 3.0, 95.0, 100.0) - at_one), 10 * eps)
 
+    def test_large_shape_values_do_not_overflow(self) -> None:
+        """PR #293 2차 리뷰 — b + x 가 1,000 을 넘어도 넘치지 않는다(리뷰어 독립 적분값, r=.8 α=20 x=3 t_x=95 T=100, 30일)."""
+        import warnings
+
+        base = {"r": 0.8, "alpha": 20.0}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", RuntimeWarning)
+            for a, b, expected in ((0.7, 1100.0, 0.9489301793593423), (0.7, 2000.0, 0.949410716025052),
+                                   (1.5, 2000.0, 0.9487380933620272)):
+                with self.subTest(a=a, b=b):
+                    got = self.value({**base, "a": a, "b": b}, 30.0, 3.0, 95.0, 100.0)
+                    self.assertLess(abs(got - expected), 1e-10)
+
+    def test_beta_nodes_are_normalized_gauss_nodes(self) -> None:
+        """구적 노드 · 가중치가 정규화한 scipy Gauss–Jacobi 와 같고, 가중치 합 1 · 평균 a/(a+b) 를 지킨다."""
+        import numpy as np
+        from scipy.special import roots_jacobi
+
+        from src.decision.clv_lifetime import QUAD_NODES, _beta_nodes
+
+        for a, shape_b in ((0.3, 0.5), (0.7, 4.0), (1.0, 3.0), (2.5, 40.0), (0.9, 300.0)):
+            with self.subTest(a=a, b=shape_b):
+                z, w = roots_jacobi(QUAD_NODES, shape_b - 1.0, a - 1.0)
+                p, weights = _beta_nodes(a, shape_b)
+                order = np.argsort((z + 1.0) / 2.0)
+                self.assertTrue(np.allclose(((z + 1.0) / 2.0)[order], np.sort(p), atol=1e-10))
+                self.assertTrue(np.allclose((w / w.sum())[order], weights[np.argsort(p)], atol=1e-10))
+                self.assertAlmostEqual(1.0, float(weights.sum()), places=12)
+                self.assertAlmostEqual(a / (a + shape_b), float(weights @ p), places=12)
+        p, weights = _beta_nodes(2.1e6, 1.87e8)  # roots_jacobi 는 여기서 넘친다
+        self.assertTrue(np.isfinite(p).all() and np.isfinite(weights).all())
+        self.assertAlmostEqual(2.1e6 / (2.1e6 + 1.87e8), float(weights @ p), places=12)
+
+    def test_a_fitted_huge_shape_model_still_predicts(self) -> None:
+        """PR #293 2차 리뷰 — fit_bgnbd 가 수렴으로 보고한 거대 모수 모형(a ~ 1e6)의 기대 거래 수 · 12개월 CLV 가 유한하다."""
+        import numpy as np
+
+        from src.decision.clv_lifetime import LifetimeModel, clv_from_summary, expected_purchases, fit_bgnbd
+
+        train = _simulate_summary(2000, seed=14, params={"r": 0.8, "alpha": 20.0, "a": 20.0, "b": 2000.0})
+        bg = fit_bgnbd(train)
+        self.assertTrue(bg["converged"])
+        self.assertGreater(bg["a"], 1e5)
+        x, tx, T = (train[c].to_numpy() for c in ("frequency", "recency", "T"))
+        self.assertTrue(np.isfinite(expected_purchases(bg, 365.0, x, tx, T)).all())
+        model = LifetimeModel(bgnbd=bg, gamma_gamma=dict(TRUE_GG), fitted_at="t1", horizon_months=12,
+                              annual_discount_rate=0.12, n_customers=len(train))
+        clv = clv_from_summary(model, train.assign(monetary_value=10000.0))["clv_12m"]
+        self.assertTrue(np.isfinite(clv).all())
+
+    def test_numeric_failure_raises_instead_of_nan(self) -> None:
+        """계산 실패는 '구매 이력 없음' NaN 과 섞이지 않게 예외다(PR #293 2차 리뷰)."""
+        from unittest import mock
+
+        import numpy as np
+
+        from src.decision import clv_lifetime
+
+        broken = lambda a, b: (np.full(4, 0.5), np.full(4, np.nan))  # noqa: E731
+        with mock.patch.object(clv_lifetime, "_beta_nodes", broken), self.assertRaises(FloatingPointError):
+            clv_lifetime.expected_purchases({"r": 0.8, "alpha": 20.0, "a": 0.7, "b": 3.0}, 30.0, [3.0], [95.0], [100.0])
+        with self.assertRaises(ValueError):
+            clv_lifetime.expected_purchases({"r": 0.8, "alpha": 20.0, "a": float("inf"), "b": 3.0}, 30.0, [3.0], [95.0],
+                                            [100.0])
+
     def test_increases_with_the_horizon(self) -> None:
         import numpy as np
 

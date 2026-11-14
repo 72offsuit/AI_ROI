@@ -126,9 +126,33 @@ def fit_bgnbd(summary: pd.DataFrame) -> dict[str, Any]:
             "converged": bool(best.success), "n": int(len(x))}
 
 
-#: 기대 거래 수의 p 적분에 쓰는 Gauss–Jacobi 노드 수(PR #293 리뷰 R1). 피적분 함수 (1 − (1 + c·p)^−k) / p 는
+#: 기대 거래 수의 p 적분에 쓰는 Gauss 구적 노드 수(PR #293 리뷰 R1). 피적분 함수 (1 − (1 + c·p)^−k) / p 는
 #: [0, 1] 에서 해석적이라 노드 수에 지수적으로 수렴한다(c = t / (α + T) 가 수백이어도 1e-7 안팎).
 QUAD_NODES = 192
+
+
+def _beta_nodes(a: float, shape_b: float, n: int = QUAD_NODES) -> tuple[np.ndarray, np.ndarray]:
+    """Beta(a, shape_b) 에 대한 n 점 Gauss 구적 — 노드 p 와 **처음부터 합이 1인** 가중치.
+
+    Jacobi 다항식(가중 (1 − z)^α (1 + z)^β, α = shape_b − 1 · β = a − 1, p = (1 + z) / 2)의 세 항 점화식으로 대칭
+    삼중대각 행렬을 만들고 고유값(노드) · 고유벡터 첫 성분의 제곱(가중치)을 얻는다(Golub–Welsch). ``scipy.special.
+    roots_jacobi`` 는 정규화 전 총 가중치 2^{α+β+1} · B(α+1, β+1) 를 곱해 돌려줘 shape_b 가 1,000 을 넘으면 넘친다
+    (inf → 정규화하면 NaN, PR #293 2차 리뷰). 여기서는 그 상수를 아예 만들지 않는다.
+    """
+    from scipy.linalg import eigh_tridiagonal
+
+    al, be = float(shape_b) - 1.0, float(a) - 1.0
+    k = np.arange(1, n, dtype=float)
+    diag = np.empty(n)
+    diag[0] = (be - al) / (al + be + 2.0)
+    s = 2.0 * k + al + be
+    diag[1:] = (be - al) * (be + al) / (s * (s + 2.0))
+    off2 = 4.0 * k * (k + al) * (k + be) * (k + al + be) / (s * s * (s + 1.0) * (s - 1.0))
+    # k = 1 은 (k + α + β) / (2k + α + β − 1) = 1 로 약분해 둔다 — α + β + 1 이 0 근처여도 0/0 이 되지 않게
+    off2[0] = 4.0 * (1.0 + al) * (1.0 + be) / ((2.0 + al + be) ** 2 * (3.0 + al + be))
+    z, vectors = eigh_tridiagonal(diag, np.sqrt(off2))
+    weights = vectors[0] ** 2
+    return (z + 1.0) / 2.0, weights / weights.sum()
 
 
 def expected_purchases(bg: Mapping[str, float], t: float | np.ndarray, x: np.ndarray, tx: np.ndarray,
@@ -139,14 +163,15 @@ def expected_purchases(bg: Mapping[str, float], t: float | np.ndarray, x: np.nda
     살아 있다는 조건에서 λ ~ Gamma(r+x, α+T) · p ~ Beta(a, b+x) 가 독립이고, λ · p 가 주어지면 기대 거래 수는
     (1 − e^{−λpt}) / p 다(Fader, Hardie & Lee 2005 식 (8)). 같은 논문 식 (10)의 닫힌 식은 E[1/p] 를 따로 꺼내 a > 1 을
     요구하고 a = 1 에서 0 × ∞ 가 되지만, 1/p 와 괄호를 함께 적분하면 p → 0 에서 유한하다(저자들의 2022 정정 노트
-    §2–3). 그래서 p 적분을 Beta 가중 Gauss–Jacobi 구적으로 직접 잰다 — a ≤ 1 · a = 1 근처에서도 안정하고, a > 1 에서는
-    닫힌 식과 일치한다(시험). P(살아 있음) = 1 / (1 + [x > 0] · a / (b + x − 1) · ((α+T) / (α+t_x))^{r+x}).
-    """
-    from scipy.special import roots_jacobi
+    §2–3). 그래서 p 적분을 Beta 가중 Gauss 구적(``_beta_nodes`` — 정규화된 가중치를 직접 얻어 큰 b 에서도 넘치지
+    않는다)으로 잰다. P(살아 있음) = 1 / (1 + [x > 0] · a / (b + x − 1) · ((α+T) / (α+t_x))^{r+x}).
 
+    **계산 실패는 NaN 으로 돌려주지 않는다** — 결과에 비유한 값이 있으면 ``FloatingPointError``. NaN 은 "구매 이력이
+    없어 예측하지 않는 고객"(``predict_lifetime``)에만 쓴다(PR #293 2차 리뷰).
+    """
     r, alpha, a, b = (float(bg[key]) for key in ("r", "alpha", "a", "b"))
-    if min(r, alpha, a, b) <= 0:
-        raise ValueError(f"BG/NBD 모수는 모두 양수여야 한다: r={r}, alpha={alpha}, a={a}, b={b}")
+    if not all(math.isfinite(v) and v > 0 for v in (r, alpha, a, b)):
+        raise ValueError(f"BG/NBD 모수는 모두 유한한 양수여야 한다: r={r}, alpha={alpha}, a={a}, b={b}")
     x, tx, T = (np.asarray(v, dtype=float) for v in (x, tx, T))
     t = np.broadcast_to(np.asarray(t, dtype=float), x.shape)
     k = r + x
@@ -154,16 +179,18 @@ def expected_purchases(bg: Mapping[str, float], t: float | np.ndarray, x: np.nda
     integral = np.empty(x.shape, dtype=float)
     for xv in np.unique(x):
         sel = x == xv
-        # 가중 (1 − z)^{b+x−1} (1 + z)^{a−1} on [−1, 1], p = (1 + z) / 2 → Beta(a, b + x) 밀도 모양
-        z, w = roots_jacobi(QUAD_NODES, b + xv - 1.0, a - 1.0)
-        p = (z + 1.0) / 2.0
-        w = w / w.sum()
+        p, w = _beta_nodes(a, b + xv)
         g = -np.expm1(-k[sel][:, None] * np.log1p(c[sel][:, None] * p[None, :])) / p[None, :]
         integral[sel] = g @ w
     with np.errstate(over="ignore"):
         odds = np.where(x > 0, a / np.maximum(b + x - 1.0, 1e-300) * np.exp(k * (np.log(alpha + T) - np.log(alpha + tx))),
                         0.0)
-    return integral / (1.0 + odds)
+    out = integral / (1.0 + odds)
+    if not np.isfinite(out).all():
+        bad = int((~np.isfinite(out)).sum())
+        raise FloatingPointError(f"BG/NBD 기대 거래 수 계산 실패 {bad}건(비유한) — 모수 r={r:.4g} alpha={alpha:.4g} "
+                                 f"a={a:.4g} b={b:.4g}, t 최대 {float(np.max(t)) if t.size else 0:.4g}")
+    return out
 
 
 # ── Gamma-Gamma ──────────────────────────────────────────────────────────────
