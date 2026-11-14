@@ -25,7 +25,8 @@
 # .github/workflows/isolation.yml has NO install step, so every test must pass with
 # none of these present. That holds because each dependency is confined to one module:
 #   pyarrow -> src/measurement/sink.py       (lazy, function-local, guarded)
-#   PyYAML  -> src/measurement/config_loader.py  (the only `import yaml` in the repo)
+#   PyYAML  -> src/measurement/config_loader.py  (the only `import yaml` in src/measurement/;
+#              scripts/gate1_judge.py imports it inside a function and exits 3 when absent)
 # tests/test_neutrality.py enforces both containments as source checks.
 # The ML stack below is confined to src/decision/ (never src/measurement/ — test_neutrality
 # whitelists stdlib-only top-level imports there). Tests that need it skip with
