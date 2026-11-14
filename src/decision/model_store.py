@@ -37,7 +37,7 @@ from pathlib import Path
 from typing import Any, Mapping
 
 STORE_FORMAT = "model-store-v1"
-KINDS = ("churn", "uplift", "clv")
+KINDS = ("churn", "uplift", "clv", "clv_12m")  # clv_12m — #217 2부 BG/NBD + Gamma-Gamma
 MANIFEST = "manifest.json"
 KST = timezone(timedelta(hours=9), "KST")
 

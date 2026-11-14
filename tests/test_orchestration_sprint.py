@@ -39,6 +39,7 @@ if _DEPS:
     from src.decision.features.sprint_table import outcome_observation_status, summarize_outcomes
     from src.decision.data import verify_event_run
     from src.decision.churn import temporal_population_audit
+    from src.decision.clv_lifetime import clv_table  # numpy · pandas 만 — CSV 형식은 진짜로 검증한다
     from src.orchestration import run_sprint as rs
     from src.simulator import api as sim
 
@@ -47,6 +48,7 @@ DECISION_MODULES = (
     "src.decision.features.sprint_table",
     "src.decision.churn",
     "src.decision.clv",
+    "src.decision.clv_lifetime",
     "src.decision.uplift",
     "src.decision.segments",
     "src.decision.strategies",
@@ -99,6 +101,10 @@ class FakeDecision:
             "src.decision.clv": module(
                 "src.decision.clv", fit_clv=self.fit_clv, predict_clv=self.predict_clv,
                 evaluate_clv=self.evaluate_clv,
+            ),
+            "src.decision.clv_lifetime": module(
+                "src.decision.clv_lifetime", fit_lifetime=self.fit_lifetime, predict_lifetime=self.predict_lifetime,
+                evaluate_lifetime=self.evaluate_lifetime, clv_table=clv_table,
             ),
             "src.decision.uplift": module(
                 "src.decision.uplift", fit_uplift=self.fit_uplift, predict_cate=self.predict_cate,
@@ -189,6 +195,31 @@ class FakeDecision:
 
     def evaluate_clv(self, X, future_value, seed):
         return {"n": int(len(future_value))}
+
+    # clv 12개월 (#217 2부) — 전략 S4 · S5 의 가치 ---------------------------
+    CLV_UNIT = 1000.0
+
+    def fit_lifetime(self, events, index_time, *, horizon_months, annual_discount_rate):
+        self.calls.append(("fit_lifetime", {"index_time": index_time, "horizon_months": horizon_months,
+                                            "annual_discount_rate": annual_discount_rate}))
+        return {"kind": "fake-clv-12m"}
+
+    def predict_lifetime(self, model, events, index_time, customers=None):
+        """t2 미만 장바구니 수 × CLV_UNIT — 예전 ``predict_clv``(n_carts × 1000)와 같은 순서를 낸다."""
+        self.calls.append(("predict_lifetime", {"index_time": index_time}))
+        before = events[(events["timestamp"] < index_time) & (events["event_type"] == "add_to_cart")]
+        clv = before.groupby("customer_id").size().astype(float) * self.CLV_UNIT
+        if customers is not None:
+            clv = clv.reindex(pd.Index(list(customers)), fill_value=0.0)
+        return clv.rename("clv_12m")
+
+    def evaluate_lifetime(self, model, events, index_time, actual, *, window_days, high_value_share, sensitivity=()):
+        self.calls.append(("evaluate_lifetime", {"index_time": index_time, "n": int(len(actual)),
+                                                 "window_days": window_days, "high_value_share": high_value_share,
+                                                 "sensitivity": tuple(sensitivity)}))
+        return {"window_days": int(window_days), "n": int(len(actual)),
+                "revenue": {"spearman": None, "mae": None, "predicted_total": 0.0,
+                            "actual_total": float(actual["revenue"].sum())}}
 
     # uplift ----------------------------------------------------------------
     def evaluate_uplift_models(self, X, treatment, y, seed):
@@ -327,6 +358,36 @@ class TestSprintWithFakeDecision(unittest.TestCase):
         index_times = [c[1]["index_time"] for c in self.fake.calls if c[0] == "build_feature_table"]
         meta = _read(self.run_dir, "run_meta")
         self.assertEqual([meta["timeline"]["t1"], meta["timeline"]["t2"]], [t.isoformat() for t in index_times])
+
+    def test_clv_12m_fits_at_t1_and_values_the_t2_scores(self) -> None:
+        """#217 2부 — 12개월 CLV 는 t1(처치 전)에서 학습하고 T0 군 42일로 검증한다. t2 점수가 S4 · S5 의 가치이고
+        ``clv_predictions.csv`` 로 남는다."""
+        meta = _read(self.run_dir, "run_meta")
+        fits = [c[1] for c in self.fake.calls if c[0] == "fit_lifetime"]
+        self.assertEqual([meta["timeline"]["t1"]], [c["index_time"].isoformat() for c in fits])
+        self.assertEqual((12, 0.12), (fits[0]["horizon_months"], fits[0]["annual_discount_rate"]))
+        checks = [c[1] for c in self.fake.calls if c[0] == "evaluate_lifetime"]
+        self.assertEqual([meta["timeline"]["t1"]], [c["index_time"].isoformat() for c in checks])
+        self.assertEqual((42, 0.2, (0.8, 1.2)),
+                         (checks[0]["window_days"], checks[0]["high_value_share"], checks[0]["sensitivity"]))
+        self.assertTrue(0 < checks[0]["n"] <= meta["rct"]["arm_counts"]["T0"])  # T0 군만 — 처치받은 군은 아니다
+        predicted = [c[1]["index_time"].isoformat() for c in self.fake.calls if c[0] == "predict_lifetime"]
+        self.assertEqual([meta["timeline"]["t2"]], predicted)
+
+        clv = _read(self.run_dir, "clv_eval")
+        self.assertEqual("ok", clv["clv_12m"]["status"], clv["clv_12m"])
+        self.assertEqual({"horizon_months": 12, "annual_discount_rate": 0.12, "discount_sensitivity": [0.8, 1.2],
+                          "high_value_share": 0.2}, clv["clv_12m"]["settings"])
+        record = clv["clv_predictions_file"]
+        self.assertEqual("ok", record["status"], record)
+        frame = pd.read_csv(self.run_dir / rs.CLV_FILE)
+        self.assertEqual(["customer_id", "clv_model_version", "predicted_clv_12m", "clv_percentile", "high_value_flag"],
+                         list(frame.columns))
+        self.assertEqual(record["rows"], len(frame))
+        # 이름 없는 모델이어도 CSV 버전은 저장 model_version 과 같은 규칙이다(CI 에서 'unknown' 으로 어긋났던 결함)
+        self.assertEqual({"clv_12m-bgnbd_gamma_gamma-SP-test-fake"}, set(frame["clv_model_version"]))
+        self.assertEqual(record["clv_model_version"], frame["clv_model_version"].iloc[0])
+        self.assertEqual(_read(self.run_dir, "segments")["n"], len(frame))  # t2 점수 고객 전원
 
     def test_churn_records_the_deployed_threshold_next_to_the_table(self) -> None:
         """PR #280 리뷰 R1 — 배치 객체의 임계 · 규칙을 비교표와 따로 남긴다(가짜 모델은 임계가 없어 null)."""
