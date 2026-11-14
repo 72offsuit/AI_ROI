@@ -1307,5 +1307,38 @@ class TestHelpers(unittest.TestCase):
         self.assertIn("src.decision.churn", str(caught.exception))
 
 
+@unittest.skipUnless(_DEPS, _SKIP_REASON)
+class TestUpliftFitKwargs(unittest.TestCase):
+    """#217 3부 — 최종 Uplift 학습에 Validation 으로 고른 규제를 넘긴다(받는 함수에만). 시뮬레이션 없이."""
+
+    SELECTED = {"best_method_selection": {"best_method": "t_learner",
+                                          "base_learner": {"max_depth": 2, "min_samples_leaf": 200}}}
+
+    def test_passes_the_chosen_regularization_and_seed(self) -> None:
+        def fit(X, treatment, y, method="t_learner", seed=0, params=None):
+            return None
+
+        self.assertEqual({"seed": 7, "params": {"max_depth": 2, "min_samples_leaf": 200}},
+                         rs.uplift_fit_kwargs(fit, self.SELECTED, 7))
+
+    def test_older_signature_and_missing_choice_pass_nothing_extra(self) -> None:
+        def old_fit(X, treatment, y, method):
+            return None
+
+        def fit(X, treatment, y, method="t_learner", seed=0, params=None):
+            return None
+
+        self.assertEqual({}, rs.uplift_fit_kwargs(old_fit, self.SELECTED, 7))
+        self.assertEqual({"seed": 7}, rs.uplift_fit_kwargs(fit, {"best_method": "t_learner"}, 7))
+        self.assertEqual({"seed": 7}, rs.uplift_fit_kwargs(fit, {"best_method_selection": {"base_learner": None}}, 7))
+
+    def test_real_fit_uplift_accepts_the_choice(self) -> None:
+        if importlib.util.find_spec("sklearn") is None:
+            self.skipTest("BLOCKED: scikit-learn 미설치")
+        from src.decision.uplift import fit_uplift
+
+        self.assertIn("params", rs.uplift_fit_kwargs(fit_uplift, self.SELECTED, 1))
+
+
 if __name__ == "__main__":
     unittest.main()

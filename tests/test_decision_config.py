@@ -90,6 +90,15 @@ MODEL_NOW["churn"]["tuning"] = copy.deepcopy(ADDED_215["tuning"])
 ADDED_217 = {"lifetime": {"horizon_months": 12, "annual_discount_rate": 0.12, "discount_sensitivity": (0.8, 1.2),
                           "high_value_share": 0.2}}
 MODEL_NOW["clv"]["lifetime"] = copy.deepcopy(ADDED_217["lifetime"])
+#: #217 3부 — DR-206 이 미룬 Uplift 상수 4개(값은 #206 이전 uplift.py 그대로) + Validation 규제 격자.
+#: PRE_206 대조 때 걷어낸다 — #206 이전에는 config 에 없던 절이다.
+ADDED_217_UPLIFT = {
+    "min_arm_n": 30, "primary_arm": "T3", "validation_size": 0.25,
+    "base_learner": {"max_iter": 200, "learning_rate": 0.03, "max_depth": 3, "min_samples_leaf": 80,
+                     "l2_regularization": 3.0},
+    "tuning": {"enabled": True, "metric": "qini", "grid": {"max_depth": (2, 3), "min_samples_leaf": (40, 80, 200)}},
+}
+MODEL_NOW["uplift"] = copy.deepcopy(ADDED_217_UPLIFT)
 
 #: #206 이전 — run_sprint.py(RCT_CONTROL_SHARE · DEFAULT_ACTIVE_DAYS · --seed/--customers/--profile 기본값) ·
 #: ab_test.py(alpha · power · SRM threshold 기본값).
@@ -243,6 +252,7 @@ class TestRepositoryFiles(unittest.TestCase):
         for name in ADDED_215["models"]:
             del previous["churn"]["models"][name]
         del previous["clv"]["lifetime"]
+        del previous["uplift"]
         self.assertEqual(PRE_206_MODEL, previous)
 
     def test_experiment_config_equals_pre_206_constants(self) -> None:
@@ -309,7 +319,8 @@ class TestNoConstantsWhereConfigIsRead(unittest.TestCase):
     """값이 config 한 곳에만 있다 — 읽는 자리에 숫자가 다시 박히지 않는다(AST · 의존성 없이)."""
 
     def test_estimator_constructors_take_no_literal_hyperparameters(self) -> None:
-        for relative, name in (("src/decision/churn.py", "make_model"), ("src/decision/clv.py", "fit_clv")):
+        for relative, name in (("src/decision/churn.py", "make_model"), ("src/decision/clv.py", "fit_clv"),
+                               ("src/decision/uplift.py", "_regressor")):
             with self.subTest(relative):
                 self.assertEqual([], literal_hyperparameters(_source(relative), name),
                                  "하이퍼파라미터는 config/model_config.yaml 에서 온다")
@@ -326,6 +337,7 @@ class TestNoConstantsWhereConfigIsRead(unittest.TestCase):
             "src/decision/churn.py": ("N_SPLITS", "INNER_SPLITS", "SHAP_SAMPLE"),
             "src/decision/segments.py": ("DEFAULT_THRESHOLDS",),
             "src/decision/ab_test.py": ("ALPHA", "POWER", "SRM_THRESHOLD"),
+            "src/decision/uplift.py": ("BASE_LEARNER", "MIN_ARM_N", "VALIDATION_SIZE", "DEFAULT_PRIMARY_ARM"),
             "src/orchestration/run_sprint.py": ("RCT_CONTROL_SHARE",),
         }
         for relative, names in expected.items():
@@ -418,6 +430,15 @@ class TestCodeUsesConfig(unittest.TestCase):
                                                random_state=5)
         self.assertEqual(before.get_params(), model[-1].get_params())
         self.assertEqual(5, inspect.signature(clv.evaluate_clv).parameters["n_splits"].default)
+
+    def test_uplift_constants_match_pre_206(self) -> None:
+        """#217 3부 — config 로 옮긴 Uplift 상수 4개가 옮기기 전 uplift.py 값 그대로다(DR-206 미룬 항목)."""
+        from src.decision import uplift
+
+        self.assertEqual(dict(max_iter=200, learning_rate=0.03, max_depth=3, min_samples_leaf=80, l2_regularization=3.0),
+                         uplift.BASE_LEARNER)
+        self.assertEqual((30, 0.25, "T3"), (uplift.MIN_ARM_N, uplift.VALIDATION_SIZE, uplift.DEFAULT_PRIMARY_ARM))
+        self.assertEqual(uplift.BASE_LEARNER, uplift.regularization_candidates()[0])  # 현행값이 첫 후보
 
     def test_segment_thresholds_and_ab_defaults(self) -> None:
         from src.decision import ab_test, segments

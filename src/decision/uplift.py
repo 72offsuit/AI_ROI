@@ -20,12 +20,18 @@ Qini·AUUC 는 직접 구현한다(외부 uplift 패키지 금지). 정의는 ``
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any, Callable, Mapping
 import hashlib
+import itertools
 import json
 
 import numpy as np
 import pandas as pd
+
+from src.decision.config import load_model_config
+
+#: config/model_config.yaml ``uplift`` — DR-206 이 미룬 상수 4개를 #217 3부에서 옮겼다(값은 그대로).
+CONFIG = load_model_config().uplift
 
 CONTROL = "T0"
 TREATED = ("T1", "T2", "T3", "T4")
@@ -33,7 +39,7 @@ ARMS = (CONTROL, *TREATED)
 METHODS = ("s_learner", "t_learner", "x_learner")
 METHOD_KIND = {"s_learner": "baseline", "t_learner": "proposed", "x_learner": "proposed"}
 #: 처치군(또는 대조군) 최소 표본. 이보다 적으면 그 처치의 CATE 는 계산 불가.
-MIN_ARM_N = 30
+MIN_ARM_N = CONFIG.min_arm_n
 #: 학습·예측 시 OpenMP 스레드 수. None 이면 제한하지 않는다.
 N_THREADS: int | None = 1
 #: Qini 곡선 점 개수 상한(대시보드 페이로드 크기).
@@ -41,7 +47,7 @@ CURVE_POINTS = 50
 METRIC_VERSION = "tied-endpoints-v1"
 TOPK_VERSION = "fractional-boundary-v1"
 #: PRD §15.1 — Uplift MVP 는 T0 vs T3 이진 처치. 평가의 대표 처치군 기본값.
-DEFAULT_PRIMARY_ARM = "T3"
+DEFAULT_PRIMARY_ARM = CONFIG.primary_arm
 #: numpy 2.0 에서 trapz → trapezoid 로 이름이 바뀌었다. 고정 버전이 정해지기 전이라 둘 다 받는다.
 _trapezoid = getattr(np, "trapezoid", None) or np.trapz
 
@@ -102,18 +108,38 @@ def _check_inputs(X: pd.DataFrame, treatment: pd.Series, y: pd.Series):
     return X, treatment, y, n_missing
 
 
-#: 기저 학습기 설정. 처치군마다 따로 학습하므로 군당 표본이 수백 건이어도 버티도록 얕고
-#: 강하게 규제한다. ★ 이 값은 **이 저장소의 테스트 합성 데이터**(tests/test_uplift_models.py)
-#: 에서 3 안을 비교해 골랐다 — 프로젝트 데이터·Test 분할을 보고 고른 값이 아니다(DR-145).
-#: (max_leaf_nodes 15·min_leaf 20 은 합성 3,000 건에서 T-learner Qini 가 음수까지 떨어졌다.)
-BASE_LEARNER = dict(max_iter=200, learning_rate=0.03, max_depth=3, min_samples_leaf=80,
-                    l2_regularization=3.0)
+#: 기저 학습기 설정(현행값 = 튜닝 격자의 첫 후보). 처치군마다 따로 학습하므로 군당 표본이 수백 건이어도
+#: 버티도록 얕고 강하게 규제한다. 이 값은 **테스트 합성 데이터**에서 골랐다(DR-145) — #217 3부부터 실행마다
+#: Validation Qini 로 ``TUNING`` 격자에서 다시 고른다(DR-217-uplift-tuning). 값은 config 한 곳에만 있다.
+BASE_LEARNER = dict(CONFIG.base_learner)
+#: config ``uplift.tuning`` — {enabled, metric, grid: {인자: (후보, …)}}. 결과 전에 고정했다.
+TUNING = CONFIG.tuning
 
 
-def _regressor(seed: int):
+def _regressor(seed: int, params: Mapping[str, Any]):
     from sklearn.ensemble import HistGradientBoostingRegressor
 
-    return HistGradientBoostingRegressor(random_state=seed, **BASE_LEARNER)
+    return HistGradientBoostingRegressor(random_state=seed, **params)
+
+
+def regularization_candidates(base: Mapping[str, Any] | None = None,
+                              tuning: Mapping[str, Any] | None = None) -> list[dict[str, Any]]:
+    """규제 후보 목록 — **현행값(base) 이 첫째**, 이어서 격자 곱집합(축 이름 순 · 값은 오름차순). 중복은 한 번만.
+
+    값 순서는 config 배열 순서가 아니라 **오름차순으로 정렬**한다 — 동점이면 앞선 후보가 이기므로 순서가 규약이다
+    (PR #294 리뷰 4 · DR-217-uplift-tuning 구현 명확화 2). ``tuning.enabled`` 가 거짓이면 현행값 하나뿐이다.
+    """
+    base = dict(BASE_LEARNER if base is None else base)
+    tuning = TUNING if tuning is None else tuning
+    out = [base]
+    if tuning.get("enabled"):
+        grid = tuning["grid"]
+        keys = sorted(grid)
+        for values in itertools.product(*(tuple(sorted(grid[k])) for k in keys)):
+            cand = {**base, **dict(zip(keys, values))}
+            if cand not in out:
+                out.append(cand)
+    return out
 
 
 def screen_features(Xp: pd.DataFrame) -> dict[str, list[str]]:
@@ -144,7 +170,7 @@ class _SubModel:
         return self.est.predict(Xdf[self.cols])
 
 
-def _fit_sub(seed: int, Xdf: pd.DataFrame, y: np.ndarray) -> _SubModel:
+def _fit_sub(seed: int, Xdf: pd.DataFrame, y: np.ndarray, params: Mapping[str, Any]) -> _SubModel:
     """부분 표본(처치군 하나 등)에서도 전부 NaN·상수 열을 다시 걸러 학습한다.
 
     전체 학습셋에서는 값이 있어도 **한 처치군 안에서만** 전부 NaN 인 열이 같은 오류를 낸다."""
@@ -153,7 +179,7 @@ def _fit_sub(seed: int, Xdf: pd.DataFrame, y: np.ndarray) -> _SubModel:
     cols = [c for c in Xdf.columns if c not in drop]
     if not cols:
         return _SubModel(cols=[], const=float(np.mean(y)), dropped=sorted(drop))
-    return _SubModel(cols=cols, est=_regressor(seed).fit(Xdf[cols], y), dropped=sorted(drop))
+    return _SubModel(cols=cols, est=_regressor(seed, params).fit(Xdf[cols], y), dropped=sorted(drop))
 
 
 # ── 모델 ─────────────────────────────────────────────────────────────────────
@@ -171,6 +197,8 @@ class UpliftModel:
     dropped_features: dict[str, list[str]] = field(default_factory=dict)
     #: 하위 모델(처치군별 등)에서 **추가로** 제외한 열 — 부분 표본에서만 전부 NaN·상수인 열.
     submodel_dropped: dict[str, list[str]] = field(default_factory=dict)
+    #: #217 3부 — 학습에 쓴 기저 학습기 인자. #217 3부 전에 저장한 객체에는 없다(``getattr(…, None)``).
+    base_learner: dict[str, Any] = field(default_factory=dict)
 
 
 def _threads():
@@ -183,14 +211,15 @@ def _threads():
 
 
 def fit_uplift(X: pd.DataFrame, treatment: pd.Series, y: pd.Series,
-               method: str = "t_learner", seed: int = 0) -> UpliftModel:
-    """메타러너를 학습한다. ``method`` ∈ ``METHODS``."""
+               method: str = "t_learner", seed: int = 0, params: Mapping[str, Any] | None = None) -> UpliftModel:
+    """메타러너를 학습한다. ``method`` ∈ ``METHODS``. ``params`` 는 기저 학습기 인자 전체(없으면 현행값 ``BASE_LEARNER``)
+    — 실행 루프는 ``evaluate_uplift_models`` 가 Validation 으로 고른 값을 넘긴다."""
     with _threads():
-        return _fit_uplift(X, treatment, y, method, seed)
+        return _fit_uplift(X, treatment, y, method, seed, dict(BASE_LEARNER if params is None else params))
 
 
 def _fit_uplift(X: pd.DataFrame, treatment: pd.Series, y: pd.Series,
-                method: str, seed: int) -> UpliftModel:
+                method: str, seed: int, params: dict[str, Any]) -> UpliftModel:
     if method not in METHODS:
         raise ValueError(f"method 는 {METHODS} 중 하나다: {method!r}")
     X, treatment, y, n_missing = _check_inputs(X, treatment, y)
@@ -201,11 +230,11 @@ def _fit_uplift(X: pd.DataFrame, treatment: pd.Series, y: pd.Series,
     n_by_arm = {a: int((treatment == a).sum()) for a in ARMS}
     arms = [a for a in TREATED if n_by_arm[a] >= MIN_ARM_N]
     model = UpliftModel(method=method, columns=list(Xp.columns), arms=arms, n_by_arm=n_by_arm,
-                        n_outcome_missing_excluded=n_missing, dropped_features=screened)
+                        n_outcome_missing_excluded=n_missing, dropped_features=screened, base_learner=dict(params))
     ctrl = (treatment == CONTROL).to_numpy()
 
     def sub(name: str, seed_: int, Xdf: pd.DataFrame, target: np.ndarray) -> _SubModel:
-        m = _fit_sub(seed_, Xdf, target)
+        m = _fit_sub(seed_, Xdf, target, params)
         if m.dropped:
             model.submodel_dropped[name] = m.dropped
         model.models[name] = m
@@ -513,11 +542,13 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
     risk, risk_audit = _risk_predictions(X_tr, t_tr, y_tr, X_te, churn_p, risk_model_factory)
 
     selection = _select_method(X_tr, t_tr, y_tr, methods, primary_arm, seed, stratified)
+    # Test 의 모델 행은 Validation 으로 고른 규제로 학습한다(고르지 못했으면 현행값).
+    chosen = selection.get("base_learner") or dict(BASE_LEARNER)
 
     cates: dict[str, pd.DataFrame] = {}
     fitted: dict[str, UpliftModel] = {}
     for m in methods:
-        fitted[m] = fit_uplift(X_tr, t_tr, y_tr, method=m, seed=seed)
+        fitted[m] = fit_uplift(X_tr, t_tr, y_tr, method=m, seed=seed, params=chosen)
         cates[m] = predict_cate(fitted[m], X_te)
 
     def rows_for(arm: str, curve: bool) -> list[dict[str, Any]]:
@@ -540,6 +571,27 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
             rows.append(_score_row(m, METHOD_KIND[m], sc, tr, yy, curve))
         return rows
 
+    # 보고만 — 고른 메타러너를 현행값 규제로 학습했을 때의 Test 지표(선택에 쓰지 않는다, DR-217-uplift-tuning)
+    best_m = selection.get("best_method")
+    if best_m is None or selection.get("base_learner_is_current"):
+        current_row = None
+    else:
+        current = predict_cate(fit_uplift(X_tr, t_tr, y_tr, method=best_m, seed=seed, params=BASE_LEARNER), X_te)
+        sel_p = t_te.isin([CONTROL, primary_arm]).to_numpy()
+        current_row = _score_row(f"{best_m}@current", METHOD_KIND[best_m], current[primary_arm].to_numpy()[sel_p],
+                                 (t_te[sel_p] == primary_arm).to_numpy(), y_te[sel_p].to_numpy(), False)
+    # PR #294 리뷰 3 — "고르는 데 성공했나"와 "실제로 쓴 규제"를 나눠 적는다. 고르지 못하면 현행값으로 학습한다.
+    selected = selection.get("base_learner") is not None
+    tuning_report = {
+        "selection_ok": selected,
+        "selection_reason": None if selected else (selection.get("reason") or "유효한 Validation Qini 가 없다 — 현행값을 쓴다"),
+        "chosen_base_learner": selection.get("base_learner"), "chosen_is_current": bool(selection.get("base_learner_is_current")),
+        "used_base_learner": chosen, "used_is_current": chosen == dict(BASE_LEARNER),
+        "current_base_learner": dict(BASE_LEARNER),
+        "test_current_regularization": current_row,
+        "note": "Test 는 선택에 쓰지 않았다 — 고른 규제의 Test 지표는 models 의 해당 행, 현행값은 위 행(보고만)",
+    }
+
     by_arm = {}
     for a in usable:
         sel_n = int(t_te.isin([CONTROL, a]).sum())
@@ -548,6 +600,8 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
     return {
         "best_method": selection["best_method"],
         "best_method_selection": selection,
+        "base_learner": chosen,
+        "tuning_report": tuning_report,
         "n": int(len(X)), "n_train": int(len(idx_tr)), "n_test": int(len(idx_te)),
         "n_outcome_missing_excluded": n_missing,
         "risk_baseline": risk_audit,
@@ -585,12 +639,19 @@ def _split(treatment: pd.Series, test_size: float, seed: int, stratified: bool):
                             stratify=treatment.to_numpy() if stratified else None)
 
 
-#: best_method 선택용 Validation 비율(train 안에서).
-VALIDATION_SIZE = 0.25
+#: best_method · 규제 선택용 Validation 비율(train 안에서). config ``uplift.validation_size``.
+VALIDATION_SIZE = CONFIG.validation_size
 
 
-def _select_method(X_tr, t_tr, y_tr, methods, primary_arm: str, seed: int, stratified: bool) -> dict[str, Any]:
-    """train 을 다시 나눠 Validation Qini 로 제안 모델을 고른다. 제안 모델이 없으면 전체 후보."""
+def _select_method(X_tr, t_tr, y_tr, methods, primary_arm: str, seed: int, stratified: bool,
+                   configs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    """train 을 다시 나눠 Validation Qini 로 **(제안 메타러너, 기저 학습기 규제)** 를 함께 고른다(DR-217-uplift-tuning).
+
+    후보 순서 = 규제 후보 순(``regularization_candidates`` — 현행값 먼저) 안에서 메타러너 순(t · x).
+    Validation Qini 최대, **동점은 앞선 후보**(현행값 · t_learner 쪽). 계산 불가(None) 후보는 고르지 않는다.
+    Test 는 보지 않는다. 제안 모델이 없으면 전체 후보.
+    """
+    configs = regularization_candidates() if configs is None else [dict(c) for c in configs]
     candidates = [m for m in methods if METHOD_KIND[m] == "proposed"] or list(methods)
     if not candidates:
         return {"best_method": None, "status": "not_run", "reason": "후보 모델이 없다"}
@@ -601,19 +662,32 @@ def _select_method(X_tr, t_tr, y_tr, methods, primary_arm: str, seed: int, strat
     sel = t_val.isin([CONTROL, primary_arm]).to_numpy()
     tr = (t_val[sel] == primary_arm).to_numpy()
     yy = y_tr.iloc[i_val].to_numpy()[sel]
-    scores: dict[str, float | None] = {}
-    for m in candidates:
-        try:
-            model = fit_uplift(X_tr.iloc[i_fit], t_tr.iloc[i_fit], y_tr.iloc[i_fit], method=m, seed=seed)
-            cate = predict_cate(model, X_tr.iloc[i_val])[primary_arm].to_numpy()[sel]
-            scores[m] = qini_curve(cate, tr, yy)["qini"] if not np.isnan(cate).any() else None
-        except ValueError as error:          # 처치군·대조군 부족 등 — 그 후보만 계산 불가
-            scores[m] = None
-            scores[f"{m}:reason"] = str(error)  # type: ignore[assignment]
-    valid = {m: q for m, q in scores.items() if ":" not in m and q is not None}
-    best = max(candidates, key=lambda m: (valid.get(m, -np.inf), -candidates.index(m))) if valid else None
-    return {"best_method": best, "basis": f"validation Qini (train 의 {VALIDATION_SIZE:.0%}), arm {primary_arm}",
-            "candidates": candidates, "validation_qini": scores,
+    grid: list[dict[str, Any]] = []
+    reasons: dict[str, str] = {}
+    for config_id, params in enumerate(configs):
+        for m in candidates:
+            try:
+                model = fit_uplift(X_tr.iloc[i_fit], t_tr.iloc[i_fit], y_tr.iloc[i_fit], method=m, seed=seed,
+                                   params=params)
+                cate = predict_cate(model, X_tr.iloc[i_val])[primary_arm].to_numpy()[sel]
+                qini = qini_curve(cate, tr, yy)["qini"] if not np.isnan(cate).any() else None
+            except ValueError as error:          # 처치군·대조군 부족 등 — 그 후보만 계산 불가
+                qini = None
+                reasons[f"{m}@{config_id}"] = str(error)
+            grid.append({"config_id": config_id, "method": m, "qini": qini})
+    valid = [i for i, row in enumerate(grid) if row["qini"] is not None]
+    best = grid[max(valid, key=lambda i: (grid[i]["qini"], -i))] if valid else None
+    shown = best["config_id"] if best else 0
+    return {"best_method": best["method"] if best else None,
+            "base_learner": dict(configs[best["config_id"]]) if best else None,
+            "base_learner_is_current": bool(best) and best["config_id"] == 0,
+            "basis": (f"validation Qini (train 의 {VALIDATION_SIZE:.0%}), arm {primary_arm} — 메타러너 × 규제를 함께, "
+                      "동점은 앞선 후보(현행값 먼저) · DR-217-uplift-tuning"),
+            "candidates": candidates,
+            #: 고른 규제(없으면 현행값)에서 메타러너별 Validation Qini — 격자 전체는 ``tuning.grid``
+            "validation_qini": {row["method"]: row["qini"] for row in grid if row["config_id"] == shown},
+            "tuning": {"enabled": len(configs) > 1, "metric": "qini", "configs": configs, "grid": grid,
+                       "reasons": reasons},
             "n_validation": int(sel.sum())}
 
 
