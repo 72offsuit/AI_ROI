@@ -195,11 +195,38 @@ class TestDLReviewComparisonFindings(unittest.TestCase):
         values = rng.uniform(.01, .99, 200)
         labels = (rng.uniform(size=200) < values).astype(float)
         labels[:2] = [0,1]
-        ids = tuple(f'V{i}' for i in range(200))
+        # Zero padding keeps canonical string sorting in numeric order. V0..V199
+        # happened to hide this rounding regression after lexicographic sorting.
+        ids = tuple(f'V{i:03d}' for i in range(200))
         p = ComparisonProtocol('rounding','fixture','simulator','synthetic','fixture',('T1','T2'),ids,('E1','E2'))
         series = pd.Series(values,index=ids)
-        s = select_ensemble(p,pd.Series(labels,index=ids),series,series,alpha_grid=[i/10 for i in range(11)])
+        y = pd.Series(labels,index=ids)
+        grid = [i/10 for i in range(11)]
+        s = select_ensemble(p,y,series,series,alpha_grid=grid)
         self.assertEqual(0., s.alpha)
+        reversed_selection = select_ensemble(replace(p, validation_ids=ids[::-1]),
+            y.iloc[::-1], series.iloc[::-1], series.iloc[::-1], alpha_grid=grid)
+        self.assertEqual(s, reversed_selection)
+
+    def test_287_roundoff_and_absolute_tie_boundary_prefer_smaller_alpha(self):
+        import numpy as np
+        from src.decision.churn_dl_compare import _selection_components
+
+        y = np.array([0., 1.])
+        scores = np.array([.2, .8])
+        # Fix scorer outputs to exercise the numerical policy independently of
+        # library reduction order; the public API test above uses real log loss.
+        cases = (
+            ('one_ulp', np.nextafter(.5, np.inf), 0.),
+            ('inclusive_boundary', .5 + 1e-12, 0.),
+            ('meaningful_gain', .5 + 1e-10, .1),
+        )
+        for name, first_loss, expected_alpha in cases:
+            with self.subTest(case=name), patch('sklearn.metrics.log_loss',
+                    side_effect=(first_loss, .5, .5)):
+                rows, alpha, _ = _selection_components(y, scores, scores, (0., .1, 1.))
+                self.assertEqual(first_loss, rows[0][1])
+                self.assertEqual(expected_alpha, alpha)
 
     def test_287_real_validation_gain_is_not_suppressed(self):
         from src.decision.churn_dl_compare import select_ensemble
