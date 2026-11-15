@@ -229,6 +229,24 @@ MODEL_SCHEMA: Mapping[str, Any] = {
             "high_value_share": _float(0.0, 1.0, lo_open=True, hi_open=True),
         },
     },
+    # #217 3부 — Uplift 메타러너. DR-206 이 미룬 상수 4개 + Validation 규제 튜닝(DR-217-uplift-tuning)
+    "uplift": {
+        "min_arm_n": _int(2),
+        "primary_arm": _choice("T1", "T2", "T3", "T4"),
+        "validation_size": _float(0.0, 1.0, lo_open=True, hi_open=True),
+        "base_learner": {
+            "max_iter": _int(1),
+            "learning_rate": _float(0.0, 1.0, lo_open=True),
+            "max_depth": _int(1),
+            "min_samples_leaf": _int(1),
+            "l2_regularization": _float(0.0),
+        },
+        "tuning": {
+            "enabled": _BOOL,
+            "metric": _choice("qini"),
+            "grid": {"max_depth": _list(_int(1)), "min_samples_leaf": _list(_int(1))},
+        },
+    },
     "segmentation": {
         "clv_high_q": _QUANTILE,
         "churn_high_q": _QUANTILE,
@@ -348,10 +366,22 @@ class ClvConfig:
 
 
 @dataclass(frozen=True)
+class UpliftConfig:
+    min_arm_n: int
+    primary_arm: str
+    validation_size: float
+    #: HistGradientBoostingRegressor 인자(읽기 전용) — 튜닝 격자의 현행값. random_state 는 seed 에서 온다.
+    base_learner: Mapping[str, Any]
+    #: #217 3부 — {enabled, metric, grid: {인자: (후보, …)}}. Validation Qini 로만 고른다.
+    tuning: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
 class ModelConfig:
     path: Path
     churn: ChurnConfig
     clv: ClvConfig
+    uplift: UpliftConfig
     #: segments.DEFAULT_THRESHOLDS 의 키와 같다.
     segmentation: Mapping[str, float]
 
@@ -405,6 +435,9 @@ def model_config_from(raw: Any, source: str = "<model_config>", path: Path = MOD
             tuning=_frozen(churn["tuning"]),
         ),
         clv=ClvConfig(cv_folds=clv["cv_folds"], hist_gb=_frozen(clv["hist_gb"]), lifetime=_frozen(clv["lifetime"])),
+        uplift=UpliftConfig(min_arm_n=v["uplift"]["min_arm_n"], primary_arm=v["uplift"]["primary_arm"],
+                            validation_size=v["uplift"]["validation_size"],
+                            base_learner=_frozen(v["uplift"]["base_learner"]), tuning=_frozen(v["uplift"]["tuning"])),
         segmentation=_frozen(v["segmentation"]),
     )
 

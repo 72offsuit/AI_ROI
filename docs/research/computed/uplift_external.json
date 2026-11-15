@@ -1,0 +1,2537 @@
+{
+  "decision_record": "docs/decisions/DR-217-uplift-tuning.md",
+  "procedure": "evaluate_on_benchmark — 실행 루프와 같은 분할 · 규제 격자 · Validation Qini 선택(Test 미사용)",
+  "base_learner_current": {
+    "max_iter": 200,
+    "learning_rate": 0.03,
+    "max_depth": 3,
+    "min_samples_leaf": 80,
+    "l2_regularization": 3.0
+  },
+  "tuning": {
+    "enabled": true,
+    "metric": "qini",
+    "grid": {
+      "max_depth": [
+        2,
+        3
+      ],
+      "min_samples_leaf": [
+        40,
+        80,
+        200
+      ]
+    }
+  },
+  "datasets": {
+    "hillstrom": {
+      "file": "hillstorm_no_indices.csv.gz",
+      "bytes": 443070,
+      "sha256": "bab6578f60db5d792f1c2372c502f029152a5249cf5ea84390f3b7f885d7234f",
+      "rows": 64000
+    },
+    "lenta": {
+      "file": "lenta_dataset.csv.gz",
+      "bytes": 144735744,
+      "sha256": "b531544f6c072d22f232d91e20ffcaca265acf224e02687502a40e6d56135682",
+      "rows": 687029
+    }
+  },
+  "environment": {
+    "python": "3.12.4",
+    "numpy": "2.5.4",
+    "pandas": "3.0.6",
+    "sklearn": "1.9.1",
+    "openmp_threads": null
+  },
+  "results": {
+    "hillstrom_any_email_visit": {
+      "status": "ok",
+      "spec": {
+        "id": "hillstrom_any_email_visit",
+        "dataset": "hillstrom",
+        "treatment_col": "segment",
+        "control_value": "No E-Mail",
+        "treatment_value": null,
+        "outcome": "visit"
+      },
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "n_features": 8,
+      "runs": {
+        "0": {
+          "n": 64000,
+          "n_train": 44800,
+          "n_test": 19200,
+          "n_validation": 11200,
+          "arms": {
+            "T0": 21306,
+            "T1": 42694,
+            "T2": 0,
+            "T3": 0,
+            "T4": 0
+          },
+          "ate_T1": {
+            "value": 0.06088195726098464,
+            "ci95": [
+              0.0554385735063783,
+              0.06632534101559097
+            ],
+            "se": 0.002777287642805201,
+            "n_t": 42694,
+            "n_c": 21306
+          },
+          "outcome_kind": "binary",
+          "chosen_method": "x_learner",
+          "chosen_base_learner": {
+            "max_iter": 200,
+            "learning_rate": 0.03,
+            "max_depth": 3,
+            "min_samples_leaf": 40,
+            "l2_regularization": 3.0
+          },
+          "chosen_is_current": false,
+          "validation_grid": [
+            {
+              "config_id": 0,
+              "method": "t_learner",
+              "qini": 0.0025795577994763563
+            },
+            {
+              "config_id": 0,
+              "method": "x_learner",
+              "qini": 0.0036256086557914166
+            },
+            {
+              "config_id": 1,
+              "method": "t_learner",
+              "qini": 0.002952657868945434
+            },
+            {
+              "config_id": 1,
+              "method": "x_learner",
+              "qini": 0.0033759907669667563
+            },
+            {
+              "config_id": 2,
+              "method": "t_learner",
+              "qini": 0.0029906324827064096
+            },
+            {
+              "config_id": 2,
+              "method": "x_learner",
+              "qini": 0.0031878216916210525
+            },
+            {
+              "config_id": 3,
+              "method": "t_learner",
+              "qini": 0.0027359162105940124
+            },
+            {
+              "config_id": 3,
+              "method": "x_learner",
+              "qini": 0.0032746987174115047
+            },
+            {
+              "config_id": 4,
+              "method": "t_learner",
+              "qini": 0.0029720519670549395
+            },
+            {
+              "config_id": 4,
+              "method": "x_learner",
+              "qini": 0.003627583552294991
+            },
+            {
+              "config_id": 5,
+              "method": "t_learner",
+              "qini": 0.0019229110042887493
+            },
+            {
+              "config_id": 5,
+              "method": "x_learner",
+              "qini": 0.0031901197640625267
+            }
+          ],
+          "configs": [
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            }
+          ],
+          "validation_reasons": {},
+          "test": {
+            "random": {
+              "name": "random",
+              "kind": "baseline",
+              "method": "analytic_expectation",
+              "qini": 0.0,
+              "auuc": 0.027928219143385814,
+              "uplift_at_k": {
+                "10": 0.05585643828677163,
+                "30": 0.05585643828677163
+              }
+            },
+            "churn_risk_targeting": {
+              "name": "churn_risk_targeting",
+              "kind": "baseline",
+              "status": "not_run",
+              "reason": "ValueError: churn_p 또는 risk_model_factory가 주어지지 않았다",
+              "qini": null,
+              "auuc": null
+            },
+            "s_learner": {
+              "name": "s_learner",
+              "kind": "baseline",
+              "qini": 0.005207980316484305,
+              "auuc": 0.03308918824484318,
+              "uplift_at_k": {
+                "10": 0.08625585034447111,
+                "30": 0.0773133687379158
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.08625585034447111,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.09279079031523656,
+                  "boundary_n": 5,
+                  "boundary_weight": 0.6,
+                  "weight_treated": 1288.8000000000002,
+                  "weight_control": 631.2,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.0773133687379158,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.0622893249316184,
+                  "boundary_n": 24,
+                  "boundary_weight": 0.375,
+                  "weight_treated": 3847.0,
+                  "weight_control": 1913.0,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 3295,
+                "n_tied_customers": 18051,
+                "tied_customer_fraction": 0.94015625,
+                "duplicate_score_fraction": 0.8283854166666667,
+                "largest_tie": 96
+              }
+            },
+            "t_learner": {
+              "name": "t_learner",
+              "kind": "proposed",
+              "qini": 0.004080221734503432,
+              "auuc": 0.0320491165976069,
+              "uplift_at_k": {
+                "10": 0.0803596344775312,
+                "30": 0.07785248542261919
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.0803596344775312,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.10771337709057474,
+                  "boundary_n": 4,
+                  "boundary_weight": 0.75,
+                  "weight_treated": 1280.25,
+                  "weight_control": 639.75,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.07785248542261919,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.07458513589716595,
+                  "boundary_n": 6,
+                  "boundary_weight": 0.6666666666666666,
+                  "weight_treated": 3800.6666666666665,
+                  "weight_control": 1959.3333333333333,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 7988,
+                "n_tied_customers": 14930,
+                "tied_customer_fraction": 0.7776041666666667,
+                "duplicate_score_fraction": 0.5839583333333334,
+                "largest_tie": 39
+              }
+            },
+            "x_learner": {
+              "name": "x_learner",
+              "kind": "proposed",
+              "qini": 0.005069566380007051,
+              "auuc": 0.03298446486871749,
+              "uplift_at_k": {
+                "10": 0.09490331624542878,
+                "30": 0.07738533868169584
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.09490331624542878,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1919.9999999999998,
+                  "effective_fraction": 0.09999999999999999,
+                  "boundary_score": 0.08286539323495112,
+                  "boundary_n": 99,
+                  "boundary_weight": 0.9191919191919192,
+                  "weight_treated": 1293.6666666666665,
+                  "weight_control": 626.3333333333333,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.07738533868169584,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.06932443511405507,
+                  "boundary_n": 216,
+                  "boundary_weight": 0.19444444444444445,
+                  "weight_treated": 3838.25,
+                  "weight_control": 1921.75,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 622,
+                "n_tied_customers": 19122,
+                "tied_customer_fraction": 0.9959375,
+                "duplicate_score_fraction": 0.9676041666666667,
+                "largest_tie": 1164
+              }
+            }
+          },
+          "test_current_regularization": {
+            "name": "x_learner@current",
+            "kind": "proposed",
+            "qini": 0.005084609581753385,
+            "auuc": 0.03299612475251189,
+            "uplift_at_k": {
+              "10": 0.09362215307763508,
+              "30": 0.07816402068398273
+            },
+            "uplift_at_k_details": {
+              "10": {
+                "value": 0.09362215307763508,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 1920,
+                "effective_k": 1920.0,
+                "effective_fraction": 0.1,
+                "boundary_score": 0.08321352097558096,
+                "boundary_n": 26,
+                "boundary_weight": 0.8076923076923077,
+                "weight_treated": 1292.3461538461538,
+                "weight_control": 627.6538461538462,
+                "status": "ok"
+              },
+              "30": {
+                "value": 0.07816402068398273,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 5760,
+                "effective_k": 5760.0,
+                "effective_fraction": 0.3,
+                "boundary_score": 0.0699094911015901,
+                "boundary_n": 854,
+                "boundary_weight": 0.9192037470725996,
+                "weight_treated": 3833.8044496487123,
+                "weight_control": 1926.1955503512881,
+                "status": "ok"
+              }
+            },
+            "metric_version": "tied-endpoints-v1",
+            "score_ties": {
+              "n": 19200,
+              "n_unique_scores": 736,
+              "n_tied_customers": 19113,
+              "tied_customer_fraction": 0.99546875,
+              "duplicate_score_fraction": 0.9616666666666667,
+              "largest_tie": 1164
+            }
+          },
+          "feature_screening": {
+            "all_nan": [],
+            "constant": []
+          },
+          "seconds": 12.1
+        },
+        "1": {
+          "n": 64000,
+          "n_train": 44800,
+          "n_test": 19200,
+          "n_validation": 11200,
+          "arms": {
+            "T0": 21306,
+            "T1": 42694,
+            "T2": 0,
+            "T3": 0,
+            "T4": 0
+          },
+          "ate_T1": {
+            "value": 0.06088195726098464,
+            "ci95": [
+              0.0554385735063783,
+              0.06632534101559097
+            ],
+            "se": 0.002777287642805201,
+            "n_t": 42694,
+            "n_c": 21306
+          },
+          "outcome_kind": "binary",
+          "chosen_method": "x_learner",
+          "chosen_base_learner": {
+            "max_iter": 200,
+            "learning_rate": 0.03,
+            "max_depth": 3,
+            "min_samples_leaf": 200,
+            "l2_regularization": 3.0
+          },
+          "chosen_is_current": false,
+          "validation_grid": [
+            {
+              "config_id": 0,
+              "method": "t_learner",
+              "qini": 0.0035661056707556316
+            },
+            {
+              "config_id": 0,
+              "method": "x_learner",
+              "qini": 0.004439310847852762
+            },
+            {
+              "config_id": 1,
+              "method": "t_learner",
+              "qini": 0.0033612829003748373
+            },
+            {
+              "config_id": 1,
+              "method": "x_learner",
+              "qini": 0.003622837666766472
+            },
+            {
+              "config_id": 2,
+              "method": "t_learner",
+              "qini": 0.0033369454698102957
+            },
+            {
+              "config_id": 2,
+              "method": "x_learner",
+              "qini": 0.0043059303061250345
+            },
+            {
+              "config_id": 3,
+              "method": "t_learner",
+              "qini": 0.0037091111616096156
+            },
+            {
+              "config_id": 3,
+              "method": "x_learner",
+              "qini": 0.004458862709962652
+            },
+            {
+              "config_id": 4,
+              "method": "t_learner",
+              "qini": 0.0034816011873754424
+            },
+            {
+              "config_id": 4,
+              "method": "x_learner",
+              "qini": 0.003998247885295701
+            },
+            {
+              "config_id": 5,
+              "method": "t_learner",
+              "qini": 0.003801924399707321
+            },
+            {
+              "config_id": 5,
+              "method": "x_learner",
+              "qini": 0.004956026216484367
+            }
+          ],
+          "configs": [
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            }
+          ],
+          "validation_reasons": {},
+          "test": {
+            "random": {
+              "name": "random",
+              "kind": "baseline",
+              "method": "analytic_expectation",
+              "qini": 0.0,
+              "auuc": 0.030237183581287984,
+              "uplift_at_k": {
+                "10": 0.06047436716257597,
+                "30": 0.06047436716257597
+              }
+            },
+            "churn_risk_targeting": {
+              "name": "churn_risk_targeting",
+              "kind": "baseline",
+              "status": "not_run",
+              "reason": "ValueError: churn_p 또는 risk_model_factory가 주어지지 않았다",
+              "qini": null,
+              "auuc": null
+            },
+            "s_learner": {
+              "name": "s_learner",
+              "kind": "baseline",
+              "qini": 0.003621155445800807,
+              "auuc": 0.033753255798630824,
+              "uplift_at_k": {
+                "10": 0.09594897397594149,
+                "30": 0.07408172006638233
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.09594897397594149,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.088483014206579,
+                  "boundary_n": 5,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 1288.0,
+                  "weight_control": 632.0,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.07408172006638233,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.062083008508234824,
+                  "boundary_n": 20,
+                  "boundary_weight": 0.75,
+                  "weight_treated": 3870.25,
+                  "weight_control": 1889.75,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 2753,
+                "n_tied_customers": 18258,
+                "tied_customer_fraction": 0.9509375,
+                "duplicate_score_fraction": 0.8566145833333333,
+                "largest_tie": 198
+              }
+            },
+            "t_learner": {
+              "name": "t_learner",
+              "kind": "proposed",
+              "qini": 0.002022163989708045,
+              "auuc": 0.03227408074821802,
+              "uplift_at_k": {
+                "10": 0.09210118259080066,
+                "30": 0.07530624289726592
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.09210118259080066,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.10961480289074715,
+                  "boundary_n": 3,
+                  "boundary_weight": 0.6666666666666666,
+                  "weight_treated": 1300.3333333333333,
+                  "weight_control": 619.6666666666666,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.07530624289726592,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.07042936056338622,
+                  "boundary_n": 16,
+                  "boundary_weight": 0.875,
+                  "weight_treated": 3826.75,
+                  "weight_control": 1933.25,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 5547,
+                "n_tied_customers": 16614,
+                "tied_customer_fraction": 0.8653125,
+                "duplicate_score_fraction": 0.71109375,
+                "largest_tie": 90
+              }
+            },
+            "x_learner": {
+              "name": "x_learner",
+              "kind": "proposed",
+              "qini": 0.003435573142659104,
+              "auuc": 0.03362134139689753,
+              "uplift_at_k": {
+                "10": 0.08169599410820905,
+                "30": 0.0677104474568836
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.08169599410820905,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.08432379324865005,
+                  "boundary_n": 3,
+                  "boundary_weight": 0.6666666666666666,
+                  "weight_treated": 1311.0,
+                  "weight_control": 609.0,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.0677104474568836,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.06839521041923086,
+                  "boundary_n": 34,
+                  "boundary_weight": 0.9705882352941176,
+                  "weight_treated": 3848.1470588235297,
+                  "weight_control": 1911.8529411764707,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 2758,
+                "n_tied_customers": 18372,
+                "tied_customer_fraction": 0.956875,
+                "duplicate_score_fraction": 0.8563541666666666,
+                "largest_tie": 250
+              }
+            }
+          },
+          "test_current_regularization": {
+            "name": "x_learner@current",
+            "kind": "proposed",
+            "qini": 0.0032137722521467793,
+            "auuc": 0.03340128866825996,
+            "uplift_at_k": {
+              "10": 0.0786210694212365,
+              "30": 0.0719655376575711
+            },
+            "uplift_at_k_details": {
+              "10": {
+                "value": 0.0786210694212365,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 1920,
+                "effective_k": 1920.0,
+                "effective_fraction": 0.1,
+                "boundary_score": 0.08588082358906093,
+                "boundary_n": 6,
+                "boundary_weight": 0.16666666666666666,
+                "weight_treated": 1314.6666666666667,
+                "weight_control": 605.3333333333333,
+                "status": "ok"
+              },
+              "30": {
+                "value": 0.0719655376575711,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 5760,
+                "effective_k": 5760.0,
+                "effective_fraction": 0.3,
+                "boundary_score": 0.06929386551168645,
+                "boundary_n": 192,
+                "boundary_weight": 0.4322916666666667,
+                "weight_treated": 3845.6302083333335,
+                "weight_control": 1914.3697916666667,
+                "status": "ok"
+              }
+            },
+            "metric_version": "tied-endpoints-v1",
+            "score_ties": {
+              "n": 19200,
+              "n_unique_scores": 2800,
+              "n_tied_customers": 18380,
+              "tied_customer_fraction": 0.9572916666666667,
+              "duplicate_score_fraction": 0.8541666666666666,
+              "largest_tie": 254
+            }
+          },
+          "feature_screening": {
+            "all_nan": [],
+            "constant": []
+          },
+          "seconds": 12.6
+        },
+        "2": {
+          "n": 64000,
+          "n_train": 44800,
+          "n_test": 19200,
+          "n_validation": 11200,
+          "arms": {
+            "T0": 21306,
+            "T1": 42694,
+            "T2": 0,
+            "T3": 0,
+            "T4": 0
+          },
+          "ate_T1": {
+            "value": 0.06088195726098464,
+            "ci95": [
+              0.0554385735063783,
+              0.06632534101559097
+            ],
+            "se": 0.002777287642805201,
+            "n_t": 42694,
+            "n_c": 21306
+          },
+          "outcome_kind": "binary",
+          "chosen_method": "x_learner",
+          "chosen_base_learner": {
+            "max_iter": 200,
+            "learning_rate": 0.03,
+            "max_depth": 3,
+            "min_samples_leaf": 200,
+            "l2_regularization": 3.0
+          },
+          "chosen_is_current": false,
+          "validation_grid": [
+            {
+              "config_id": 0,
+              "method": "t_learner",
+              "qini": 0.0037272700180058377
+            },
+            {
+              "config_id": 0,
+              "method": "x_learner",
+              "qini": 0.004142579340703757
+            },
+            {
+              "config_id": 1,
+              "method": "t_learner",
+              "qini": 0.0036555099593747684
+            },
+            {
+              "config_id": 1,
+              "method": "x_learner",
+              "qini": 0.005141269680867845
+            },
+            {
+              "config_id": 2,
+              "method": "t_learner",
+              "qini": 0.003683555128881834
+            },
+            {
+              "config_id": 2,
+              "method": "x_learner",
+              "qini": 0.005222430006397098
+            },
+            {
+              "config_id": 3,
+              "method": "t_learner",
+              "qini": 0.0035246609743387405
+            },
+            {
+              "config_id": 3,
+              "method": "x_learner",
+              "qini": 0.005057003879804255
+            },
+            {
+              "config_id": 4,
+              "method": "t_learner",
+              "qini": 0.0034917072929071744
+            },
+            {
+              "config_id": 4,
+              "method": "x_learner",
+              "qini": 0.004694642781115137
+            },
+            {
+              "config_id": 5,
+              "method": "t_learner",
+              "qini": 0.0034035087239164194
+            },
+            {
+              "config_id": 5,
+              "method": "x_learner",
+              "qini": 0.0052824236388313295
+            }
+          ],
+          "configs": [
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            }
+          ],
+          "validation_reasons": {},
+          "test": {
+            "random": {
+              "name": "random",
+              "kind": "baseline",
+              "method": "analytic_expectation",
+              "qini": 0.0,
+              "auuc": 0.02984108610153697,
+              "uplift_at_k": {
+                "10": 0.05968217220307394,
+                "30": 0.05968217220307394
+              }
+            },
+            "churn_risk_targeting": {
+              "name": "churn_risk_targeting",
+              "kind": "baseline",
+              "status": "not_run",
+              "reason": "ValueError: churn_p 또는 risk_model_factory가 주어지지 않았다",
+              "qini": null,
+              "auuc": null
+            },
+            "s_learner": {
+              "name": "s_learner",
+              "kind": "baseline",
+              "qini": 0.0050339891563242894,
+              "auuc": 0.03487583950783181,
+              "uplift_at_k": {
+                "10": 0.10778522306471522,
+                "30": 0.0901476768732992
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.10778522306471522,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.08764338875791913,
+                  "boundary_n": 2,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 1284.0,
+                  "weight_control": 636.0,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.0901476768732992,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.06471968933244521,
+                  "boundary_n": 8,
+                  "boundary_weight": 0.375,
+                  "weight_treated": 3837.875,
+                  "weight_control": 1922.125,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 3957,
+                "n_tied_customers": 17935,
+                "tied_customer_fraction": 0.9341145833333333,
+                "duplicate_score_fraction": 0.79390625,
+                "largest_tie": 74
+              }
+            },
+            "t_learner": {
+              "name": "t_learner",
+              "kind": "proposed",
+              "qini": 0.006353171382152412,
+              "auuc": 0.0362182699597995,
+              "uplift_at_k": {
+                "10": 0.11329036233549655,
+                "30": 0.08351149012589713
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.11329036233549655,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.09568551537224318,
+                  "boundary_n": 2,
+                  "boundary_weight": 0.5,
+                  "weight_treated": 1282.0,
+                  "weight_control": 638.0,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.08351149012589713,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.07363959840965256,
+                  "boundary_n": 5,
+                  "boundary_weight": 0.4,
+                  "weight_treated": 3820.6,
+                  "weight_control": 1939.4,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 7555,
+                "n_tied_customers": 15414,
+                "tied_customer_fraction": 0.8028125,
+                "duplicate_score_fraction": 0.6065104166666667,
+                "largest_tie": 106
+              }
+            },
+            "x_learner": {
+              "name": "x_learner",
+              "kind": "proposed",
+              "qini": 0.005292243782995011,
+              "auuc": 0.0352383578710378,
+              "uplift_at_k": {
+                "10": 0.10822319755469251,
+                "30": 0.08661038214950458
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.10822319755469251,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1920,
+                  "effective_k": 1920.0,
+                  "effective_fraction": 0.1,
+                  "boundary_score": 0.07552440647933983,
+                  "boundary_n": 90,
+                  "boundary_weight": 0.2111111111111111,
+                  "weight_treated": 1299.4,
+                  "weight_control": 620.6,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.08661038214950458,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 5760,
+                  "effective_k": 5760.0,
+                  "effective_fraction": 0.3,
+                  "boundary_score": 0.06847591404114967,
+                  "boundary_n": 2225,
+                  "boundary_weight": 0.26157303370786517,
+                  "weight_treated": 3807.3734831460674,
+                  "weight_control": 1952.6265168539326,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 19200,
+                "n_unique_scores": 351,
+                "n_tied_customers": 19189,
+                "tied_customer_fraction": 0.9994270833333333,
+                "duplicate_score_fraction": 0.98171875,
+                "largest_tie": 2363
+              }
+            }
+          },
+          "test_current_regularization": {
+            "name": "x_learner@current",
+            "kind": "proposed",
+            "qini": 0.004684006680173269,
+            "auuc": 0.03460972239303871,
+            "uplift_at_k": {
+              "10": 0.11906183276595567,
+              "30": 0.08452970113082763
+            },
+            "uplift_at_k_details": {
+              "10": {
+                "value": 0.11906183276595567,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 1920,
+                "effective_k": 1920.0,
+                "effective_fraction": 0.1,
+                "boundary_score": 0.08345311005311319,
+                "boundary_n": 11,
+                "boundary_weight": 0.5454545454545454,
+                "weight_treated": 1289.909090909091,
+                "weight_control": 630.0909090909091,
+                "status": "ok"
+              },
+              "30": {
+                "value": 0.08452970113082763,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 5760,
+                "effective_k": 5760.0,
+                "effective_fraction": 0.3,
+                "boundary_score": 0.0717191389041914,
+                "boundary_n": 1181,
+                "boundary_weight": 0.5969517358171041,
+                "weight_treated": 3818.47417442845,
+                "weight_control": 1941.5258255715494,
+                "status": "ok"
+              }
+            },
+            "metric_version": "tied-endpoints-v1",
+            "score_ties": {
+              "n": 19200,
+              "n_unique_scores": 1201,
+              "n_tied_customers": 19018,
+              "tied_customer_fraction": 0.9905208333333333,
+              "duplicate_score_fraction": 0.9374479166666667,
+              "largest_tie": 1181
+            }
+          },
+          "feature_screening": {
+            "all_nan": [],
+            "constant": []
+          },
+          "seconds": 13.4
+        }
+      }
+    },
+    "hillstrom_mens_conversion": {
+      "status": "ok",
+      "spec": {
+        "id": "hillstrom_mens_conversion",
+        "dataset": "hillstrom",
+        "treatment_col": "segment",
+        "control_value": "No E-Mail",
+        "treatment_value": "Mens E-Mail",
+        "outcome": "conversion"
+      },
+      "seeds": [
+        0,
+        1,
+        2
+      ],
+      "n_features": 8,
+      "runs": {
+        "0": {
+          "n": 42613,
+          "n_train": 29829,
+          "n_test": 12784,
+          "n_validation": 7458,
+          "arms": {
+            "T0": 21306,
+            "T1": 21307,
+            "T2": 0,
+            "T3": 0,
+            "T4": 0
+          },
+          "ate_T1": {
+            "value": 0.006805006519615695,
+            "ci95": [
+              0.005000129025231786,
+              0.008609884013999603
+            ],
+            "se": 0.0009208727857351216,
+            "n_t": 21307,
+            "n_c": 21306
+          },
+          "outcome_kind": "binary",
+          "chosen_method": "x_learner",
+          "chosen_base_learner": {
+            "max_iter": 200,
+            "learning_rate": 0.03,
+            "max_depth": 2,
+            "min_samples_leaf": 40,
+            "l2_regularization": 3.0
+          },
+          "chosen_is_current": false,
+          "validation_grid": [
+            {
+              "config_id": 0,
+              "method": "t_learner",
+              "qini": -0.0004990059647032477
+            },
+            {
+              "config_id": 0,
+              "method": "x_learner",
+              "qini": -0.00034300720575085666
+            },
+            {
+              "config_id": 1,
+              "method": "t_learner",
+              "qini": 7.056465221970398e-07
+            },
+            {
+              "config_id": 1,
+              "method": "x_learner",
+              "qini": 0.0004032408759130444
+            },
+            {
+              "config_id": 2,
+              "method": "t_learner",
+              "qini": -5.191317827979089e-05
+            },
+            {
+              "config_id": 2,
+              "method": "x_learner",
+              "qini": 0.00022275039021993478
+            },
+            {
+              "config_id": 3,
+              "method": "t_learner",
+              "qini": -0.00012808482161045902
+            },
+            {
+              "config_id": 3,
+              "method": "x_learner",
+              "qini": -9.900590328560397e-05
+            },
+            {
+              "config_id": 4,
+              "method": "t_learner",
+              "qini": -0.00047425485216042286
+            },
+            {
+              "config_id": 4,
+              "method": "x_learner",
+              "qini": 7.664733343186415e-05
+            },
+            {
+              "config_id": 5,
+              "method": "t_learner",
+              "qini": -0.00038473761833968416
+            },
+            {
+              "config_id": 5,
+              "method": "x_learner",
+              "qini": -0.0006604407569461728
+            }
+          ],
+          "configs": [
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            }
+          ],
+          "validation_reasons": {},
+          "test": {
+            "random": {
+              "name": "random",
+              "kind": "baseline",
+              "method": "analytic_expectation",
+              "qini": 0.0,
+              "auuc": 0.0031289111389236545,
+              "uplift_at_k": {
+                "10": 0.006257822277847309,
+                "30": 0.006257822277847309
+              }
+            },
+            "churn_risk_targeting": {
+              "name": "churn_risk_targeting",
+              "kind": "baseline",
+              "status": "not_run",
+              "reason": "ValueError: churn_p 또는 risk_model_factory가 주어지지 않았다",
+              "qini": null,
+              "auuc": null
+            },
+            "s_learner": {
+              "name": "s_learner",
+              "kind": "baseline",
+              "qini": -0.0005384789538269625,
+              "auuc": 0.002607244527567762,
+              "uplift_at_k": {
+                "10": 0.0005700459433605962,
+                "30": 0.0026064520959683136
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.0005700459433605962,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.008979741770003604,
+                  "boundary_n": 387,
+                  "boundary_weight": 0.48578811369509045,
+                  "weight_treated": 641.2428940568475,
+                  "weight_control": 636.7571059431524,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.0026064520959683136,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.00632428287713812,
+                  "boundary_n": 141,
+                  "boundary_weight": 0.2553191489361702,
+                  "weight_treated": 1901.127659574468,
+                  "weight_control": 1933.872340425532,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 113,
+                "n_tied_customers": 12776,
+                "tied_customer_fraction": 0.9993742177722152,
+                "duplicate_score_fraction": 0.9911608260325406,
+                "largest_tie": 1223
+              }
+            },
+            "t_learner": {
+              "name": "t_learner",
+              "kind": "proposed",
+              "qini": -0.00022210502360294057,
+              "auuc": 0.002927102775031559,
+              "uplift_at_k": {
+                "10": 0.0015463248245561195,
+                "30": 0.006203481641024194
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.0015463248245561195,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.012459720474601999,
+                  "boundary_n": 22,
+                  "boundary_weight": 0.9545454545454546,
+                  "weight_treated": 639.3636363636364,
+                  "weight_control": 638.6363636363635,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.006203481641024194,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.007621293406924554,
+                  "boundary_n": 5,
+                  "boundary_weight": 0.6,
+                  "weight_treated": 1886.4,
+                  "weight_control": 1948.6,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 2590,
+                "n_tied_customers": 11791,
+                "tied_customer_fraction": 0.9223247809762203,
+                "duplicate_score_fraction": 0.7974030037546934,
+                "largest_tie": 72
+              }
+            },
+            "x_learner": {
+              "name": "x_learner",
+              "kind": "proposed",
+              "qini": -0.0004109454753176787,
+              "auuc": 0.0027403815270531815,
+              "uplift_at_k": {
+                "10": 0.002079755818539466,
+                "30": 0.006661578017907838
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.002079755818539466,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.011201433370512767,
+                  "boundary_n": 2,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 629.0,
+                  "weight_control": 649.0,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.006661578017907838,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.007042833378381338,
+                  "boundary_n": 22,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 1892.0,
+                  "weight_control": 1943.0,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 1187,
+                "n_tied_customers": 12420,
+                "tied_customer_fraction": 0.9715269086357947,
+                "duplicate_score_fraction": 0.9071495619524406,
+                "largest_tie": 242
+              }
+            }
+          },
+          "test_current_regularization": {
+            "name": "x_learner@current",
+            "kind": "proposed",
+            "qini": -0.00022550654168681855,
+            "auuc": 0.002925082607900857,
+            "uplift_at_k": {
+              "10": -0.0029439250548197356,
+              "30": 0.006769672319645958
+            },
+            "uplift_at_k_details": {
+              "10": {
+                "value": -0.0029439250548197356,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 1278,
+                "effective_k": 1278.0,
+                "effective_fraction": 0.09996871088861076,
+                "boundary_score": 0.011595039118605162,
+                "boundary_n": 12,
+                "boundary_weight": 0.75,
+                "weight_treated": 634.25,
+                "weight_control": 643.75,
+                "status": "ok"
+              },
+              "30": {
+                "value": 0.006769672319645958,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 3835,
+                "effective_k": 3835.0,
+                "effective_fraction": 0.2999843554443054,
+                "boundary_score": 0.007186921726351149,
+                "boundary_n": 2,
+                "boundary_weight": 0.5,
+                "weight_treated": 1881.5,
+                "weight_control": 1953.5,
+                "status": "ok"
+              }
+            },
+            "metric_version": "tied-endpoints-v1",
+            "score_ties": {
+              "n": 12784,
+              "n_unique_scores": 2924,
+              "n_tied_customers": 11468,
+              "tied_customer_fraction": 0.8970588235294118,
+              "duplicate_score_fraction": 0.7712765957446809,
+              "largest_tie": 125
+            }
+          },
+          "feature_screening": {
+            "all_nan": [],
+            "constant": []
+          },
+          "seconds": 8.8
+        },
+        "1": {
+          "n": 42613,
+          "n_train": 29829,
+          "n_test": 12784,
+          "n_validation": 7458,
+          "arms": {
+            "T0": 21306,
+            "T1": 21307,
+            "T2": 0,
+            "T3": 0,
+            "T4": 0
+          },
+          "ate_T1": {
+            "value": 0.006805006519615695,
+            "ci95": [
+              0.005000129025231786,
+              0.008609884013999603
+            ],
+            "se": 0.0009208727857351216,
+            "n_t": 21307,
+            "n_c": 21306
+          },
+          "outcome_kind": "binary",
+          "chosen_method": "x_learner",
+          "chosen_base_learner": {
+            "max_iter": 200,
+            "learning_rate": 0.03,
+            "max_depth": 3,
+            "min_samples_leaf": 80,
+            "l2_regularization": 3.0
+          },
+          "chosen_is_current": true,
+          "validation_grid": [
+            {
+              "config_id": 0,
+              "method": "t_learner",
+              "qini": 0.001020112300152116
+            },
+            {
+              "config_id": 0,
+              "method": "x_learner",
+              "qini": 0.0016383782217322595
+            },
+            {
+              "config_id": 1,
+              "method": "t_learner",
+              "qini": 0.00039316914953974047
+            },
+            {
+              "config_id": 1,
+              "method": "x_learner",
+              "qini": 0.00011499937885598843
+            },
+            {
+              "config_id": 2,
+              "method": "t_learner",
+              "qini": 0.0005721777064693675
+            },
+            {
+              "config_id": 2,
+              "method": "x_learner",
+              "qini": 0.00021773585501910775
+            },
+            {
+              "config_id": 3,
+              "method": "t_learner",
+              "qini": 0.0006762236304538403
+            },
+            {
+              "config_id": 3,
+              "method": "x_learner",
+              "qini": -0.0002849818097042621
+            },
+            {
+              "config_id": 4,
+              "method": "t_learner",
+              "qini": 0.0008043510677271781
+            },
+            {
+              "config_id": 4,
+              "method": "x_learner",
+              "qini": 0.000799309619585375
+            },
+            {
+              "config_id": 5,
+              "method": "t_learner",
+              "qini": 0.000653850127967506
+            },
+            {
+              "config_id": 5,
+              "method": "x_learner",
+              "qini": 0.0011339813021131384
+            }
+          ],
+          "configs": [
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            }
+          ],
+          "validation_reasons": {},
+          "test": {
+            "random": {
+              "name": "random",
+              "kind": "baseline",
+              "method": "analytic_expectation",
+              "qini": 0.0,
+              "auuc": 0.00289424280350438,
+              "uplift_at_k": {
+                "10": 0.00578848560700876,
+                "30": 0.00578848560700876
+              }
+            },
+            "churn_risk_targeting": {
+              "name": "churn_risk_targeting",
+              "kind": "baseline",
+              "status": "not_run",
+              "reason": "ValueError: churn_p 또는 risk_model_factory가 주어지지 않았다",
+              "qini": null,
+              "auuc": null
+            },
+            "s_learner": {
+              "name": "s_learner",
+              "kind": "baseline",
+              "qini": -0.0007868480328073273,
+              "auuc": 0.0020915193505650544,
+              "uplift_at_k": {
+                "10": 0.0008985705192208412,
+                "30": 0.000321629566170269
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.0008985705192208412,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.009241546495396467,
+                  "boundary_n": 61,
+                  "boundary_weight": 0.14754098360655737,
+                  "weight_treated": 677.016393442623,
+                  "weight_control": 600.9836065573771,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.000321629566170269,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.006186439244967973,
+                  "boundary_n": 52,
+                  "boundary_weight": 0.7692307692307693,
+                  "weight_treated": 1983.846153846154,
+                  "weight_control": 1851.1538461538462,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 979,
+                "n_tied_customers": 12511,
+                "tied_customer_fraction": 0.9786451814768461,
+                "duplicate_score_fraction": 0.9234198998748435,
+                "largest_tie": 299
+              }
+            },
+            "t_learner": {
+              "name": "t_learner",
+              "kind": "proposed",
+              "qini": -0.0010741225323330295,
+              "auuc": 0.001819521138624742,
+              "uplift_at_k": {
+                "10": -0.006371150495055149,
+                "30": 0.00043811598154579363
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": -0.006371150495055149,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.015122649817539757,
+                  "boundary_n": 5,
+                  "boundary_weight": 0.2,
+                  "weight_treated": 674.6,
+                  "weight_control": 603.4,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.00043811598154579363,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.009213190210477278,
+                  "boundary_n": 2,
+                  "boundary_weight": 0.5,
+                  "weight_treated": 1962.0,
+                  "weight_control": 1873.0,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 4603,
+                "n_tied_customers": 10386,
+                "tied_customer_fraction": 0.8124217772215269,
+                "duplicate_score_fraction": 0.6399405506883604,
+                "largest_tie": 49
+              }
+            },
+            "x_learner": {
+              "name": "x_learner",
+              "kind": "proposed",
+              "qini": -0.0010848048248476843,
+              "auuc": 0.001804847127138728,
+              "uplift_at_k": {
+                "10": -0.006771982233496393,
+                "30": 0.0009834720099620772
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": -0.006771982233496393,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.010804681844699671,
+                  "boundary_n": 16,
+                  "boundary_weight": 0.3125,
+                  "weight_treated": 678.875,
+                  "weight_control": 599.125,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.0009834720099620772,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.00820656475048842,
+                  "boundary_n": 22,
+                  "boundary_weight": 0.5,
+                  "weight_treated": 1963.0,
+                  "weight_control": 1872.0,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 1530,
+                "n_tied_customers": 12210,
+                "tied_customer_fraction": 0.9551001251564456,
+                "duplicate_score_fraction": 0.8803191489361702,
+                "largest_tie": 148
+              }
+            }
+          },
+          "test_current_regularization": null,
+          "feature_screening": {
+            "all_nan": [],
+            "constant": []
+          },
+          "seconds": 4.5
+        },
+        "2": {
+          "n": 42613,
+          "n_train": 29829,
+          "n_test": 12784,
+          "n_validation": 7458,
+          "arms": {
+            "T0": 21306,
+            "T1": 21307,
+            "T2": 0,
+            "T3": 0,
+            "T4": 0
+          },
+          "ate_T1": {
+            "value": 0.006805006519615695,
+            "ci95": [
+              0.005000129025231786,
+              0.008609884013999603
+            ],
+            "se": 0.0009208727857351216,
+            "n_t": 21307,
+            "n_c": 21306
+          },
+          "outcome_kind": "binary",
+          "chosen_method": "t_learner",
+          "chosen_base_learner": {
+            "max_iter": 200,
+            "learning_rate": 0.03,
+            "max_depth": 2,
+            "min_samples_leaf": 40,
+            "l2_regularization": 3.0
+          },
+          "chosen_is_current": false,
+          "validation_grid": [
+            {
+              "config_id": 0,
+              "method": "t_learner",
+              "qini": -0.0002080085871048569
+            },
+            {
+              "config_id": 0,
+              "method": "x_learner",
+              "qini": -0.00024487198203940056
+            },
+            {
+              "config_id": 1,
+              "method": "t_learner",
+              "qini": 0.000170257210081258
+            },
+            {
+              "config_id": 1,
+              "method": "x_learner",
+              "qini": -0.00015159278878899103
+            },
+            {
+              "config_id": 2,
+              "method": "t_learner",
+              "qini": 0.00016182320176596132
+            },
+            {
+              "config_id": 2,
+              "method": "x_learner",
+              "qini": -0.0001776106284208539
+            },
+            {
+              "config_id": 3,
+              "method": "t_learner",
+              "qini": -0.000156548466750203
+            },
+            {
+              "config_id": 3,
+              "method": "x_learner",
+              "qini": -0.00031352694457735444
+            },
+            {
+              "config_id": 4,
+              "method": "t_learner",
+              "qini": -0.0005389944917151253
+            },
+            {
+              "config_id": 4,
+              "method": "x_learner",
+              "qini": -0.0004339963821317467
+            },
+            {
+              "config_id": 5,
+              "method": "t_learner",
+              "qini": -0.000677914879638346
+            },
+            {
+              "config_id": 5,
+              "method": "x_learner",
+              "qini": -0.0002922583095434266
+            }
+          ],
+          "configs": [
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            }
+          ],
+          "validation_reasons": {},
+          "test": {
+            "random": {
+              "name": "random",
+              "kind": "baseline",
+              "method": "analytic_expectation",
+              "qini": 0.0,
+              "auuc": 0.0032071339173967463,
+              "uplift_at_k": {
+                "10": 0.0064142678347934926,
+                "30": 0.0064142678347934926
+              }
+            },
+            "churn_risk_targeting": {
+              "name": "churn_risk_targeting",
+              "kind": "baseline",
+              "status": "not_run",
+              "reason": "ValueError: churn_p 또는 risk_model_factory가 주어지지 않았다",
+              "qini": null,
+              "auuc": null
+            },
+            "s_learner": {
+              "name": "s_learner",
+              "kind": "baseline",
+              "qini": -2.9034224979461974e-06,
+              "auuc": 0.0032019938527639595,
+              "uplift_at_k": {
+                "10": 0.004695652042498982,
+                "30": 0.00642901358107709
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.004695652042498982,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.009701063608113005,
+                  "boundary_n": 33,
+                  "boundary_weight": 0.9393939393939394,
+                  "weight_treated": 638.969696969697,
+                  "weight_control": 639.030303030303,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.00642901358107709,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.007417005755400957,
+                  "boundary_n": 101,
+                  "boundary_weight": 0.7227722772277227,
+                  "weight_treated": 1915.4752475247524,
+                  "weight_control": 1919.5247524752476,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 817,
+                "n_tied_customers": 12621,
+                "tied_customer_fraction": 0.987249687108886,
+                "duplicate_score_fraction": 0.9360919899874843,
+                "largest_tie": 243
+              }
+            },
+            "t_learner": {
+              "name": "t_learner",
+              "kind": "proposed",
+              "qini": -0.00010890449225692657,
+              "auuc": 0.0030850927975129196,
+              "uplift_at_k": {
+                "10": 0.0043677230871420475,
+                "30": 0.003679466096348111
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.0043677230871420475,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0,
+                  "effective_fraction": 0.09996871088861076,
+                  "boundary_score": 0.012608653704179183,
+                  "boundary_n": 12,
+                  "boundary_weight": 0.9166666666666666,
+                  "weight_treated": 643.25,
+                  "weight_control": 634.75,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.003679466096348111,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.008869047547674359,
+                  "boundary_n": 69,
+                  "boundary_weight": 0.6666666666666666,
+                  "weight_treated": 1915.3333333333333,
+                  "weight_control": 1919.6666666666665,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 1346,
+                "n_tied_customers": 12469,
+                "tied_customer_fraction": 0.9753598247809763,
+                "duplicate_score_fraction": 0.894712140175219,
+                "largest_tie": 134
+              }
+            },
+            "x_learner": {
+              "name": "x_learner",
+              "kind": "proposed",
+              "qini": 3.484477878539687e-05,
+              "auuc": 0.0032364194364115934,
+              "uplift_at_k": {
+                "10": 8.879534921437011e-05,
+                "30": 0.004459253848621194
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 8.879534921437011e-05,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 1278,
+                  "effective_k": 1278.0000000000002,
+                  "effective_fraction": 0.09996871088861078,
+                  "boundary_score": 0.009898390731062983,
+                  "boundary_n": 39,
+                  "boundary_weight": 0.7435897435897436,
+                  "weight_treated": 636.4102564102564,
+                  "weight_control": 641.5897435897436,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.004459253848621194,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 3835,
+                  "effective_k": 3835.0,
+                  "effective_fraction": 0.2999843554443054,
+                  "boundary_score": 0.007618913390258658,
+                  "boundary_n": 162,
+                  "boundary_weight": 0.06790123456790123,
+                  "weight_treated": 1899.0432098765432,
+                  "weight_control": 1935.9567901234566,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 12784,
+                "n_unique_scores": 298,
+                "n_tied_customers": 12772,
+                "tied_customer_fraction": 0.9990613266583229,
+                "duplicate_score_fraction": 0.9766896120150188,
+                "largest_tie": 554
+              }
+            }
+          },
+          "test_current_regularization": {
+            "name": "t_learner@current",
+            "kind": "proposed",
+            "qini": 6.431667225715752e-05,
+            "auuc": 0.0032644128649359475,
+            "uplift_at_k": {
+              "10": -0.005236834363047954,
+              "30": 0.005758261794754355
+            },
+            "uplift_at_k_details": {
+              "10": {
+                "value": -0.005236834363047954,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 1278,
+                "effective_k": 1278.0,
+                "effective_fraction": 0.09996871088861076,
+                "boundary_score": 0.014207293884890006,
+                "boundary_n": 3,
+                "boundary_weight": 1.0,
+                "weight_treated": 618.0,
+                "weight_control": 660.0,
+                "status": "ok"
+              },
+              "30": {
+                "value": 0.005758261794754355,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 3835,
+                "effective_k": 3835.0,
+                "effective_fraction": 0.2999843554443054,
+                "boundary_score": 0.008960657733031358,
+                "boundary_n": 4,
+                "boundary_weight": 1.0,
+                "weight_treated": 1916.0,
+                "weight_control": 1919.0,
+                "status": "ok"
+              }
+            },
+            "metric_version": "tied-endpoints-v1",
+            "score_ties": {
+              "n": 12784,
+              "n_unique_scores": 4097,
+              "n_tied_customers": 11004,
+              "tied_customer_fraction": 0.8607634543178974,
+              "duplicate_score_fraction": 0.6795212765957447,
+              "largest_tie": 67
+            }
+          },
+          "feature_screening": {
+            "all_nan": [],
+            "constant": []
+          },
+          "seconds": 6.4
+        }
+      }
+    },
+    "lenta_response_att": {
+      "status": "ok",
+      "spec": {
+        "id": "lenta_response_att",
+        "dataset": "lenta",
+        "treatment_col": "group",
+        "control_value": "control",
+        "treatment_value": "test",
+        "outcome": "response_att"
+      },
+      "seeds": [
+        0
+      ],
+      "n_features": 193,
+      "runs": {
+        "0": {
+          "n": 687029,
+          "n_train": 480920,
+          "n_test": 206109,
+          "n_validation": 120230,
+          "arms": {
+            "T0": 171137,
+            "T1": 515892,
+            "T2": 0,
+            "T3": 0,
+            "T4": 0
+          },
+          "ate_T1": {
+            "value": 0.0075471269267721325,
+            "ci95": [
+              0.00587497578917663,
+              0.009219278064367635
+            ],
+            "se": 0.0008531540124130944,
+            "n_t": 515892,
+            "n_c": 171137
+          },
+          "outcome_kind": "binary",
+          "chosen_method": "t_learner",
+          "chosen_base_learner": {
+            "max_iter": 200,
+            "learning_rate": 0.03,
+            "max_depth": 3,
+            "min_samples_leaf": 40,
+            "l2_regularization": 3.0
+          },
+          "chosen_is_current": false,
+          "validation_grid": [
+            {
+              "config_id": 0,
+              "method": "t_learner",
+              "qini": 0.001853984976433424
+            },
+            {
+              "config_id": 0,
+              "method": "x_learner",
+              "qini": 0.0005451212438129798
+            },
+            {
+              "config_id": 1,
+              "method": "t_learner",
+              "qini": 0.0015766703840239702
+            },
+            {
+              "config_id": 1,
+              "method": "x_learner",
+              "qini": 0.0005576666174659656
+            },
+            {
+              "config_id": 2,
+              "method": "t_learner",
+              "qini": 0.0015495179194572155
+            },
+            {
+              "config_id": 2,
+              "method": "x_learner",
+              "qini": 0.0005955171599828324
+            },
+            {
+              "config_id": 3,
+              "method": "t_learner",
+              "qini": 0.0017496750902349957
+            },
+            {
+              "config_id": 3,
+              "method": "x_learner",
+              "qini": 0.0007495519717351578
+            },
+            {
+              "config_id": 4,
+              "method": "t_learner",
+              "qini": 0.0018692745783689662
+            },
+            {
+              "config_id": 4,
+              "method": "x_learner",
+              "qini": 0.000263056332318554
+            },
+            {
+              "config_id": 5,
+              "method": "t_learner",
+              "qini": 0.001582774795053499
+            },
+            {
+              "config_id": 5,
+              "method": "x_learner",
+              "qini": 0.0009132147971773418
+            }
+          ],
+          "configs": [
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 80,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 2,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 40,
+              "l2_regularization": 3.0
+            },
+            {
+              "max_iter": 200,
+              "learning_rate": 0.03,
+              "max_depth": 3,
+              "min_samples_leaf": 200,
+              "l2_regularization": 3.0
+            }
+          ],
+          "validation_reasons": {},
+          "test": {
+            "random": {
+              "name": "random",
+              "kind": "baseline",
+              "method": "analytic_expectation",
+              "qini": 0.0,
+              "auuc": 0.003988411691134758,
+              "uplift_at_k": {
+                "10": 0.007976823382269516,
+                "30": 0.007976823382269516
+              }
+            },
+            "churn_risk_targeting": {
+              "name": "churn_risk_targeting",
+              "kind": "baseline",
+              "status": "not_run",
+              "reason": "ValueError: churn_p 또는 risk_model_factory가 주어지지 않았다",
+              "qini": null,
+              "auuc": null
+            },
+            "s_learner": {
+              "name": "s_learner",
+              "kind": "baseline",
+              "qini": 0.0,
+              "auuc": 0.003988411691134758,
+              "uplift_at_k": {
+                "10": 0.007976823382269363,
+                "30": 0.007976823382269516
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.007976823382269363,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 20611,
+                  "effective_k": 20611.0,
+                  "effective_fraction": 0.10000048518017166,
+                  "boundary_score": 0.0,
+                  "boundary_n": 206109,
+                  "boundary_weight": 0.10000048518017166,
+                  "weight_treated": 15476.875090364809,
+                  "weight_control": 5134.124909635194,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.007976823382269516,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 61833,
+                  "effective_k": 61833.000000000015,
+                  "effective_fraction": 0.30000145554051505,
+                  "boundary_score": 0.0,
+                  "boundary_n": 206109,
+                  "boundary_weight": 0.300001455540515,
+                  "weight_treated": 46430.62527109443,
+                  "weight_control": 15402.374728905583,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 206109,
+                "n_unique_scores": 1,
+                "n_tied_customers": 206109,
+                "tied_customer_fraction": 1.0,
+                "duplicate_score_fraction": 0.9999951481982834,
+                "largest_tie": 206109
+              }
+            },
+            "t_learner": {
+              "name": "t_learner",
+              "kind": "proposed",
+              "qini": 0.00016770270387887493,
+              "auuc": 0.004154317760421854,
+              "uplift_at_k": {
+                "10": 0.01942456522486885,
+                "30": 0.008359198840311804
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.01942456522486885,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 20611,
+                  "effective_k": 20611.0,
+                  "effective_fraction": 0.10000048518017166,
+                  "boundary_score": 0.023701099244502477,
+                  "boundary_n": 1,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 15497.0,
+                  "weight_control": 5114.0,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.008359198840311804,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 61833,
+                  "effective_k": 61833.0,
+                  "effective_fraction": 0.300001455540515,
+                  "boundary_score": 0.008506661382414418,
+                  "boundary_n": 1,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 46477.0,
+                  "weight_control": 15356.0,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 206109,
+                "n_unique_scores": 170117,
+                "n_tied_customers": 39612,
+                "tied_customer_fraction": 0.19218956959666972,
+                "duplicate_score_fraction": 0.17462604738269558,
+                "largest_tie": 8907
+              }
+            },
+            "x_learner": {
+              "name": "x_learner",
+              "kind": "proposed",
+              "qini": 0.0007301043687320862,
+              "auuc": 0.004704155303824435,
+              "uplift_at_k": {
+                "10": 0.018479986275581062,
+                "30": 0.015323466950924236
+              },
+              "uplift_at_k_details": {
+                "10": {
+                  "value": 0.018479986275581062,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 20611,
+                  "effective_k": 20611.0,
+                  "effective_fraction": 0.10000048518017166,
+                  "boundary_score": 0.013301477444467961,
+                  "boundary_n": 1,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 15718.0,
+                  "weight_control": 4893.0,
+                  "status": "ok"
+                },
+                "30": {
+                  "value": 0.015323466950924236,
+                  "version": "fractional-boundary-v1",
+                  "nominal_k": 61833,
+                  "effective_k": 61833.0,
+                  "effective_fraction": 0.300001455540515,
+                  "boundary_score": 0.006557844472996734,
+                  "boundary_n": 1,
+                  "boundary_weight": 1.0,
+                  "weight_treated": 46545.0,
+                  "weight_control": 15288.0,
+                  "status": "ok"
+                }
+              },
+              "metric_version": "tied-endpoints-v1",
+              "score_ties": {
+                "n": 206109,
+                "n_unique_scores": 168474,
+                "n_tied_customers": 42364,
+                "tied_customer_fraction": 0.20554172792066333,
+                "duplicate_score_fraction": 0.18259755760301588,
+                "largest_tie": 3946
+              }
+            }
+          },
+          "test_current_regularization": {
+            "name": "t_learner@current",
+            "kind": "proposed",
+            "qini": 0.00020061471834955432,
+            "auuc": 0.004186877915810413,
+            "uplift_at_k": {
+              "10": 0.0235630794982038,
+              "30": 0.008777891699212448
+            },
+            "uplift_at_k_details": {
+              "10": {
+                "value": 0.0235630794982038,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 20611,
+                "effective_k": 20611.0,
+                "effective_fraction": 0.10000048518017166,
+                "boundary_score": 0.02310129600013207,
+                "boundary_n": 1,
+                "boundary_weight": 1.0,
+                "weight_treated": 15459.0,
+                "weight_control": 5152.0,
+                "status": "ok"
+              },
+              "30": {
+                "value": 0.008777891699212448,
+                "version": "fractional-boundary-v1",
+                "nominal_k": 61833,
+                "effective_k": 61833.0,
+                "effective_fraction": 0.300001455540515,
+                "boundary_score": 0.008625128610924016,
+                "boundary_n": 1,
+                "boundary_weight": 1.0,
+                "weight_treated": 46473.0,
+                "weight_control": 15360.0,
+                "status": "ok"
+              }
+            },
+            "metric_version": "tied-endpoints-v1",
+            "score_ties": {
+              "n": 206109,
+              "n_unique_scores": 170052,
+              "n_tied_customers": 39567,
+              "tied_customer_fraction": 0.1919712385194242,
+              "duplicate_score_fraction": 0.17494141449427245,
+              "largest_tie": 9126
+            }
+          },
+          "feature_screening": {
+            "all_nan": [],
+            "constant": []
+          },
+          "seconds": 171.6
+        }
+      }
+    }
+  },
+  "note": "공개 실험 데이터 외부 검증 — 우리 시뮬레이션 결과가 아니다. 집계값만(고객별 값 없음)."
+}

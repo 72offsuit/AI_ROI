@@ -243,6 +243,127 @@ class TestEvaluate(unittest.TestCase):
 
 
 @unittest.skipUnless(DEPS, REASON)
+class TestRegularizationTuning(unittest.TestCase):
+    """#217 3부 — DR-217-uplift-tuning 에 결과 전에 고정한 규칙(후보 순서 · 동점 · Test 미사용 · 비활성)."""
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.X, cls.t, cls.y, _ = synthetic(n=2400, seed=4)
+        cls.res = evaluate_uplift_models(cls.X, cls.t, cls.y, seed=0, methods=("s_learner", "t_learner", "x_learner"))
+
+    def test_candidates_start_with_current_then_grid_product(self) -> None:
+        from src.decision import uplift
+
+        base = dict(uplift.BASE_LEARNER)
+        tuning = {"enabled": True, "metric": "qini", "grid": {"min_samples_leaf": (40, 80, 200), "max_depth": (2, 3)}}
+        got = [(c["max_depth"], c["min_samples_leaf"]) for c in uplift.regularization_candidates(base, tuning)]
+        self.assertEqual([(3, 80), (2, 40), (2, 80), (2, 200), (3, 40), (3, 200)], got)  # 현행값 첫째 · 중복 한 번
+        for c in uplift.regularization_candidates(base, tuning):
+            self.assertEqual({k: v for k, v in base.items() if k not in ("max_depth", "min_samples_leaf")},
+                             {k: v for k, v in c.items() if k not in ("max_depth", "min_samples_leaf")})
+        self.assertEqual([base], uplift.regularization_candidates(base, {**tuning, "enabled": False}))
+
+    def test_selection_scores_every_candidate_and_reports_choice(self) -> None:
+        from src.decision import uplift
+
+        sel = self.res["best_method_selection"]
+        configs = sel["tuning"]["configs"]
+        self.assertEqual(uplift.regularization_candidates(), configs)
+        self.assertEqual(len(configs) * 2, len(sel["tuning"]["grid"]))       # 제안 메타러너 2 × 규제 후보
+        self.assertEqual(["t_learner", "x_learner"] * len(configs), [r["method"] for r in sel["tuning"]["grid"]])
+        best = max((r for r in sel["tuning"]["grid"] if r["qini"] is not None), key=lambda r: r["qini"])
+        self.assertEqual(best["method"], sel["best_method"])
+        self.assertEqual(configs[best["config_id"]], sel["base_learner"])
+        self.assertEqual(sel["base_learner"], self.res["base_learner"])
+        self.assertEqual(best["config_id"] == 0, sel["base_learner_is_current"])
+        # Test 의 모델 행은 고른 규제로 학습했고, 현행값 행은 보고만
+        report = self.res["tuning_report"]
+        self.assertEqual(sel["base_learner"], report["chosen_base_learner"])
+        if report["chosen_is_current"]:
+            self.assertIsNone(report["test_current_regularization"])
+        else:
+            self.assertEqual(f"{sel['best_method']}@current", report["test_current_regularization"]["name"])
+        json.dumps(self.res)
+
+    def test_ties_go_to_the_earlier_candidate(self) -> None:
+        from unittest import mock
+
+        from src.decision import uplift
+
+        # 선택 함수만 — 모든 후보의 Validation Qini 가 같으면 첫 후보(현행값 · t_learner)
+        with mock.patch.object(uplift, "qini_curve", return_value={"qini": 0.01}):
+            sel = uplift._select_method(self.X.iloc[:1200], self.t.iloc[:1200], self.y.iloc[:1200],
+                                        ("t_learner", "x_learner"), "T3", 0, True)
+        self.assertEqual({0.01}, {r["qini"] for r in sel["tuning"]["grid"]})
+        self.assertEqual(("t_learner", True), (sel["best_method"], sel["base_learner_is_current"]))
+        self.assertEqual(dict(uplift.BASE_LEARNER), sel["base_learner"])
+
+    def test_test_labels_do_not_change_the_choice(self) -> None:
+        test_ids = self.res["evaluation_split"]["test_customer_ids"]
+        flipped = self.y.copy()
+        flipped.loc[test_ids] = 1 - flipped.loc[test_ids]
+        again = evaluate_uplift_models(self.X, self.t, flipped, seed=0, methods=("s_learner", "t_learner", "x_learner"))
+        self.assertEqual(self.res["best_method_selection"]["tuning"]["grid"],
+                         again["best_method_selection"]["tuning"]["grid"])
+        self.assertEqual(self.res["base_learner"], again["base_learner"])
+
+    def test_disabled_tuning_keeps_the_current_regularization(self) -> None:
+        from unittest import mock
+
+        from src.decision import uplift
+
+        off = {**dict(uplift.TUNING), "enabled": False}
+        with mock.patch.object(uplift, "TUNING", off):
+            r = evaluate_uplift_models(self.X.iloc[:1200], self.t.iloc[:1200], self.y.iloc[:1200], seed=0,
+                                       methods=("t_learner", "x_learner"))
+        sel = r["best_method_selection"]
+        self.assertEqual(1, len(sel["tuning"]["configs"]))
+        self.assertIs(False, sel["tuning"]["enabled"])
+        self.assertEqual(dict(uplift.BASE_LEARNER), r["base_learner"])
+
+    def test_grid_values_are_sorted_whatever_the_config_order(self) -> None:
+        """PR #294 리뷰 4 — 동점이면 앞선 후보가 이기므로 값 순서는 규약이다: config 배열 순서와 무관하게 오름차순."""
+        from src.decision import uplift
+
+        base = dict(uplift.BASE_LEARNER)
+        shuffled = {"enabled": True, "metric": "qini", "grid": {"min_samples_leaf": (200, 40, 80), "max_depth": (3, 2)}}
+        got = [(c["max_depth"], c["min_samples_leaf"]) for c in uplift.regularization_candidates(base, shuffled)]
+        self.assertEqual([(3, 80), (2, 40), (2, 80), (2, 200), (3, 40), (3, 200)], got)
+
+    def test_failed_selection_is_told_apart_from_choosing_the_current_value(self) -> None:
+        """PR #294 리뷰 3 — 고르지 못해 현행값을 쓴 경우: selection_ok=False 이고 실제로 쓴 규제(used_*)가 따로 남는다."""
+        from unittest import mock
+
+        from src.decision import uplift
+
+        failed = {"best_method": None, "base_learner": None, "base_learner_is_current": False,
+                  "basis": "test", "candidates": ["t_learner"], "validation_qini": {}, "tuning": {"grid": []}}
+        with mock.patch.object(uplift, "_select_method", return_value=failed):
+            r = evaluate_uplift_models(self.X.iloc[:1200], self.t.iloc[:1200], self.y.iloc[:1200], seed=0,
+                                       methods=("t_learner",))
+        report = r["tuning_report"]
+        self.assertIs(False, report["selection_ok"])
+        self.assertIn("현행값", report["selection_reason"])
+        self.assertIsNone(report["chosen_base_learner"])
+        self.assertEqual((dict(uplift.BASE_LEARNER), True), (report["used_base_learner"], report["used_is_current"]))
+        self.assertEqual(dict(uplift.BASE_LEARNER), r["base_learner"])
+        ok = self.res["tuning_report"]
+        self.assertIs(True, ok["selection_ok"])
+        self.assertEqual(ok["chosen_base_learner"], ok["used_base_learner"])
+
+    def test_fit_records_and_uses_the_given_regularization(self) -> None:
+        from src.decision import uplift
+
+        default = fit_uplift(self.X.iloc[:1200], self.t.iloc[:1200], self.y.iloc[:1200], "t_learner")
+        self.assertEqual(dict(uplift.BASE_LEARNER), default.base_learner)
+        shallow = {**uplift.BASE_LEARNER, "max_depth": 2, "min_samples_leaf": 40}
+        model = fit_uplift(self.X.iloc[:1200], self.t.iloc[:1200], self.y.iloc[:1200], "t_learner", params=shallow)
+        self.assertEqual(shallow, model.base_learner)
+        est = model.models["T0"].est
+        self.assertEqual((2, 40), (est.max_depth, est.min_samples_leaf))
+
+
+@unittest.skipUnless(DEPS, REASON)
 class Test179TiedEvaluation(unittest.TestCase):
     def test_ties_are_invariant_for_area_curve_and_fractional_topk(self):
         import itertools
