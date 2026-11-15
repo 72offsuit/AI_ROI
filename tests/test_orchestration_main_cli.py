@@ -39,10 +39,10 @@ if _DEPS:
     from tests.test_orchestration_sprint import FakeDecision, _quiet
 
     class _Fake(FakeDecision):
-        """CLV 를 크게 — 기대 증분가치가 계획 비용을 넘는 고객이 생겨 S5 배정이 0 명이 아니게 한다."""
+        """CLV 를 크게 — 기대 증분가치가 계획 비용을 넘는 고객이 생겨 S5 배정이 0 명이 아니게 한다.
+        #217 2부부터 S4 · S5 의 가치는 12개월 CLV(``predict_lifetime``)다."""
 
-        def predict_clv(self, model, X):
-            return (X["n_carts"] * 1_000_000.0).rename("clv")
+        CLV_UNIT = 1_000_000.0
 
 # warmup 60일 — RCT 모집단이 Eligible(가입 ≥ 60일)이라 45일이면 0명이다(test_orchestration_sprint.SMALL · DR-234).
 SMALL = ["--seed", "7", "--customers", "240", "--profile", "smoke", "--warmup-days", "60"]
@@ -238,7 +238,7 @@ class TestModesEndToEnd(unittest.TestCase):
         _, run_dir = self.runs["train"]
         persisted = _read(run_dir / cli.MANIFEST)["outputs"]["persisted"]
         self.assertEqual("ok", persisted["status"], persisted)
-        for kind in ("churn", "uplift", "clv"):
+        for kind in ("churn", "uplift", "clv", "clv_12m"):
             record = persisted["models"]["models"][kind]
             self.assertEqual("ok", record["status"], kind)
             self.assertTrue(Path(record["file"]).is_file(), kind)
@@ -252,7 +252,7 @@ class TestModesEndToEnd(unittest.TestCase):
         for key in ("service_version", "simulator_version", "customer_seed", "random_seed", "feature_version",
                     "model_version", "strategy_version", "experiment_version"):
             self.assertIn(key, versions)
-        self.assertEqual({"churn", "uplift", "clv"}, set(versions["model_version"]))
+        self.assertEqual({"churn", "uplift", "clv", "clv_12m"}, set(versions["model_version"]))
 
     def test_another_seed_loads_saved_models_without_refitting(self) -> None:
         """#214 완료 조건 — 저장한 모델을 다른 seed 실행이 다시 학습하지 않고 불러와 평가만 한다(GATE 4 전제)."""
@@ -274,13 +274,18 @@ class TestModesEndToEnd(unittest.TestCase):
         run_dir = base / "res" / "sprint-v0" / "SP-test-load"
         self.assertEqual(0, code)
         refits = [name for name, _ in fake.calls
-                  if name in ("fit_best_churn", "fit_uplift", "evaluate_churn_models", "evaluate_uplift_models")]
+                  if name in ("fit_best_churn", "fit_uplift", "evaluate_churn_models", "evaluate_uplift_models",
+                              "fit_lifetime")]
         self.assertEqual([], refits, "불러온 실행이 다시 학습 · 선택했다")
         for name in ("churn_eval", "uplift_eval", "clv_eval"):
             payload = _read(run_dir / f"{name}.json")
             self.assertEqual("ok", payload["status"], name)
             self.assertTrue(payload["model_source"].startswith("loaded"), name)
             self.assertEqual("SP-test-train", payload["trained_run"], name)
+        lifetime = _read(run_dir / "clv_eval.json")["clv_12m"]  # #217 2부 — 12개월 CLV 도 불러와 검증만
+        self.assertEqual("ok", lifetime["status"], lifetime)
+        self.assertTrue(lifetime["model_source"].startswith("loaded"))
+        self.assertEqual("SP-test-train", lifetime["trained_run"])
         manifest = _read(run_dir / cli.MANIFEST)
         self.assertIs(True, manifest["inputs"]["reads_previous_runs"])
         self.assertEqual("not_requested", manifest["outputs"]["persisted"]["status"])

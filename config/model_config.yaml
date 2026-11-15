@@ -102,6 +102,13 @@ clv:
     l2_regularization: 1.0
     min_samples_leaf: 20
     early_stopping: false
+  # #217 2부 — 12개월 CLV(BG/NBD + Gamma-Gamma, src/decision/clv_lifetime.py). 결과는 할인 **매출** 현재가치이고
+  # 이익은 전략이 margin_rate 를 곱한다(DR-217). 할인율은 연 실효율 · 월말 현금흐름(#203 광진 조사 P3 식).
+  lifetime:
+    horizon_months: 12            # SRS CLV-002
+    annual_discount_rate: 0.12    # Gupta & Lehmann (2003) 사례값 — #203 문헌 가정 10~16% 의 가운데(업계 표준 아님)
+    discount_sensitivity: [0.8, 1.2]   # 할인율 ±20% (이슈 #217)
+    high_value_share: 0.2         # SRS CLV-003 상위 20%
 
 # 세그먼트 · 4분면 경계 — 분위수(데이터 단위에 무관). segments.assign_segments · assign_quadrants.
 segmentation:

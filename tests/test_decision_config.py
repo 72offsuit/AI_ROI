@@ -86,6 +86,10 @@ ADDED_215 = {
 }
 MODEL_NOW["churn"]["models"].update(copy.deepcopy(ADDED_215["models"]))
 MODEL_NOW["churn"]["tuning"] = copy.deepcopy(ADDED_215["tuning"])
+#: #217 2부 — 12개월 CLV(BG/NBD + Gamma-Gamma) 설정. 기존 42일 CLV 값은 그대로다. PRE_206 대조 때 걷어낸다.
+ADDED_217 = {"lifetime": {"horizon_months": 12, "annual_discount_rate": 0.12, "discount_sensitivity": (0.8, 1.2),
+                          "high_value_share": 0.2}}
+MODEL_NOW["clv"]["lifetime"] = copy.deepcopy(ADDED_217["lifetime"])
 
 #: #206 이전 — run_sprint.py(RCT_CONTROL_SHARE · DEFAULT_ACTIVE_DAYS · --seed/--customers/--profile 기본값) ·
 #: ab_test.py(alpha · power · SRM threshold 기본값).
@@ -238,6 +242,7 @@ class TestRepositoryFiles(unittest.TestCase):
         del previous["churn"]["tuning"]
         for name in ADDED_215["models"]:
             del previous["churn"]["models"][name]
+        del previous["clv"]["lifetime"]
         self.assertEqual(PRE_206_MODEL, previous)
 
     def test_experiment_config_equals_pre_206_constants(self) -> None:
@@ -332,6 +337,18 @@ class TestNoConstantsWhereConfigIsRead(unittest.TestCase):
                 with self.subTest(f"{relative}:{name}"):
                     self.assertEqual(1, len(assigned))
                     self.assertNotIsInstance(assigned[0], (ast.Constant, ast.Dict), "config 에서 읽어야 한다")
+
+    def test_clv_lifetime_takes_no_numeric_defaults(self) -> None:
+        """#217 2부 — 12개월 · 할인율 · 상위 비율은 config/model_config.yaml ``clv.lifetime`` 에서 온다."""
+        tree = _source("src/decision/clv_lifetime.py")
+        for name in ("fit_lifetime", "evaluate_lifetime", "clv_table", "clv_from_summary"):
+            fn = _function(tree, name)
+            args = fn.args.args[len(fn.args.args) - len(fn.args.defaults):] + fn.args.kwonlyargs
+            defaults = list(fn.args.defaults) + list(fn.args.kw_defaults)
+            numeric = [a.arg for a, d in zip(args, defaults)
+                       if isinstance(d, ast.Constant) and isinstance(d.value, (int, float)) and not isinstance(d.value, bool)]
+            with self.subTest(name):
+                self.assertEqual([], numeric, "CLV 설정은 config/model_config.yaml clv.lifetime 에서 온다")
 
     def test_ab_test_defaults_are_names_not_numbers(self) -> None:
         tree = _source("src/decision/ab_test.py")

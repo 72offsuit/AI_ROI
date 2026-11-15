@@ -221,6 +221,13 @@ MODEL_SCHEMA: Mapping[str, Any] = {
             "min_samples_leaf": _int(1),
             "early_stopping": _BOOL,
         },
+        # #217 2부 — 12개월 CLV(BG/NBD + Gamma-Gamma)
+        "lifetime": {
+            "horizon_months": _int(1),
+            "annual_discount_rate": _float(0.0, 1.0, hi_open=True),
+            "discount_sensitivity": _list(_float(0.0, lo_open=True)),
+            "high_value_share": _float(0.0, 1.0, lo_open=True, hi_open=True),
+        },
     },
     "segmentation": {
         "clv_high_q": _QUANTILE,
@@ -336,6 +343,8 @@ class ChurnConfig:
 class ClvConfig:
     cv_folds: int
     hist_gb: Mapping[str, Any]
+    #: #217 — {horizon_months, annual_discount_rate, discount_sensitivity, high_value_share}
+    lifetime: Mapping[str, Any]
 
 
 @dataclass(frozen=True)
@@ -395,7 +404,7 @@ def model_config_from(raw: Any, source: str = "<model_config>", path: Path = MOD
             models=_frozen(churn["models"]),
             tuning=_frozen(churn["tuning"]),
         ),
-        clv=ClvConfig(cv_folds=clv["cv_folds"], hist_gb=_frozen(clv["hist_gb"])),
+        clv=ClvConfig(cv_folds=clv["cv_folds"], hist_gb=_frozen(clv["hist_gb"]), lifetime=_frozen(clv["lifetime"])),
         segmentation=_frozen(v["segmentation"]),
     )
 
