@@ -126,8 +126,8 @@ export default async function SprintOverviewPage() {
         title="결과 파일"
         note={
           source === "mock"
-            ? "목업 모드 — dashboard/fixtures/sprint-v0/ 의 손으로 만든 파일입니다."
-            : `${SPRINT_DIR}/ 를 읽습니다. 데이터 근거(realism_report.json)는 docs/research/ 의 사본을 이 디렉터리에서 읽습니다.`
+            ? "목업 모드 — dashboard/fixtures/sprint-v0/ 의 손으로 만든 파일입니다. 데이터 근거는 목업이 없어 미생성입니다."
+            : `${SPRINT_DIR}/ 를 읽습니다. 데이터 근거(realism_report.json)는 공개판 docs/research/realism_public.json 의 사본입니다 — 없으면 미생성.`
         }
       >
         <TableWrap label="결과 파일 상태 표">

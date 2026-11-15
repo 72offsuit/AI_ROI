@@ -49,7 +49,7 @@ class TestGuardrailPopulations(SimulatorCase):
         judged = {name for name, c in checks.items() if c["role"] == "판정"}
         self.assertIn("churn_rate", judged)
         for arm in ("T1", "T2", "T3", "T4"):
-            for prefix in ("ate", "sleeping_dog", "persuadable", "identity"):
+            for prefix in ("ate", "sleeping_dog", "persuadable", "quadrant_consistency"):
                 self.assertIn(f"{prefix}_{arm}", judged)
                 self.assertEqual("참고", checks[f"active42_{prefix}_{arm}"]["role"])
         self.assertEqual("참고", checks["spec41_churn_rate"]["role"])
