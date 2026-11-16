@@ -51,6 +51,7 @@
         "docs/decisions/DR-196-sleeping-dog-path.md",
         "docs/decisions/DR-208-gate1-acceptance-criteria.md",
         "docs/decisions/DR-282-t3-recalibration.md",
+        "docs/decisions/DR-163-gate1-churn-discount-criteria.md",
         "docs/research/sim_mechanism_evidence.md",
         "docs/decisions/DR-183-*.md",
         "docs/decisions/DR-S1-*.md",
@@ -62,7 +63,7 @@
         "dashboard/fixtures/sprint-v0/realism_report.json",
         "docs/simulator_generation.md"
       ],
-      "must_not_read_why": "시뮬레이터가 행동을 어떻게 만드는지 알면 그 구조에 맞춘 Feature 를 만들게 되고, 그것은 실제 데이터에서 통하지 않는다. api.py 도 예외가 아니다. 생성 규칙 · 보정값 · 가드레일 실측값(참 효과 크기)이 든 시뮬레이터 문서도 같다 — 정답 분포를 보고 모델 · 전략을 맞출 수 있다(인성(리드) · 2026-11-13 · #163). 2026-11-13 민정 분류(#163)로 DR-S1 · DR-S3-p6 · DR-183 전부 · DR-143 · DR-194 · DR-198 · realism_report(대시보드 시험 사본 포함)를 더했고, 2026-11-16 시뮬 팀 요청(#163)으로 DR-282(T3 처치 반응 계수의 보정 근거 · 탐색 결과)를 더했고, data_spec §3 · data_grounding §2 의 생성 규칙은 시뮬 팀 문서 docs/simulator_generation.md 로 옮긴다(리드 결정 2026-11-14). 계약으로 열어 두는 것: DR-S3-sample-size · DR-S3-assignment · DR-163 · DR-167 · DR-S8 · docs/simulator_api.md."
+      "must_not_read_why": "시뮬레이터가 행동을 어떻게 만드는지 알면 그 구조에 맞춘 Feature 를 만들게 되고, 그것은 실제 데이터에서 통하지 않는다. api.py 도 예외가 아니다. 생성 규칙 · 보정값 · 가드레일 실측값(참 효과 크기)이 든 시뮬레이터 문서도 같다 — 정답 분포를 보고 모델 · 전략을 맞출 수 있다(인성(리드) · 2026-11-13 · #163). 2026-11-13 민정 분류(#163)로 DR-S1 · DR-S3-p6 · DR-183 전부 · DR-143 · DR-194 · DR-198 · realism_report(대시보드 시험 사본 포함)를 더했고, 2026-11-16 시뮬 팀 요청(#163)으로 DR-282(T3 처치 반응 계수의 보정 근거 · 탐색 결과)를 더했고, 2026-11-17 시뮬 팀 요청(#163)으로 DR-163(GATE 1 이탈 임계값 · 할인액 판정 기준과 리허설 결과의 방향)을 더했고, data_spec §3 · data_grounding §2 의 생성 규칙은 시뮬 팀 문서 docs/simulator_generation.md 로 옮긴다(리드 결정 2026-11-14). 계약으로 열어 두는 것: DR-S3-sample-size · DR-S3-assignment · DR-163 · DR-167 · DR-S8 · docs/simulator_api.md."
     }
   },
   "owned": {

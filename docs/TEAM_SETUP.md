@@ -65,7 +65,7 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 | `docs/sprint1_report.md` (스프린트 1 결과 보고 — 모델 리포트) | `config/simulator*.yaml` |
 | | `docs/decisions/DR-S2-*.md` (Hidden Trait · 페르소나 구성) |
 | | `docs/decisions/DR-183-*.md` (이탈 · 구매 보정 · 반복 노출 · 실험 설정 내부) |
-| | `docs/decisions/DR-196-sleeping-dog-path` · `DR-208-gate1-acceptance-criteria` · `DR-282-t3-recalibration` |
+| | `docs/decisions/DR-196-sleeping-dog-path` · `DR-208-gate1-acceptance-criteria` · `DR-282-t3-recalibration` · `DR-163-gate1-churn-discount-criteria` |
 | | `docs/decisions/DR-S1-*.md` · `DR-S3-p6-signup` · `DR-143-sim-sprint` · `DR-194-population` · `DR-198-aux-events` |
 | | `docs/research/sim_mechanism_evidence.md` · `docs/research/realism_report.*` (+ 대시보드 시험 사본 `dashboard/fixtures/sprint-v0/realism_report.json`) |
 | | `docs/simulator_generation.md` (data_spec §3 · data_grounding §2 의 생성 규칙을 옮길 곳) |
