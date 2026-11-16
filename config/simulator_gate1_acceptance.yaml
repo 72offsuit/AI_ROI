@@ -23,8 +23,14 @@ sources:
   guardrail_report:                    # 가드레일 판정 출처 — DR-194·196 보정과 같은 조건
     command: >-
       python3.12 -m src.simulator guardrails --seed {seed} --customers 13000
-      --profile small --warmup-days 180 --output-root {new_dir}
-  realism:                             # F1~F11 · F13 · F17 출처
+      --profile small --warmup-days 180 --output-root {new_dir}/out --hidden-root {new_dir}/hidden
+    # --hidden-root 를 빼면 기본값(data/ 아래 숨김 영역)에 써서 가드레일 리포트가 이전 실행분과 한 폴더에 섞인다 (DR-163-gate1-churn-discount-criteria)
+  realism:                            # F1~F11 · F13 · F17 출처
+    world:                             # run_world 세계 조건 — A-DISCOUNT 판정이 세계의 meta.json 과 대조한다
+      profile: reference
+      days: 315
+      assign_day: 180
+      config: null                     # 실험 config 없이 정본 생성 설정
     commands:
       - >-
         PYTHONPATH=. python3.12 scripts/research/run_world.py --seed {seed} --customers 13000
@@ -68,3 +74,33 @@ verdict:
     - "가드레일 리포트의 role: 참고 검사 (spec41_churn_rate · active42_* — ① 의 처치 지표)"
     - "ATE · Sleeping Dog · Persuadable 의 T1 · T2 · T4"
     - "realism_check 의 F12 · F14 · F15 · F16 (1회 배정 세계라 보정 조건과 다르다)"
+
+# ── 2026-11-16 추가 — 확인 seed 실측(11/19) 전. 근거와 기각한 안: docs/decisions/DR-163-gate1-churn-discount-criteria.md ──
+# 아래 두 블록은 GATE 1 필수 검사(verdict.required)가 아니다. 봉인 기록에 싣는 증거 · 가정의 실측 판정이다.
+
+churn_threshold:                       # data_spec §5.1 ①~③ — freeze.ChurnThresholdEvidence(met) 의 근거. ④ 는 verdict.required churn_rate
+  role: churn_evidence
+  source:
+    profile: reference
+    customers_from: sample.customers
+    days: 273                          # Day 0–272 (data_spec Reference Run 시간축의 History / Warm-up), 처치 없음
+    command: >-
+      PYTHONPATH=. python3.12 scripts/gate1_churn_check.py measure --seed {seed} --customers 13000 --out {new_dir}
+  interval: "같은 고객의 연속된 두 purchase 이벤트 사이의 KST 달력 날짜 차이(일). 같은 날 재구매는 0 일로 센다(src/measurement/kpi.py _purchases_by_customer 와 같은 규칙). 구매 2건 미만 고객은 간격이 없다. 모든 고객의 간격을 한데 모은다"
+  quantile_method: "inclusive 선형 보간 — statistics.quantiles(n=100, method='inclusive') (= numpy.percentile 기본값)"
+  comparisons:
+    - {threshold: at_risk_days, quantile: 75}
+    - {threshold: no_purchase_days, quantile: 90}
+  thresholds_from: "config/simulator_config.yaml churn"   # 임계값 정본. 여기에 값을 다시 적지 않는다
+  tolerance_ratio: 0.2                 # |Pq − 임계값| ≤ 0.2 × 임계값 (경계 포함)
+  rule: "비교마다 5 seed 평균 Pq(반올림 없이)와 5 seed 각각의 Pq 가 모두 허용 폭 안이면 통과. 두 비교가 모두 통과해야 met=true"
+  on_fail: "met=false 로 서명한다 — CHURN_DEFINITION_v1 은 PARTIAL 로 남는다. 봉인 전에 임계값을 고치지 않고 후속 이슈로 넘긴다"
+
+a_discount:                            # 봉인 가정 A-DISCOUNT("시뮬레이터 할인액 = 처치 단가") 실측
+  role: assumption_check
+  source: realism                      # 위 sources.realism 의 run_world 세계(교환 묶음 orders.jsonl + assignments.json)를 그대로 쓴다
+  unit_cost_from: "config/economic_config.yaml treatment_cost.{arm}.unit_cost_krw"
+  coupon_arms: [T2, T3]
+  min_discounted_orders_per_arm: 1     # 할인 주문이 없으면 확인한 것이 없다 — 0건 통과를 막는다 (리뷰 L4, 확인 seed 실측 전 추가)
+  rule: "seed 마다 ⓪ coupon_arms 각 팔의 할인 주문이 min_discounted_orders_per_arm 건 이상이고, discount > 0 인 주문이 전부 ① coupon_arms 에 배정된 고객이고 ② 배정 시각 이후 주문이며 ③ discount 가 그 팔 단가와 같으면 통과. 하나라도 어긋나면 실패. 세계 조건(sources.realism.world)이 meta.json 과 다르면 입력 오류"
+  on_fail: "실패(종료 1). 봉인 기록의 A-DISCOUNT 문장('유도가 정의상 정확하다')이 거짓이 되므로 봉인 PR 전에 DR 에 원인을 적고 서명 여부는 리드가 정한다"

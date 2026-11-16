@@ -36,10 +36,16 @@ NEEDS_PANDAS_CALC = "BLOCKED: numpy/pandas 미설치 — realism_check 계산기
 try:
     import yaml
 
-    _spec = importlib.util.spec_from_file_location("gate1_judge", SCRIPT)
-    gj = importlib.util.module_from_spec(_spec)
-    sys.modules["gate1_judge"] = gj  # dataclass 가 모듈을 찾는다
-    _spec.loader.exec_module(gj)
+    # 이미 읽혀 있으면 그것을 쓴다 — gate1_churn_check · gate1_discount_check · gate1_measure 가 같은 모듈의
+    # InputError 를 공유한다. 여기서 새로 읽어 덮으면 먼저 읽힌 스크립트의 InputError 와 클래스가 달라져
+    # 전체 실행(discover)에서만 except 가 빗나간다.
+    if "gate1_judge" in sys.modules:
+        gj = sys.modules["gate1_judge"]
+    else:
+        _spec = importlib.util.spec_from_file_location("gate1_judge", SCRIPT)
+        gj = importlib.util.module_from_spec(_spec)
+        sys.modules["gate1_judge"] = gj  # dataclass 가 모듈을 찾는다
+        _spec.loader.exec_module(gj)
     HAVE_YAML = True
 except ImportError:  # pragma: no cover - 의존성 없는 CI 잡
     HAVE_YAML = False
