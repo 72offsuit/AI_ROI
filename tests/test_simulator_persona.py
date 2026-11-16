@@ -42,6 +42,7 @@ CONFIG_PINS: dict[str, str] = {
     "sim-gen-v4": "ed02312576af07f0de6b9831216716a672ee2fdcad267604b2661e169d15f0ed",  # 미머지 판 덮어쓰기 예외 — DR-183-purchase-calibration
     "sim-gen-v5": "28e8e6f2a4145afaefbc8b327f94d50c941fba8411fd2120df74a921ec680411",
     "sim-gen-v6": "2526dec97ef3afad23283b288dca4eaf028843a2688214861425b96a795e5254",  # #198 부수 이벤트, 미머지 판 덮어쓰기 예외(실측 보정) — DR-198-aux-events
+    "sim-gen-v7": "5a2301b07b16f00098fe5781f54e24d62640c245845e2b5e197d6220e2a8e56f",  # #282 T3 처치 반응 재보정 — DR-282-t3-recalibration
 }
 
 

@@ -46,7 +46,7 @@ class TestRecoveryHazard(unittest.TestCase):
     """하루 시작(`_day_start`)의 회복 판정을, 같은 자리의 난수 u 로 계산한 기대값과 대조한다."""
 
     SEED, CUSTOMERS, DAYS = 4, 300, 300
-    # 회복 hazard 는 최대 recovery + arm.recovery_ppm(5,000 + 50,000 ppm) — 그보다 큰 u 는 어느 경우에도 회복하지 않는다.
+    # 회복 hazard 는 최대 recovery + arm.recovery_ppm(5,000 + 35,000 ppm) — 그보다 큰 u 는 어느 경우에도 회복하지 않는다.
     PROBE_PPM = 100_000
 
     @classmethod

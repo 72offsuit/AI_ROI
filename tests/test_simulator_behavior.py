@@ -466,6 +466,17 @@ GATE_GOLDEN: dict[str, tuple[dict[str, str], str, str]] = {
         "1a137a03fe0c7f09357b9681da8fa7da2452f4af8ddb90ed049ae672547b9e9d",
         "8b0c4475ebbc64608b1f3a7db7732159c8a44b5b9e1e90c844cf813bb6f79cef",
     ),
+    # #282: 이 실행에는 처치가 없어 T3 재보정이 발화하지 않는다 — 게이트 결정은 sim-0.8 과 같고 판 라벨·생성 다이제스트만 다르다.
+    "sim-0.9": (
+        {
+            "C00000043": "pass", "C00000066": "fail", "C00000081": "pass", "C00000113": "pass",
+            "C00000124": "pass", "C00000140": "pass", "C00000164": "fail", "C00000208": "pass",
+            "C00000236": "pass", "C00000244": "fail", "C00000249": "fail", "C00000253": "pass",
+            "C00000258": "pass", "C00000269": "fail", "C00000273": "fail", "C00000297": "pass",
+        },
+        "083c31102bf1ab7493283189e3157ab47638ae540a7edebc3acdba7bd9b74310",
+        "33f0dbac15911741d5b52ac666fdf674e4fb4d817fb9c151c651cddf6972d1d6",
+    ),
 }
 
 
