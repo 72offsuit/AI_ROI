@@ -17,7 +17,8 @@ git clone https://github.com/72offsuit/AI_ROI.git
 cd AI_ROI
 git submodule update --init          # Plan/ (private — 접근 권한이 없으면 건너뛴다)
 
-# ① 의존성 0 으로 전건 통과해야 한다 — 이것이 이 저장소의 기본 상태다
+# ① 의존성 0 으로 실패 없이 끝나야 한다 — 이것이 이 저장소의 기본 상태다
+#    (의존성이 필요한 테스트는 실패가 아니라 skip 으로 따로 집계된다)
 python3 -m unittest discover -s tests
 
 # ② 게시 파이프라인은 PyYAML 이 필요하다
@@ -118,12 +119,13 @@ src/diagnostics/    시뮬 팀 — 정답 대비 사후 채점 (두 GATE 이후)
 
 ## 지금 있는 것 / 없는 것 (2026-11-17)
 
-**있다** — 가상 고객 생성부터 전략 비교까지 한 번에 돈다(`python src/main.py --mode full`, 5만 명 약 3시간)
+**있다** — 가상 고객 생성부터 전략 비교까지 한 번에 돈다(`python src/main.py --mode full`, 5만 명 약 3시간 —
+2026-11-16 `ab420d1` 를 노트북에서 돌려 2시간 54분, 환경에 따라 다르다)
 
 - `src/measurement/` — 이벤트 스키마 22컬럼·16종, KPI, 경제 규칙, Event Sink, 게시 파이프라인
 - `src/simulator/` — 가상 고객 · 행동 · 쿠폰 반응. 판 `sim-0.9`(#282), GATE 1 봉인 실측 대기(#163)
 - `src/decision/`
-  - 이탈 예측 — 규칙 기준선 · 로지스틱 · 랜덤 포레스트 · HistGB · XGBoost · LightGBM, 시간 순서 검증으로 튜닝 · 선택(#215). 딥러닝 GRU(선택 의존성 torch), LSTM 은 준비 구현(#218)
+  - 이탈 예측 — 규칙 기준선 · 로지스틱 · 랜덤 포레스트 · HistGB · XGBoost · LightGBM, 시간 순서 검증으로 튜닝 · 선택(#215). 딥러닝 GRU 는 별도 구현(torch 필요, 기본 `train` · `full` 의 모델 선택에는 연결돼 있지 않다), LSTM 은 준비 구현(#218)
   - 쿠폰 효과(Uplift) — 메타러너 · 규제를 Validation Qini 로 선택, 공개 실험 데이터(Hillstrom · Lenta) 외부 검증(#217)
   - 고객 가치 — 42일 단기 · 12개월 생애가치(BG/NBD + Gamma-Gamma)(#217)
   - 세그먼트 · 전략 S0~S5 · 예산 최적화 · What-if · ROI
@@ -135,13 +137,15 @@ src/diagnostics/    시뮬 팀 — 정답 대비 사후 채점 (두 GATE 이후)
 
 **아직 없다**
 
-- 정식 판정 — GATE 1 완전 봉인(#163) → GATE 2 기준 실행(전략 비교 조건 #274) → 최종 홀드아웃(GATE 4)
+- 정식 판정 — GATE 1 완전 봉인(#163) → GATE 2 기준선 봉인(그 전에 전략 비교 조건을 정한다 #274) → GATE 3 모델 · 정책 확정
+  → GATE 4 최종 홀드아웃 평가(별도 seed 에서 확정한 전략을 평가)
 - LSTM 의 실제 고객 비교 · 앙상블(#218)
 - 결과 파일 묶음 · `monitoring_report`(#222), 예산 What-if 확장 · AI vs 규칙 유의성(#220)
 - `docker-compose` — #231 을 범위 밖으로 닫았다
 - 커머스 서비스(`Ecommerce_Service`)와 시뮬레이터의 실시간 연결 — 지금은 같은 이벤트 · 교환 파일 계약을 공유한다
 
-즉 **지금 이 저장소는 처음부터 끝까지 돌아가는 상태이고, 남은 일은 봉인과 정식 판정이다.** 숫자는 봉인 전이라 여기에 적지 않는다.
+즉 **`--mode full` 로 가상 고객 생성부터 S0~S5 의 개발용 전략 비교 · ROI 까지 낼 수 있다. 정식 판정에는 위 봉인 절차(GATE 1~4)와
+'아직 없다'의 남은 검증이 필요하다.** 개발용 실행의 숫자는 판정 근거가 아니고, 봉인 전이라 여기에 적지 않는다.
 
 ---
 
@@ -176,7 +180,7 @@ gh issue list --label team/sys   # D1~D12 시스템
 ## 검증
 
 ```bash
-python3 -m unittest discover -s tests                        # 전건 (의존성 0)
+python3 -m unittest discover -s tests                        # 의존성 0 — 실패 0, 일부 skip
 python3 -m unittest tests.test_isolation                     # 파트 경계
 python3 -m unittest tests.test_team_boundaries               # 팀 경계
 python3 -m unittest tests.test_decision_records              # 결정 기록
