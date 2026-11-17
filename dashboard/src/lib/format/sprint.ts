@@ -16,6 +16,34 @@
 
 const cache = new Map<string, Intl.NumberFormat>();
 
+/**
+ * Korean names of the outcomes an A/B · Uplift file may say it compared (`primary_outcome`, #299).
+ *
+ * ★ The screen must not assume which rate it is drawing. From #154 the run loop compares the
+ *   repurchase rate (retention = 1 − churn) while the A/B screen still said "이탈률", so a coupon
+ *   that raised repurchase read as "churn went up". Only names listed here get a Korean label;
+ *   anything else is shown exactly as the file wrote it and flagged, and a missing name is said
+ *   to be missing — never guessed. A label is not a derived metric (DG-3).
+ */
+const OUTCOME_LABEL: Record<string, string> = {
+  retention: "재구매율",
+  churn: "이탈률",
+};
+
+export interface OutcomeName {
+  /** Header / caption text, e.g. "재구매율(42일)". `null` when the file names no outcome. */
+  label: string | null;
+  /** known — listed above · unknown — shown as written · missing — the file names no outcome. */
+  kind: "known" | "unknown" | "missing";
+}
+
+export function outcomeName(name: unknown, windowDays?: unknown): OutcomeName {
+  if (typeof name !== "string" || name.trim() === "") return { label: null, kind: "missing" };
+  const days = isNum(windowDays) && windowDays > 0 && Number.isInteger(windowDays) ? `(${windowDays}일)` : "";
+  const known = Object.hasOwn(OUTCOME_LABEL, name) ? OUTCOME_LABEL[name] : undefined;
+  return known === undefined ? { label: `${name}${days}`, kind: "unknown" } : { label: `${known}${days}`, kind: "known" };
+}
+
 function formatter(key: string, options: Intl.NumberFormatOptions): Intl.NumberFormat {
   let f = cache.get(key);
   if (f === undefined) {

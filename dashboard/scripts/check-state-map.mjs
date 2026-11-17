@@ -19,6 +19,7 @@ import {
   PENDING_CONTRACT_TEXT,
   formatMetricValue,
 } from "../src/lib/format/metric.ts";
+import { outcomeName } from "../src/lib/format/sprint.ts";
 
 let passed = 0;
 function ok(name, action) {
@@ -143,6 +144,29 @@ ok("unconfirmed without params_used is flagged (R-10)", () => {
     reason_code: "PARAM_UNCONFIRMED", reason_detail: "임계값 미확정", value_formatted: "18.3%",
   });
   assert.ok(d.violations.some((v) => v.includes("params_used")));
+});
+
+/* ── A/B · Uplift outcome name (#299) ───────────────────────────────────────
+ * The run loop compares the repurchase rate (retention = 1 − churn); the A/B screen once
+ * called it "이탈률", which turned "coupon raised repurchase" into "churn went up". The name
+ * now comes from the file — these pin that it is never guessed. */
+
+ok("retention + window -> 재구매율(42일)", () =>
+  assert.deepEqual(outcomeName("retention", 42), { label: "재구매율(42일)", kind: "known" }));
+ok("churn -> 이탈률", () => assert.deepEqual(outcomeName("churn", 42), { label: "이탈률(42일)", kind: "known" }));
+ok("retention without a window -> no made-up window", () => {
+  for (const w of [undefined, null, 0, -42, 4.2, "42", Number.NaN]) {
+    assert.deepEqual(outcomeName("retention", w), { label: "재구매율", kind: "known" });
+  }
+});
+ok("unknown outcome -> shown as written, flagged", () => {
+  assert.deepEqual(outcomeName("revenue", 42), { label: "revenue(42일)", kind: "unknown" });
+  assert.deepEqual(outcomeName("toString", null), { label: "toString", kind: "unknown" });
+});
+ok("missing outcome -> null label, never 이탈률", () => {
+  for (const n of [undefined, null, "", "  ", 0, {}]) {
+    assert.deepEqual(outcomeName(n, 42), { label: null, kind: "missing" });
+  }
 });
 
 console.log(`\n${passed} assertions passed.`);

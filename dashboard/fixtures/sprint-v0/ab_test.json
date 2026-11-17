@@ -4,6 +4,8 @@
   "run_id": "mock-20261022-0001",
   "generated_at": "2026-10-22T14:00:00+09:00",
   "mock": true,
+  "primary_outcome": "retention",
+  "outcome_window_days": 42,
   "srm": {
     "chi2": 0.84,
     "p": 0.84,
@@ -13,7 +15,7 @@
     {
       "arm": "T0",
       "n": 5000,
-      "rate": 0.284,
+      "rate": 0.716,
       "diff_vs_control": null,
       "ci95": null,
       "p_raw": null,
@@ -22,11 +24,11 @@
     {
       "arm": "T1",
       "n": 5000,
-      "rate": 0.263,
-      "diff_vs_control": -0.021,
+      "rate": 0.737,
+      "diff_vs_control": 0.021,
       "ci95": [
-        -0.039,
-        -0.003
+        0.003,
+        0.039
       ],
       "p_raw": 0.012,
       "p_holm": 0.024
@@ -34,11 +36,11 @@
     {
       "arm": "T2",
       "n": 5000,
-      "rate": 0.25,
-      "diff_vs_control": -0.034,
+      "rate": 0.75,
+      "diff_vs_control": 0.034,
       "ci95": [
-        -0.052,
-        -0.016
+        0.016,
+        0.052
       ],
       "p_raw": 0.0002,
       "p_holm": 0.0006
@@ -46,11 +48,11 @@
     {
       "arm": "T3",
       "n": 5000,
-      "rate": 0.278,
-      "diff_vs_control": -0.006,
+      "rate": 0.722,
+      "diff_vs_control": 0.006,
       "ci95": [
-        -0.024,
-        0.012
+        -0.012,
+        0.024
       ],
       "p_raw": 0.51,
       "p_holm": 0.51
