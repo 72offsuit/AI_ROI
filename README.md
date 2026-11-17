@@ -17,7 +17,8 @@ git clone https://github.com/72offsuit/AI_ROI.git
 cd AI_ROI
 git submodule update --init          # Plan/ (private — 접근 권한이 없으면 건너뛴다)
 
-# ① 의존성 0 으로 전건 통과해야 한다 — 이것이 이 저장소의 기본 상태다
+# ① 의존성 0 으로 실패 없이 끝나야 한다 — 이것이 이 저장소의 기본 상태다
+#    (의존성이 필요한 테스트는 실패가 아니라 skip 으로 따로 집계된다)
 python3 -m unittest discover -s tests
 
 # ② 게시 파이프라인은 PyYAML 이 필요하다
@@ -48,7 +49,7 @@ verdict          attention · SINK_EMPTY
 
 ```bash
 pip install -r requirements.txt
-python src/main.py --mode train --customers 2000 --profile small     # 스모크 (약 1분)
+python src/main.py --mode train --customers 2000 --profile small     # 스모크 (약 3분 — XGBoost · LightGBM 포함)
 python src/main.py --help                                            # 모드별 입력 · 출력 · 종료 코드
 ```
 
@@ -91,7 +92,7 @@ docker run --rm airoi python -m src.measurement.publish  # 파이프라인 명�
 docker build --build-arg WITH_TORCH=1 -t airoi .         # 선택: CPU torch(requirements-ml.txt)
 ```
 
-Python 3.12 + Node 22 이미지 하나다. `docker-compose`(파이프라인 → `results/` 볼륨 → 대시보드)는 **아직 없다** — 다음 스프린트(#231).
+Python 3.12 + Node 22 이미지 하나다. `docker-compose`(파이프라인 → `results/` 볼륨 → 대시보드)는 **없다** — #231 을 범위 밖으로 닫았다.
 
 ---
 
@@ -107,32 +108,44 @@ Python 3.12 + Node 22 이미지 하나다. `docker-compose`(파이프라인 → 
 가장 위험한 누수는 코드가 파일을 훔쳐보는 것이 아니라, **AI 성능이 낮다는 이유로 시뮬레이터를 고치는 것**이다 (PRD §80 Risk 1). 사람도 에이전트도 이 유혹에 빠진다.
 
 ```
-src/measurement/    ✅ 완료 — 계약. 두 팀이 만나는 유일한 지점 (읽기 전용)
-src/simulator/      ⬜ 시뮬 팀
-src/decision/       ⬜ 시스템 팀
-src/orchestration/  ⬜ 시스템 팀
-src/diagnostics/    ⬜ 시뮬 팀 (두 GATE 이후)
+src/measurement/    계약 — 두 팀이 만나는 유일한 지점 (읽기 전용)
+src/simulator/      시뮬 팀 — 가상 고객 생성 · 행동 · 쿠폰 반응
+src/decision/       시스템 팀 — 이탈 · 쿠폰 효과 · 고객 가치 · 전략 · 최적화
+src/orchestration/  시스템 팀 — 실행 루프 · main CLI
+src/diagnostics/    시뮬 팀 — 정답 대비 사후 채점 (두 GATE 이후)
 ```
 
 ---
 
-## 지금 있는 것 / 없는 것
+## 지금 있는 것 / 없는 것 (2026-11-17)
 
-**있다**
+**있다** — 가상 고객 생성부터 전략 비교까지 한 번에 돈다(`python src/main.py --mode full`, 5만 명 약 3시간 —
+2026-11-16 `ab420d1` 를 노트북에서 돌려 2시간 54분, 환경에 따라 다르다)
 
 - `src/measurement/` — 이벤트 스키마 22컬럼·16종, KPI, 경제 규칙, Event Sink, 게시 파이프라인
-- `dashboard/` — Next.js 라우트 8종. `results/` 를 읽기만 한다
-- GATE 1 **부분 봉인** (`PARTIAL_FREEZE`) — 측정 계층 항목만. 완전 봉인은 0종
+- `src/simulator/` — 가상 고객 · 행동 · 쿠폰 반응. 판 `sim-0.9`(#282), GATE 1 봉인 실측 대기(#163)
+- `src/decision/`
+  - 이탈 예측 — 규칙 기준선 · 로지스틱 · 랜덤 포레스트 · HistGB · XGBoost · LightGBM, 시간 순서 검증으로 튜닝 · 선택(#215). 딥러닝 GRU 는 별도 구현(torch 필요, 기본 `train` · `full` 의 모델 선택에는 연결돼 있지 않다), LSTM 은 준비 구현(#218)
+  - 쿠폰 효과(Uplift) — 메타러너 · 규제를 Validation Qini 로 선택, 공개 실험 데이터(Hillstrom · Lenta) 외부 검증(#217)
+  - 고객 가치 — 42일 단기 · 12개월 생애가치(BG/NBD + Gamma-Gamma)(#217)
+  - 세그먼트 · 전략 S0~S5 · 예산 최적화 · What-if · ROI
+- `src/orchestration/` — 실행 루프(`run_sprint`) · `src/main.py` 5개 모드 · 모델과 Feature 저장 · 불러오기(#214)
+- `dashboard/` — Next.js. 측정 게시물 화면과 실행 결과 화면(이탈 · Uplift · 세그먼트 · 전략·ROI · A/B). `results/` 를 읽기만 한다
+- GATE 1 **부분 봉인** (`PARTIAL_FREEZE`) — 측정 계층 항목만. 완전 봉인은 #163 실측 뒤
 - 테스트 · CI 4종 — **건수는 여기 적지 않는다.** 명령을 돌리면 나오고, 문서에 박아 둔 숫자는
   테스트를 추가한 바로 다음 커밋에 낡는다 (이슈 `#59` 가 닫은 결함이 그 모양이었다)
 
-**없다**
+**아직 없다**
 
-- **고객 시뮬레이터 전체.** 가상 고객도, 행동도, 처치 반응도 아직 없다
-- **모델 전체.** Feature·Churn·Uplift·CLV·전략·최적화 전부
-- 실행 루프, A/B, ROI 집계, 모니터링
+- 정식 판정 — GATE 1 완전 봉인(#163) → GATE 2 기준선 봉인(그 전에 전략 비교 조건을 정한다 #274) → GATE 3 모델 · 정책 확정
+  → GATE 4 최종 홀드아웃 평가(별도 seed 에서 확정한 전략을 평가)
+- LSTM 의 실제 고객 비교 · 앙상블(#218)
+- 결과 파일 묶음 · `monitoring_report`(#222), 예산 What-if 확장 · AI vs 규칙 유의성(#220)
+- `docker-compose` — #231 을 범위 밖으로 닫았다
+- 커머스 서비스(`Ecommerce_Service`)와 시뮬레이터의 실시간 연결 — 지금은 같은 이벤트 · 교환 파일 계약을 공유한다
 
-즉 **지금 이 저장소는 "측정할 준비가 된 빈 계측기"** 다. 측정할 대상을 만드는 것이 C2 다.
+즉 **`--mode full` 로 가상 고객 생성부터 S0~S5 의 개발용 전략 비교 · ROI 까지 낼 수 있다. 정식 판정에는 위 봉인 절차(GATE 1~4)와
+'아직 없다'의 남은 검증이 필요하다.** 개발용 실행의 숫자는 판정 근거가 아니고, 봉인 전이라 여기에 적지 않는다.
 
 ---
 
@@ -167,7 +180,7 @@ gh issue list --label team/sys   # D1~D12 시스템
 ## 검증
 
 ```bash
-python3 -m unittest discover -s tests                        # 전건 (의존성 0)
+python3 -m unittest discover -s tests                        # 의존성 0 — 실패 0, 일부 skip
 python3 -m unittest tests.test_isolation                     # 파트 경계
 python3 -m unittest tests.test_team_boundaries               # 팀 경계
 python3 -m unittest tests.test_decision_records              # 결정 기록
@@ -214,8 +227,8 @@ CI 4종이 PR 마다 돈다: 격리 경계 · 의존성 설치 후 전건(3.12) 
 
 | | 언제 | 무엇이 잠기나 |
 |---|---|---|
-| **GATE 1** | `S7` (#81) | 페르소나 구성비 · Hidden Trait 분포 · 행동 규칙 · Churn 임계값 · 처치 반응 · 경제 파라미터 · 이벤트 스키마 |
-| **GATE 2** | `D7` (#89) | 전략 정의 · `rule_based.py` · 예산 상한 |
+| **GATE 1** | `S7` (#81 → 진행 #163) | 페르소나 구성비 · Hidden Trait 분포 · 행동 규칙 · Churn 임계값 · 처치 반응 · 경제 파라미터 · 이벤트 스키마 |
+| **GATE 2** | `D7` (#89 → 비교 조건 #274) | 전략 정의 · `rule_based.py` · 예산 상한 |
 
 봉인 후 변경 비용은 `FREEZE-003` — **버전 상향 → 전 데이터 재생성 → Baseline 부터 전 전략 재실행.**
 
@@ -226,12 +239,12 @@ CI 4종이 PR 마다 돈다: 격리 경계 · 의존성 설치 후 전건(3.12) 
 ## 저장소 구조
 
 ```
-src/measurement/     계약 — 스키마·KPI·경제 규칙·Sink·게시        ✅
-src/simulator/       가상 고객 생성·행동·처치 반응                ⬜ 시뮬 팀
-src/decision/        Feature·Churn·Uplift·CLV·전략·최적화        ⬜ 시스템 팀
-src/orchestration/   실행 루프                                   ⬜ 시스템 팀
-src/diagnostics/     Ground-truth 대비 사후 채점                  ⬜ 시뮬 팀
-dashboard/           Next.js — results/ 를 읽기만 한다            ✅
+src/measurement/     계약 — 스키마·KPI·경제 규칙·Sink·게시
+src/simulator/       가상 고객 생성·행동·처치 반응                  시뮬 팀
+src/decision/        Feature·Churn·Uplift·CLV·전략·최적화          시스템 팀
+src/orchestration/   실행 루프 · main CLI                          시스템 팀
+src/diagnostics/     Ground-truth 대비 사후 채점                    시뮬 팀
+dashboard/           Next.js — results/ 를 읽기만 한다
 config/              경제 규칙 · GATE 1 봉인 기록
 docs/decisions/      결정 기록 · 모델 카드                        ← 여기가 채워져야 한다
 Plan/                PRD/SRS 서브모듈 (private · 읽기 전용)
