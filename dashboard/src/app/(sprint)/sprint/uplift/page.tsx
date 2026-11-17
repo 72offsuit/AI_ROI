@@ -1,11 +1,14 @@
 /**
  * Uplift (issue 147): arm sizes, ATE with 95% CI per treatment, Qini/AUUC/uplift@k per
  * model, Qini curves. Arm and model order is the file's order.
+ *
+ * The ATE is a difference in the file's `primary_outcome` (#299) — the note names it from the
+ * file and says so when the file does not.
  */
 import type { Metadata } from "next";
 
 import { loadSprint, sprintSource } from "@/lib/artifacts/sprint";
-import { fmtDec, fmtInt, fmtInterval, fmtSigned, isNum } from "@/lib/format/sprint";
+import { fmtDec, fmtInt, fmtInterval, fmtSigned, isNum, outcomeName } from "@/lib/format/sprint";
 import { CurveChart, IntervalChart } from "@/components/sprint/charts";
 import { Section, SprintGate, SprintHeader, TableWrap, TD, TDR, TH, THR } from "@/components/sprint/SprintFrame";
 import { KindTag, Val } from "@/components/sprint/Value";
@@ -29,6 +32,7 @@ export default async function UpliftPage() {
   const ate = Object.entries(a.ate ?? {});
   const models = a.models ?? [];
   const ks = Array.from(new Set(models.flatMap((m) => Object.keys(m.uplift_at_k ?? {}))));
+  const outcome = outcomeName(a.primary_outcome, a.outcome_window_days);
 
   return (
     <div className="flex flex-col gap-lg">
@@ -58,7 +62,14 @@ export default async function UpliftPage() {
         </dl>
       </Section>
 
-      <Section title="평균 처치 효과 (ATE · 95% 신뢰구간)" note="대조군(T0) 대비 차이입니다. 구간이 0 을 포함하면 효과가 있다고 말할 수 없습니다.">
+      <Section
+        title="평균 처치 효과 (ATE · 95% 신뢰구간)"
+        note={`${
+          outcome.label === null
+            ? "대조군(T0) 대비 차이입니다. 어느 결과의 차이인지 파일에 적혀 있지 않습니다."
+            : `대조군(T0) 대비 ${outcome.label} 차이입니다.`
+        } 구간이 0 을 포함하면 효과가 있다고 말할 수 없습니다.`}
+      >
         {ate.length === 0 ? (
           <Val text={null} />
         ) : (

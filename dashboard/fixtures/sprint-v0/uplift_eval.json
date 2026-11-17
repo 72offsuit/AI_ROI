@@ -4,6 +4,8 @@
   "run_id": "mock-20261022-0001",
   "generated_at": "2026-10-22T14:00:00+09:00",
   "mock": true,
+  "primary_outcome": "retention",
+  "outcome_window_days": 42,
   "n": 20000,
   "arms": {
     "T0": 5000,

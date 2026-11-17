@@ -2016,6 +2016,8 @@ def run(config: SprintConfig) -> Path:
             retention = 1 - ctx["Y_rct"]["churn"]
             uplift_eval.update({"population": "탐색 RCT 전 군 (T0~T4)", "n": int(len(retention)),
                                 "outcome": "retention = 1 − churn",
+                                # #299 — 화면이 ATE 가 어느 결과의 차이인지 이 두 값에서 읽는다
+                                "primary_outcome": "retention", "outcome_window_days": LABEL_WINDOW_DAYS,
                                 "arm_counts": dict(sorted(Counter(ctx["treatment"].tolist()).items()))})
             if not two_classes(retention):
                 raise NotRun("retention 라벨이 한 값뿐이다 — CATE 추정 불가 (구매 이벤트 유무 확인)")
@@ -2121,6 +2123,7 @@ def run(config: SprintConfig) -> Path:
                     ab_test["results"][outcome] = analyze(frame, "arm", outcome, control="T0",
                                                           expected_ratio=expected)
             ab_test["primary_outcome"] = "retention"
+            ab_test["outcome_window_days"] = LABEL_WINDOW_DAYS  # #299 — 화면이 결과 이름 · 창을 이 파일에서 읽는다
             ab_test.update(dashboard_ab(ab_test["results"]["retention"]))  # 대시보드 AbTest
 
         # 3. 전략 비교 -------------------------------------------------------
