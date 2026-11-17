@@ -72,7 +72,7 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 
 > **예외 하나 — S8 채점 입력 (#224 · DR-S8 결정 3, 2026-11-09).** 시뮬 팀의 `results/**` 금지는 S8 채점 입력(고객별 τ̂ `cate.jsonl` · 분기 목록)에 한해 **GATE 4 결과 커밋 뒤에만, S8 CLI 로만** 풀린다. 사람이 파일을 직접 열지 않고, 리포트에는 집계값만 싣는다(DR-S8 V4). 기계가독 판본은 `docs/team_boundaries.json` 의 `teams.sim.must_not_read_exceptions` 다.
 
-> **시스템 팀 금지 추가 (#163, 2026-11-13 · 11-14 리드 결정).** 시뮬레이터의 **생성 규칙 · 보정값 · 가드레일 실측값**(참 효과 크기)이 든 문서를 더했다. 민정 분류(11/13)로 내부 문서를 모두 넣었고, 계약으로 열어 두는 것은 `DR-S3-sample-size` · `DR-S3-assignment` · `DR-163` · `DR-167` · `DR-S8-scoring-metrics` · `docs/simulator_api.md` 다. data_spec §3 · data_grounding §2 에 섞여 있던 생성 규칙은 시뮬 팀 문서 `docs/simulator_generation.md` 로 옮긴다(옮기기 전까지 두 문서의 그 절은 시스템 팀이 이미 읽어 온 부분이라는 사실을 기록한다). `realism_report` 는 결과 폴더로 복사하지 않는다 — 관측 통계만 담은 공개 판이 생기면 그것을 복사한다.
+> **시스템 팀 금지 추가 (#163, 2026-11-13 · 11-14 리드 결정).** 시뮬레이터의 **생성 규칙 · 보정값 · 가드레일 실측값**(참 효과 크기)이 든 문서를 더했다. 민정 분류(11/13)로 내부 문서를 모두 넣었고, 계약으로 열어 두는 것은 `DR-S3-sample-size` · `DR-S3-assignment` · `docs/decisions/DR-163-gate1-lock-evidence.md` · `DR-167` · `DR-S8-scoring-metrics` · `docs/simulator_api.md` 다. data_spec §3 · data_grounding §2 에 섞여 있던 생성 규칙은 시뮬 팀 문서 `docs/simulator_generation.md` 로 옮긴다(옮기기 전까지 두 문서의 그 절은 시스템 팀이 이미 읽어 온 부분이라는 사실을 기록한다). `realism_report` 는 결과 폴더로 복사하지 않는다 — 관측 통계만 담은 공개 판이 생기면 그것을 복사한다.
 
 **가장 위험한 누수는 코드가 파일을 훔쳐보는 것이 아니다.** AI 성능이 낮다는 이유로 시뮬레이터를 고치는 것이다 (PRD §80 Risk 1). 사람도 에이전트도 이 유혹에 빠진다.
 
