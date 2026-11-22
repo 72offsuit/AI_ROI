@@ -60,6 +60,10 @@ export interface ClvEval extends SprintHeader {
 }
 
 export interface UpliftEval extends SprintHeader {
+  /** Outcome the ATE is a difference in, e.g. "retention" (#299). Display name: `outcomeName`. */
+  primary_outcome?: string | null;
+  /** Label window of that outcome in days (#299). */
+  outcome_window_days?: number | null;
   n?: number | null;
   arms?: Record<string, number | null>;
   ate?: Record<string, { value?: number | null; ci95?: [number | null, number | null] | null } | null>;
@@ -112,6 +116,10 @@ export interface StrategyComparison extends SprintHeader {
 }
 
 export interface AbTest extends SprintHeader {
+  /** Outcome the arms compare, e.g. "retention" = 1 − churn (#154). The screen reads its name from here (#299). */
+  primary_outcome?: string | null;
+  /** Label window of that outcome in days (#299). */
+  outcome_window_days?: number | null;
   srm?: { chi2?: number | null; p?: number | null; ok?: boolean | null } | null;
   arms?: {
     arm: string;

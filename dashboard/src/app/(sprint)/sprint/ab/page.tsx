@@ -4,11 +4,14 @@
  *
  * The only verdict shown (SRM ok) is the file's own `srm.ok` field — the screen does not
  * run or re-judge a test.
+ *
+ * Which rate the arms compare is the file's `primary_outcome` (#299) — the run loop compares
+ * the repurchase rate, not churn, so the column name is read from the file, never fixed here.
  */
 import type { Metadata } from "next";
 
 import { loadSprint, sprintSource } from "@/lib/artifacts/sprint";
-import { fmtAuto, fmtDec, fmtInt, fmtInterval, fmtP, fmtPct, fmtPp, isNum } from "@/lib/format/sprint";
+import { fmtAuto, fmtDec, fmtInt, fmtInterval, fmtP, fmtPct, fmtPp, isNum, outcomeName } from "@/lib/format/sprint";
 import { StateChip } from "@/components/StateChip";
 import { IntervalChart } from "@/components/sprint/charts";
 import { Section, SprintGate, SprintHeader, TableWrap, TD, TDR, TH, THR } from "@/components/sprint/SprintFrame";
@@ -33,12 +36,16 @@ export default async function AbPage() {
   const arms = a.arms ?? [];
   const treated = arms.filter((r) => isNum(r.diff_vs_control) || Array.isArray(r.ci95));
   const power = Object.entries(a.power ?? {});
+  const outcome = outcomeName(a.primary_outcome, a.outcome_window_days);
+  const rateName = outcome.label ?? "결과 비율";
 
   return (
     <div className="flex flex-col gap-lg">
       <SprintHeader
         title="A/B 실험"
-        description="무작위 배정 실험의 표본 비율 점검(SRM), 처치군별 이탈률과 대조군 대비 차이, 다중비교 보정(Holm) p-value 입니다."
+        description={`무작위 배정 실험의 표본 비율 점검(SRM), 처치군별 결과 비율과 대조군 대비 차이, 다중비교 보정(Holm) p-value 입니다. ${
+          outcome.label === null ? "비교한 결과가 무엇인지 파일에 적혀 있지 않습니다." : `비교한 결과는 ${outcome.label}입니다.`
+        }`}
         source={source}
         header={a}
       />
@@ -59,12 +66,22 @@ export default async function AbPage() {
       </Section>
 
       <Section title="처치군별 결과">
+        {outcome.kind === "known" ? null : (
+          <StateChip
+            state="gap"
+            label={
+              outcome.kind === "missing"
+                ? "결과 이름 미표기 — 어떤 비율인지 파일에 없습니다"
+                : "처음 보는 결과 이름 — 파일에 적힌 이름 그대로 표시합니다"
+            }
+          />
+        )}
         <TableWrap label="A/B 처치군 표">
           <thead>
             <tr>
               <th className={TH}>처치군</th>
               <th className={THR}>n</th>
-              <th className={THR}>이탈률</th>
+              <th className={THR}>{rateName}</th>
               <th className={THR}>대조군 대비 (%p)</th>
               <th className={THR}>95% CI</th>
               <th className={THR}>p (원)</th>
@@ -108,9 +125,9 @@ export default async function AbPage() {
 
         {treated.length === 0 ? null : (
           <figure className="flex flex-col gap-xs">
-            <figcaption className="text-label-md text-text">대조군 대비 이탈률 차이 (95% CI)</figcaption>
+            <figcaption className="text-label-md text-text">대조군 대비 {rateName} 차이 (95% CI)</figcaption>
             <IntervalChart
-              ariaLabel="처치군별 대조군 대비 이탈률 차이와 95% 신뢰구간"
+              ariaLabel={`처치군별 대조군 대비 ${rateName} 차이와 95% 신뢰구간`}
               rows={treated.map((r) => {
                 const d = fmtPp(r.diff_vs_control);
                 const ci = fmtInterval(r.ci95, (x) => fmtPp(x));
