@@ -1,0 +1,93 @@
+# 이탈 기준의 근거 (SRS DOC-008 · PRD v3.0 §28.1)
+
+| | |
+|---|---|
+| 담당 | 시뮬레이터 팀 민정 · 리뷰 성환 (#302) |
+| 작성 | 2026-11-23 |
+| 공개 범위 | 공개 문서. 생성 모수 · 숨은 값 · AI 결과는 담지 않는다(PRD §21.1 · §80 Risk 1) |
+| 값의 정본 | `config/simulator_config.yaml` `churn`. **이 문서는 값을 바꾸지 않는다.** 확정 · 변경은 GATE 1 봉인 절차(#163, DR-208)를 따른다 |
+
+이 문서는 "어떤 고객을 이탈로 봤고, 그 기준을 왜 그렇게 정했나"에 답한다(멘토링 11/17). 근거는 두 가지다. 하나는 업계 · 학계가 비계약형 서비스에서 이탈을 정하는 방식이고, 다른 하나는 공개 실데이터의 구매 간격 분포다.
+
+---
+
+## 1. 지금 쓰는 이탈 기준
+
+| 구분 | 정의 | 쓰는 곳 |
+|---|---|---|
+| 운영 상태 | Active: 마지막 구매 뒤 27일 이하 · **At Risk: 28~41일** · **Churn: 42일 이상 무구매** 또는 60일 이상 미접속(OR) | 대시보드 · 코호트 · Rule-based Baseline 조건 |
+| 모델 라벨 | T0 기준 **[T0, T0+42일) 동안 구매 0건이면 이탈(1)** | Churn 예측 · Uplift 결과(Retention = 1 − 이탈) |
+
+- 운영 상태는 과거를 보는 정의이고, 모델 라벨은 앞을 보는 정의다. 둘을 나눈 이유는 data_spec §5(라벨 누수 방지)에 있다.
+- 라벨 창의 경계는 [T0, T0+42)(T0 포함 · T0+42 제외)가 정본이다(#163 리드 결정, 두 팀 구현과 같다).
+- 60일 미접속 조건은 OR 로 묶여 있다. 미접속 60일인 고객은 미구매도 60일 이상이라 42일 조건에 이미 걸리므로, 실제 판정은 **42일 무구매 하나**와 같다(`src/measurement/kpi.py` 주석).
+
+## 2. 비계약형 서비스에서 이탈을 정하는 방식
+
+온라인 장보기는 해지 신청이 없는 **비계약형** 서비스다. 고객이 떠났다는 신호가 없으므로, "얼마나 오래 사지 않으면 떠났다고 볼 것인가"를 분석하는 쪽이 정해야 한다.
+
+| 출처 | 말하는 것 | 우리 기준과의 관계 |
+|---|---|---|
+| Ascarza 외(2018) [R1] | 고객 관계는 해지를 직접 관찰하는 계약형과, 고객이 떠난다고 알리지 않는 비계약형으로 나뉜다. 비계약형에서는 이탈 시점을 관찰할 수 없다 | 이탈을 "일정 기간 무구매"로 정의해야 하는 이유 |
+| Shopify Engineering(2017) [R2] | 기업들은 흔히 이탈을 "N일 동안 구매 없음"으로 정의하고, N 은 보통 7 또는 30의 배수다 | 42일(7의 배수)은 업계의 흔한 형태다 |
+| Indeed Engineering(2020) [R3] | 구매 주기(연속 구매 사이 간격) 분포의 분위수로 이탈 기간을 정하는 방법이 흔하다. 다만 90 · 95 · 99번째 중 어느 분위수를 쓸지 고르기 어렵고, 이렇게 정한 기간은 너무 길어지기 쉽다 | 분위수 방식의 근거이자 한계. 우리는 이 한계를 3절의 실데이터로 점검한다 |
+| Buckinx & Van den Poel(2005) [R4] | 비계약형 FMCG 소매에서는 완전 이탈 대신 평균 구매 빈도 · 구매 간격에서 크게 벗어난 고객을 "부분 이탈"로 본다 | 개인 구매 주기에서 벗어난 긴 공백을 이탈 신호로 보는 근거 |
+| Clemente-Císcar 외(2014) [R5] | 비계약형 소매에서 이탈 정의를 리텐션 캠페인의 수익성 기준으로 고른다 | 기준을 정하는 또 다른 축. 우리는 쓰지 않았다(한계 참고) |
+| A Survey on Churn Analysis(arXiv, 2020) [R6] | 비계약형 이탈의 관찰 기간(time window)은 대부분 분석자가 정하며 임의성이 크다 | 정답인 하나의 값은 없다. 그래서 근거와 한계를 함께 적는다 |
+
+## 3. 공개 실데이터의 구매 간격
+
+아래 값은 공개 원자료를 받아 이 프로젝트에서 **직접 계산**했다. 계산 스크립트는 `scripts/research/cj_stats.py` · `instacart_stats.py`, 출력은 `docs/research/computed/` 에 있다.
+
+| 데이터 | 간격 정의 | 중앙값 | P75 | P90 | P95 | P99 | 42일 이상인 간격 |
+|---|---|---:|---:|---:|---:|---:|---:|
+| dunnhumby Complete Journey 2.0 [R7] (미국 식료품, 2,469가구 · 1년) | 장 본 날 사이 | 3일 | 7일 | 13일 | 21일 | 51일 | 1.5% |
+| 같은 데이터, 20달러 이상 장보기만 | 장 본 날 사이 | 6일 | — | 23일 | 36일 | — | — |
+| Instacart 2017 [R8] (미국 온라인 장보기, 20.6만 명) | 주문 사이(30일에서 절단) | 7일 | 15일 | 30일 | — | — | (30일 절단이라 알 수 없음) |
+
+국내 온라인 장보기 구매 빈도는 컬리 이용자 월 2.5회(2023) [R9] · 2.66회(2025) [R10]다. 평균 구매 간격으로 바꾸면 약 11~12일이다(30.4일 ÷ 월 구매 횟수, 계산).
+
+**읽는 법**
+- **42일은 "드물게 긴 공백"이다.** Complete Journey 에서 42일 이상인 간격은 전체의 1.5% 뿐이고, 42일은 P95(21일)와 P99(51일) 사이에 있다. 20달러 이상 장보기로 좁혀도 P95 가 36일이다. 국내 평균 간격(약 11~12일)의 3.5~4배다.
+- **28일(At Risk)은 그보다 앞의 경고 구간이다.** Complete Journey 에서 28일 이상인 간격은 3.1%, Instacart(절단 자료)에서는 12.9%다.
+- **data_spec §5.1 의 "At Risk ≈ P75 · Churn ≈ P90" 규칙과는 맞지 않는다.** 모든 고객의 간격을 한데 모으면, 자주 사는 고객의 짧은 간격이 표본 대부분을 차지해 P75 · P90 이 짧아진다(위 표: 7~15일 · 13~30일). 그래서 실데이터에서는 42일이 P90 이 아니라 P95~P99 근처에 온다. Indeed [R3] 가 말한 "어느 분위수를 쓸지 고르기 어렵다"는 문제가 그대로 드러난 것이다.
+
+## 4. 생성 데이터의 구매 간격 분포
+
+<!-- TODO(#302): GATE 1 공식 실측(#163, 확인 seed 47~51 · 처치 없는 세계 Day 0–272)의 churn_threshold 판정 결과로 채운다.
+     data_spec §5.1 ①~③ 과 같은 정의(전체 간격 풀 · P75 / P90)다. 봉인 뒤 수치와 met 여부를 그대로 옮긴다. 값은 고치지 않는다. -->
+
+GATE 1 봉인 실측에서 data_spec §5.1 ①~③ 절차(처치 없는 기간의 전체 구매 간격 P75 · P90 과 임계값 비교)를 사전 등록한 기준(DR-163-gate1-churn-discount-criteria)으로 확인한다. 결과는 봉인 뒤 이 절에 옮긴다.
+
+참고로, 관측 이벤트로 잰 생성 데이터의 구매 간격 분포(F1, 30일 절단)와 외부 대조는 공개판 `docs/research/realism_public.json` 에 있다.
+
+## 5. 정리 — 왜 이 값인가
+
+1. **42일 무구매 = 이탈.** 비계약형 서비스는 이탈을 관찰할 수 없어서 "N일 무구매"로 정의하는 것이 업계 관행이다 [R1][R2]. 공개 식료품 데이터에서 42일은 개인 구매 공백의 상위 1~5%에 해당하는 드문 공백이고 [R7], 국내 평균 구매 간격의 약 4배다 [R9][R10]. 그래서 "평소 주기로는 설명되지 않는 공백"으로 볼 수 있다.
+2. **28일 = 경고(At Risk).** 이탈로 확정하기 전에 캠페인을 걸 수 있는 앞 구간이다. 공백이 28일을 넘는 경우는 실데이터에서 3~13% 정도다 [R7][R8].
+3. **모델 라벨 창 42일.** 운영 정의와 같은 길이로 두어 "이탈"이라는 말이 두 곳에서 같은 기간을 뜻하게 했다. 라벨 창은 운영 정의가 바뀌어도 42일로 고정한다(data_spec §5 — 바꾸면 Baseline 과 AI 전략을 같은 기준으로 비교할 수 없다).
+
+## 6. 한계
+
+- **data_spec §5.1 의 분위수 규칙(P75 · P90)은 실데이터와 맞지 않는다(3절).** 임계값을 바꾸지 않고 근거를 "드문 공백(P95~P99)"으로 설명했다. 규칙 자체를 고칠지는 GATE 1 봉인 뒤 후속 이슈에서 정한다.
+- **일시 공백이 흔하다.** Complete Journey 가구의 43.5% 가 1년 안에 42일 이상 공백을 가진 뒤 다시 돌아왔다 [R7]. "42일 무구매 = 이탈"은 영구 이탈이 아니라 **위험 신호**이고, 라벨에는 잡음이 섞인다.
+- **비교 데이터가 미국 자료다.** 국내 온라인 장보기의 개인 구매 간격 분포는 공개 자료를 찾지 못했다. 국내 자료는 월 평균 구매 횟수(설문)뿐이다 [R9][R10].
+- **60일 미접속 조건은 근거가 없다.** 접속 기록을 다룬 공개 자료를 찾지 못했다. OR 규칙이라 판정에는 영향이 없다(1절).
+- **수익성 기준 [R5] 은 쓰지 않았다.** 캠페인 비용과 이익으로 기준을 고르는 방식은 결과(AI 전략 성과)를 보고 기준을 고르는 것과 구분하기 어려워, 시뮬레이터 팀 근거로는 쓰지 않는다(PRD §80 Risk 1).
+
+## 참고문헌
+
+| # | 출처 | 발행처 · 연도 | URL |
+|---|---|---|---|
+| R1 | Ascarza, E. 외, "In pursuit of enhanced customer retention management: review, key issues, and future directions", *Customer Needs and Solutions* 5(1-2), 65–81 | Springer · 2018 | https://ideas.repec.org/a/spr/custns/v5y2018i1d10.1007_s40547-017-0080-0.html |
+| R2 | "How Shopify Merchants Can Measure Retention" | Shopify Engineering · 2017 | https://shopify.engineering/how-shopify-merchants-can-measure-retention |
+| R3 | "Defining Churn" | Indeed Engineering Blog · 2020 | https://engineering.indeedblog.com/blog/2020/01/defining-churn/ |
+| R4 | Buckinx, W. & Van den Poel, D., "Customer base analysis: partial defection of behaviourally loyal clients in a non-contractual FMCG retail setting", *European Journal of Operational Research* 164(1), 252–268 | Elsevier · 2005 | https://ideas.repec.org/a/eee/ejores/v164y2005i1p252-268.html |
+| R5 | Clemente-Císcar, M., San Matías, S. & Giner-Bosch, V., "A methodology based on profitability criteria for defining the partial defection of customers in non-contractual settings", *European Journal of Operational Research* 239(1), 276–285 | Elsevier · 2014 | https://riunet.upv.es/handle/10251/51314 |
+| R6 | "A Survey on Churn Analysis" | arXiv · 2020 | https://arxiv.org/abs/2010.13119 |
+| R7 | The Complete Journey 2.0 (R 패키지 `completejourney`) — 원자료 직접 계산 | dunnhumby / 84.51° · 2017 | https://cran.r-project.org/web/packages/completejourney/vignettes/completejourney.html |
+| R8 | Instacart Online Grocery Shopping Dataset 2017 — 원자료 직접 계산 | Instacart · 2017 | https://huggingface.co/datasets/attik/Instacart-Market-Basket-Analysis |
+| R9 | 오픈서베이 「온라인 식료품 구매 트렌드 리포트 2023」 (바이라인네트워크 보도) | 오픈서베이 · 2023 | https://byline.network/2023/01/30_0976 |
+| R10 | 오픈서베이 「온라인 식료품 구매 트렌드 리포트 2025」 | 오픈서베이 · 2025 | https://blog.opensurvey.co.kr/trendreport/online-grocery-2025/ |
+
+R1~R6 · R9 · R10 의 서지와 URL 은 `docs/research/sources.json`(2026-10-22 조사)과 2026-11-23 웹 검색으로 확인했다. R6 은 저자명을 확인하지 못해 제목과 arXiv 번호로 적는다.
