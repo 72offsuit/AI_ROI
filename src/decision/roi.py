@@ -191,6 +191,9 @@ def summarize_strategy(metrics: Mapping[str, Any], baseline_metrics: Mapping[str
     else:
         row["roi"], row["roi_status"] = inc / dcost, OK
     row["roi_definition"] = "incremental_profit_vs_S1 / (marketing_cost − marketing_cost_S1)"
+    # #274 · DR-170 E5 — 분모 ≤ 0 이면 ROI 는 계속 계산 불가이고, 어느 쪽인지 구분만 더한다.
+    # 증분이익 · 추가 마케팅비 두 값은 위 필드에 그대로 있다(어느 경우에도 함께 싣는다).
+    row["roi_case"], row["roi_case_note"] = _roi_case(inc, dcost)
 
     aic = _num(ai_investment_cost)
     if inc is None:
@@ -214,6 +217,21 @@ def summarize_strategy(metrics: Mapping[str, Any], baseline_metrics: Mapping[str
             flags.append(name)
     row["flags"] = flags
     return row
+
+
+#: DR-170 E5 — 추가 마케팅비 ≤ 0 일 때의 구분. 정의(분모)는 바꾸지 않는다.
+ROI_CASES: dict[str, str] = {
+    "cheaper_and_better": "S1 보다 적거나 같은 비용으로 더 큰 이익 — ROI 는 정의상 계산 불가",
+    "cheaper_and_worse": "S1 보다 비용 절감 · 이익 감소 — ROI 는 정의상 계산 불가",
+}
+
+
+def _roi_case(inc: float | None, dcost: float | None) -> tuple[str | None, str | None]:
+    """두 값이 다 있고 추가 마케팅비 ≤ 0 일 때만 구분한다. 그 밖에는 (None, None) — 사유는 ``roi_status`` 에 있다."""
+    if inc is None or dcost is None or dcost > 0:
+        return None, None
+    case = "cheaper_and_better" if inc > 0 else "cheaper_and_worse"
+    return case, ROI_CASES[case]
 
 
 def _verdict(triggered: bool | None, basis: dict[str, str | None], reason: str | None) -> dict[str, Any]:
