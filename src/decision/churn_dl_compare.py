@@ -1,11 +1,8 @@
-"""#218 로컬 준비: Validation 전용 가중치 선택과 같은 고객의 시험 비교.
-
-분할을 생성하지 않는다. 승인된 공개 분할표를 나중에 이 인터페이스에 연결한다.
-현재 지원 목적은 합성/개발 검증이며 GATE 2 정식 비교·Final Holdout 진입점이 아니다.
-"""
+"""#218 공통 시간 분할과 Validation 전용 선택. 시험 파일을 열지 않는다."""
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import timedelta
 import hashlib
 import json
 import math
@@ -16,12 +13,30 @@ import numpy as np
 import pandas as pd
 
 from src.decision.churn_sequence import (
-    SequenceContractError, align_binary_labels, id_hash, validate_ids, load_dl_config, bound_value_hash,
+    SequenceContractError, align_binary_labels, id_hash, validate_ids, load_dl_config, bound_value_hash, event_time,
 )
 from src.decision.churn_artifacts import atomic_artifact_directory, claim_evaluation
 
 # #287: 수치 비교 규약이다. Test에서 고르는 하이퍼파라미터가 아니다.
 ALPHA_TIE_ATOL = 1e-12
+LABEL_WINDOW = timedelta(days=42)
+
+
+@dataclass(frozen=True)
+class TemporalOrigins:
+    prior: str
+    t1: str
+    t2: str
+
+    def __post_init__(self):
+        for name in ('prior', 't1', 't2'):
+            object.__setattr__(self, name, event_time(getattr(self, name)).isoformat())
+        self.validate()
+
+    def validate(self):
+        prior, t1, t2 = map(event_time, (self.prior, self.t1, self.t2))
+        if prior + LABEL_WINDOW != t1 or t1 + LABEL_WINDOW > t2:
+            raise SequenceContractError('expected prior label end at t1 and no overlap with t2')
 
 
 @dataclass(frozen=True)
@@ -34,6 +49,7 @@ class ComparisonProtocol:
     train_ids: tuple[str, ...]
     validation_ids: tuple[str, ...]
     test_ids: tuple[str, ...]
+    origins: TemporalOrigins | None = None
 
     def __post_init__(self):
         for key in ('train_ids', 'validation_ids', 'test_ids'):
@@ -49,13 +65,24 @@ class ComparisonProtocol:
         groups = [validate_ids(x) for x in (self.train_ids, self.validation_ids, self.test_ids)]
         if any(not isinstance(getattr(self, k), tuple) for k in ('train_ids', 'validation_ids', 'test_ids')):
             raise SequenceContractError('protocol ID collections must be immutable tuples')
-        if any(not x for x in groups) or any(set(groups[i]) & set(groups[j]) for i in range(3) for j in range(i)):
-            raise SequenceContractError('Train/Validation/Test must be non-empty disjoint customer sets')
+        if any(not x for x in groups):
+            raise SequenceContractError('Train/Validation/Test must be non-empty')
+        if self.origins is None:
+            if any(set(groups[i]) & set(groups[j]) for i in range(3) for j in range(i)):
+                raise SequenceContractError('without temporal origins customer sets must be disjoint')
+        elif isinstance(self.origins, TemporalOrigins):
+            # Each role has unique IDs at one origin. Strictly separated origins
+            # therefore give disjoint (customer, origin) pairs across roles.
+            self.origins.validate()
+        else:
+            raise SequenceContractError('invalid temporal origin evidence')
 
     @property
     def digest(self):
         self.validate()
         data = asdict(self)
+        if self.origins is None:
+            del data['origins']  # Preserve digests of published non-temporal fixtures.
         for key in ('train_ids', 'validation_ids', 'test_ids'):
             data[key] = sorted(data[key])
         return hashlib.sha256(json.dumps(data, ensure_ascii=False, sort_keys=True,
@@ -128,7 +155,7 @@ class FrozenSelection:
         grid = _alpha_grid(row[0] for row in self.candidates)
         if tuple(row[0] for row in self.candidates) != grid:
             raise SequenceContractError('selection candidates must be sorted')
-        rows, alpha, thresholds = _selection_components(y, ml, dl, grid)
+        rows, alpha, thresholds = _selection_components(y, ml, dl, grid, temporal=protocol.origins is not None)
         if self.candidates != rows or self.alpha != alpha or self.thresholds != thresholds:
             raise SequenceContractError('selection candidates/alpha/thresholds contradict Validation evidence')
 
@@ -142,26 +169,34 @@ def _alpha_grid(values):
     return tuple(sorted(float(x) for x in grid))
 
 
-def _selection_components(y, ml, dl, grid):
-    from sklearn.metrics import log_loss
+def mix_probabilities(ml, dl, alpha):
+    """이미 고객 순서를 맞춘 두 확률의 공통 float64 혼합."""
+    return (1 - alpha) * np.asarray(ml, dtype=np.float64) + alpha * np.asarray(dl, dtype=np.float64)
+
+
+def _selection_components(y, ml, dl, grid, *, temporal=False):
+    from sklearn.metrics import log_loss, roc_auc_score
     from src.decision.churn import _best_f1_threshold
-    rows = tuple((alpha, float(log_loss(y, (1-alpha)*ml + alpha*dl, labels=[0, 1]))) for alpha in grid)
+    def loss(probability):
+        return 1 - roc_auc_score(y, probability) if temporal else log_loss(y, probability, labels=[0, 1])
+
+    rows = tuple((alpha, float(loss(mix_probabilities(ml, dl, alpha)))) for alpha in grid)
     best = min(loss for _, loss in rows)
     alpha = min(a for a, loss in rows if loss <= best + ALPHA_TIE_ATOL)
-    thresholds = tuple(float(_best_f1_threshold(y, p)) for p in (ml, dl, (1-alpha)*ml + alpha*dl))
+    thresholds = tuple(float(_best_f1_threshold(y, p)) for p in (ml, dl, mix_probabilities(ml, dl, alpha)))
     return rows, alpha, thresholds
 
 
 def select_ensemble(protocol: ComparisonProtocol, validation_labels,
                     ml_validation, dl_validation, *, alpha_grid=None):
-    """Test 라벨·예측 인자가 없다. 낮은 log loss, 동점은 작은 DL 가중치."""
+    """시간 분할은 검증 AUC, 기존 합성 분할은 log loss. 동점은 작은 DL 가중치."""
     protocol.validate()
     grid = _alpha_grid(load_dl_config().alpha_grid if alpha_grid is None else alpha_grid)
     ids = tuple(sorted(protocol.validation_ids))
     y = align_binary_labels(validation_labels, ids, require_two_classes=True)
     ml = _probabilities(ml_validation, ids)
     dl = _probabilities(dl_validation, ids)
-    rows, alpha, thresholds = _selection_components(y, ml, dl, grid)
+    rows, alpha, thresholds = _selection_components(y, ml, dl, grid, temporal=protocol.origins is not None)
     evidence = tuple((cid, float(a), float(b), float(c)) for cid, a, b, c in zip(ids, y, ml, dl))
     selection = FrozenSelection(protocol.digest, alpha, thresholds, id_hash(ids),
         bound_value_hash(ids, y), rows, evidence, bound_value_hash(ids, ml), bound_value_hash(ids, dl))
@@ -175,6 +210,8 @@ def evaluate_common_test(protocol: ComparisonProtocol, selection: FrozenSelectio
     from src.decision.churn import _metrics
 
     protocol.validate()
+    if protocol.origins is not None:
+        raise SequenceContractError('temporal Test requires the GATE 3 evaluation entry point')
     selection.validate(protocol)
     ids = protocol.test_ids
     directory = Path(directory)
@@ -192,7 +229,7 @@ def evaluate_common_test(protocol: ComparisonProtocol, selection: FrozenSelectio
     ml = _probabilities(ml_test, ids)
     dl = _probabilities(dl_test, ids)
     with atomic_artifact_directory(directory) as staging:
-        scores = (ml, dl, (1-selection.alpha)*ml + selection.alpha*dl)
+        scores = (ml, dl, mix_probabilities(ml, dl, selection.alpha))
         models = []
         for name, probability, threshold in zip(('ml', 'lstm', 'ensemble'), scores, selection.thresholds):
             metrics = _metrics(y, probability, threshold)
@@ -208,7 +245,7 @@ def evaluate_common_test(protocol: ComparisonProtocol, selection: FrozenSelectio
                   'selection_integrity': 'recomputed from frozen Validation data; not producer authentication',
                   'access_claim': claim.name,
                   'mixing_used': 0 < selection.alpha < 1, 'final_holdout_used': False,
-                  'split_scope': 'customer disjointness checked; temporal/label-window contract still requires #215',
+                  'split_scope': 'customer disjointness checked; no temporal origins',
                   'prediction_provenance': 'caller-provided predictions, not authenticated training lineage'}
         (staging / 'comparison.json').write_text(json.dumps(report, ensure_ascii=False, allow_nan=False, indent=2), encoding='utf-8')
         (staging / 'test_access.json').write_text(json.dumps(declaration, ensure_ascii=False, indent=2), encoding='utf-8')
