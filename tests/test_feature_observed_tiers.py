@@ -91,7 +91,8 @@ class ObservedTierTests(unittest.TestCase):
         self.assertEqual(out.loc["c1", "spend_180d"], 20_000.0)
         meta = out.attrs["observed_tiers"]
         self.assertEqual(meta["window"]["days"], 180)
-        self.assertTrue(meta["window_complete"])
+        self.assertTrue(meta["data_start_before_window"])
+        self.assertNotIn("window_complete", meta)   # 연속 관측 보장으로 읽히는 이름을 쓰지 않는다
 
     def test_value_tiers_split_at_the_50th_and_80th_percentile_of_purchasers(self):
         fx = Fixture()
@@ -189,6 +190,55 @@ class ObservedTierTests(unittest.TestCase):
         self.assertEqual(meta["items"]["n_items_unmapped"], 1)
         self.assertIn("NO_KNOWN_ITEMS", meta["unknown_reasons"]["category_tier"])
 
+    def test_partly_unmapped_items_leave_the_main_category_unknown(self):
+        # 1,000원 dairy + 상품군을 모르는 9,000원 품목 — 남은 dairy 로 1위 · 비중 1.0 을 확정하지 않는다.
+        fx = Fixture()
+        fx.view("p_dairy", "dairy")
+        fx.buy("partial", 10, items=(("p_dairy", 1, 1_000), ("p_mystery", 1, 9_000)))
+        fx.buy("whole", 10, items=(("p_dairy", 2, 1_000),))
+        out = self.tiers(fx, ["partial", "whole"], order_items=fx.order_items())
+        self.assertEqual(out.loc["partial", "category_tier"], "UNKNOWN")
+        self.assertTrue(out["main_category_share"].isna()["partial"])
+        self.assertEqual(out.loc["whole", "category_tier"], "dairy")
+        meta = out.attrs["observed_tiers"]
+        self.assertEqual(meta["items"]["category_unknown_customers"],
+                         {"ORDER_WITHOUT_ITEMS": 0, "ITEM_UNMAPPED": 1, "ITEM_AMOUNT_MISSING": 0, "NO_KNOWN_ITEMS": 0})
+        self.assertEqual(meta["items"]["n_buyers_category_unknown"], 1)
+        self.assertIn("ITEM_UNMAPPED", meta["unknown_reasons"]["category_tier"])
+        # 같은 구매 내역에 매핑이 생기면 그때 확정된다 — 결손 전 값이 남지 않는다.
+        mapped = self.tiers(fx, ["partial"], order_items=fx.order_items(),
+                            product_categories={"p_dairy": "dairy", "p_mystery": "fresh_food"})
+        self.assertEqual(mapped.loc["partial", "category_tier"], "fresh_food")
+        self.assertAlmostEqual(mapped.loc["partial", "main_category_share"], 0.9)
+        self.assertNotIn("category_tier", mapped.attrs["observed_tiers"]["unknown_reasons"])
+
+    def test_an_order_without_item_rows_or_amount_leaves_the_main_category_unknown(self):
+        fx = Fixture()
+        fx.view("p_dairy", "dairy")
+        fx.buy("half", 10, items=(("p_dairy", 1, 1_000),))
+        fx.buy("half", 20)                                   # 두 번째 주문의 품목 행이 통째로 없다
+        fx.buy("no_price", 10, items=(("p_dairy", 1, 1_000), ("p_dairy", 1, None)))
+        out = self.tiers(fx, ["half", "no_price"], order_items=fx.order_items())
+        self.assertEqual(out["category_tier"].to_dict(), {"half": "UNKNOWN", "no_price": "UNKNOWN"})
+        self.assertTrue(out["main_category_share"].isna().all())
+        items = out.attrs["observed_tiers"]["items"]
+        self.assertEqual(items["category_unknown_customers"],
+                         {"ORDER_WITHOUT_ITEMS": 1, "ITEM_UNMAPPED": 0, "ITEM_AMOUNT_MISSING": 1, "NO_KNOWN_ITEMS": 0})
+        self.assertEqual(items["n_items_amount_missing"], 1)
+        self.assertEqual(items["n_buyers_category_unknown"], 2)
+
+    def test_equal_spend_all_reach_the_80th_percentile_boundary(self):
+        from src.decision.observed_tiers import TIER_LABELS
+
+        fx = Fixture()
+        customers = [f"c{i:02d}" for i in range(1, 11)]
+        for cid in customers:
+            fx.buy(cid, 30, amount=5_000)
+        out = self.tiers(fx, customers)
+        # 두 경계가 같은 금액이라 전원이 "80분위 경계 이상"이다 — 인원 비율 20% 가 아니다.
+        self.assertEqual(set(out["value_tier"]), {"V3_HIGH"})
+        self.assertEqual(TIER_LABELS["value_tier"]["V3_HIGH"], "80분위 경계 이상")
+
     def test_without_order_items_category_is_unknown_not_approximated(self):
         fx = Fixture()
         fx.view("p_fresh", "fresh_food")
@@ -248,7 +298,7 @@ class ObservedTierTests(unittest.TestCase):
         fx.rows = [event("c1", T0 - timedelta(days=100), "session_start")]
         fx.buy("c1", 50)
         out = self.tiers(fx, ["c1"])
-        self.assertFalse(out.attrs["observed_tiers"]["window_complete"])
+        self.assertFalse(out.attrs["observed_tiers"]["data_start_before_window"])
 
     def test_columns_and_rule_record(self):
         from src.decision import observed_tiers as ot
