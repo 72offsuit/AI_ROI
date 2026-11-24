@@ -36,6 +36,8 @@ export interface ChurnModel {
   kind: ModelKind;
   cv?: Record<string, MeanStd> | null;
   temporal_holdout?: Record<string, MeanStd> | null;
+  /** Earlier-origin validation scores (#215) — what files written before #303 were chosen by. */
+  temporal_validation?: Record<string, unknown> | null;
 }
 
 /** One candidate in `churn_eval.selection` (#303 ML-011): the score it was chosen by, kept apart from random CV. */
@@ -113,7 +115,12 @@ export interface UpliftEval extends SprintHeader {
     validation_qini?: Record<string, number | null> | null;
     base_learner?: Record<string, unknown> | null;
     base_learner_is_current?: boolean | null;
-    tuning?: { grid?: { config_id?: number | null; method?: string | null; qini?: number | null }[] | null } | null;
+    /** Absent in files written before #294 — the meta-learner was then chosen without a regularization grid. */
+    tuning?: {
+      /** False when there was a single regularization candidate, so only the meta-learner was chosen. */
+      enabled?: boolean | null;
+      grid?: { config_id?: number | null; method?: string | null; qini?: number | null }[] | null;
+    } | null;
     n_validation?: number | null;
   } | null;
   tuning_report?: { selection_ok?: boolean | null; selection_reason?: string | null } | null;

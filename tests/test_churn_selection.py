@@ -191,25 +191,81 @@ class TestCliSelectionLines(unittest.TestCase):
         self.assertNotIn("0.806", lines[1])
         self.assertNotIn("개발 실행용", text)
 
-    def test_old_results_follow_their_selection_basis(self) -> None:
-        """#320 리뷰 — 이전 판 결과는 selection_basis 가 알려 주는 대로: 무작위 CV 로 골랐으면 그 점수가 선택 점수다."""
+    #: #303 이전 평가 함수가 남긴 모양 — selection 블록 없이 selection_basis · selection_metric · 모델별 점수.
+    LEGACY_MODELS = [
+        {"name": "rule_recency", "kind": "baseline", "cv": {"roc_auc": {"mean": 0.60}, "pr_auc": {"mean": 0.55}},
+         "temporal_validation": {"roc_auc": 0.61, "pr_auc": 0.52}},
+        {"name": "logistic_regression", "kind": "baseline",
+         "cv": {"roc_auc": {"mean": 0.74}, "pr_auc": {"mean": 0.688}},
+         "temporal_validation": {"roc_auc": 0.72, "pr_auc": 0.66}},
+        {"name": "random_forest", "kind": "proposed", "cv": {"roc_auc": {"mean": 0.806}, "pr_auc": {"mean": 0.648}},
+         "temporal_validation": {"roc_auc": 0.769, "pr_auc": 0.63}},
+        {"name": "hist_gb", "kind": "proposed", "cv": {"roc_auc": {"mean": 0.79}, "pr_auc": {"mean": 0.62}},
+         "temporal_validation": {"roc_auc": 0.727, "pr_auc": 0.61}},
+    ]
+
+    def legacy(self, basis: str | None, metric: str | None, chosen: str = "random_forest", models=None) -> dict:
+        return {"selection_basis": basis, "selection_metric": metric, "best_proposed": chosen,
+                "models": self.LEGACY_MODELS if models is None else models}
+
+    def test_old_results_show_their_actual_selection_scores(self) -> None:
+        """#320 리뷰 — 이전 판 결과도 후보별 실제 선택 점수(시간 순서 검증)를 적고, 기준선은 후보 밖에 둔다."""
         from src import main as cli
 
-        models = [{"name": "random_forest", "cv": {"roc_auc": {"mean": 0.806}}, "temporal_validation": {"roc_auc": 0.70}},
-                  {"name": "xgboost", "cv": {"roc_auc": {"mean": 0.78}}, "temporal_validation": {"roc_auc": 0.74}}]
-        temporal = cli.churn_selection_lines({"selection_basis": "temporal_validation", "best_proposed": "xgboost",
-                                              "models": models}, fmt)
-        self.assertIn("확정 xgboost", temporal[0])
-        self.assertIn("선택 점수(시간 순서 검증 ROC-AUC) random_forest 0.700 · xgboost* 0.740", temporal[1])
-        self.assertIn("참고 무작위 CV ROC-AUC 평균(선택에 쓰지 않음) random_forest 0.806", temporal[2])
-        random = cli.churn_selection_lines({"selection_basis": "random_cv", "best_proposed": "random_forest",
-                                            "models": models}, fmt)
-        text = "\n".join(random)
-        self.assertIn("선택 점수(무작위 CV ROC-AUC 평균) random_forest* 0.806", text)
-        self.assertNotIn("참고", text)
-        self.assertIn("정식 선택이 아니다", text)
-        unknown = "\n".join(cli.churn_selection_lines({"best_proposed": "xgboost", "models": models}, fmt))
-        self.assertIn("선택 점수인지 알 수 없다", unknown)
+        lines = cli.churn_selection_lines(self.legacy("temporal_validation", "roc_auc"), fmt)
+        text = "\n".join(lines)
+        self.assertIn("선택 기준 시간 순서 검증 ROC-AUC", lines[0])
+        self.assertIn("이전 판 결과", lines[1])
+        self.assertIn("제안 random_forest* 0.769 · hist_gb 0.727 → 확정 random_forest (0.769)", text)
+        self.assertIn("기준선(선택 대상 아님) rule_recency 0.610 · logistic_regression 0.720", text)
+        reference = next(line for line in lines if "참고" in line)
+        self.assertIn("무작위 교차검증 ROC-AUC 평균", reference)
+        self.assertIn("random_forest 0.806", reference)
+        self.assertNotIn("정식 선택이 아니다", text)
+
+    def test_old_results_chosen_by_random_cv_name_the_metric_and_keep_baselines_out(self) -> None:
+        """#320 리뷰 — CV PR-AUC 로 고른 이전 판: 어느 지표인지 적고, 기준선 PR-AUC 0.688 을 후보처럼 섞지 않는다."""
+        from src import main as cli
+
+        lines = cli.churn_selection_lines(self.legacy("random_cv", "pr_auc"), fmt)
+        text = "\n".join(lines)
+        self.assertIn("선택 기준 무작위 교차검증 PR-AUC 평균", lines[0])
+        proposed = next(line for line in lines if "제안" in line)
+        self.assertIn("random_forest* 0.648 · hist_gb 0.620", proposed)
+        self.assertNotIn("logistic_regression", proposed)
+        self.assertIn("기준선(선택 대상 아님) rule_recency 0.550 · logistic_regression 0.688", text)
+        self.assertNotIn("참고", text)                                 # CV 점수가 곧 선택 점수
+        self.assertIn("! 정식 선택이 아니다 — 앞 기준일 데이터가 없어 무작위 교차검증 평균으로 골랐다", text)
+        other = "\n".join(cli.churn_selection_lines(self.legacy("temporal_validation", "pr_auc"), fmt))
+        self.assertIn("! 정식 선택이 아니다 — 설정 지표 PR-AUC 로 골랐다", other)
+
+    def test_old_results_mark_only_missing_values(self) -> None:
+        """값이 없는 후보만 결손, 기준이나 지표가 없으면 어느 점수로 골랐는지 추정하지 않는다."""
+        from src import main as cli
+
+        models = [dict(m) for m in self.LEGACY_MODELS]
+        models[3] = {k: v for k, v in models[3].items() if k != "temporal_validation"}
+        text = "\n".join(cli.churn_selection_lines(self.legacy("temporal_validation", "roc_auc", models=models), fmt))
+        self.assertIn("제안 random_forest* 0.769 · hist_gb —", text)
+        for basis, metric in ((None, None), ("temporal_validation", None)):
+            unknown = "\n".join(cli.churn_selection_lines(self.legacy(basis, metric), fmt))
+            self.assertIn("어느 점수로 골랐는지 알 수 없다", unknown)
+            self.assertNotIn("제안", unknown)
+
+    def test_old_results_are_rebuilt_with_the_selection_record_rule(self) -> None:
+        """CLI 가 다시 만든 블록 = 결정 모듈 selection_record 가 같은 입력으로 만드는 블록(겹치는 키)."""
+        from src import main as cli
+        from src.decision.churn import selection_record
+
+        keys = ("name", "eligible", "selection_score", "random_cv_score", "chosen")
+        for basis, metric in (("temporal_validation", "roc_auc"), ("temporal_validation", "pr_auc"),
+                              ("random_cv", "pr_auc")):
+            rebuilt = cli._legacy_churn_selection(self.legacy(basis, metric))
+            record = selection_record(self.LEGACY_MODELS, basis, metric, "random_forest", 5)
+            for key in ("basis", "metric", "official", "official_reason", "chosen", "chosen_score"):
+                self.assertEqual(record[key], rebuilt[key], (basis, metric, key))
+            self.assertEqual([{k: c[k] for k in keys} for c in record["candidates"]],
+                             [{k: c[k] for k in keys} for c in rebuilt["candidates"]], (basis, metric))
 
     def test_new_results_chosen_by_random_cv_have_no_reference_line(self) -> None:
         from src import main as cli
@@ -230,7 +286,10 @@ class TestCliSelectionLines(unittest.TestCase):
                   "models": [{"name": "s_learner", "qini": 0.009}, {"name": "t_learner", "qini": 0.011}]}
         lines = cli.uplift_selection_lines(uplift, fmt)
         self.assertIn("선택 기준 validation Qini — t_learner* 0.0123 · x_learner 0.0101", lines[1])
-        self.assertIn("고른 규제에서의 메타러너별 점수", lines[2])
+        # #320 리뷰 — 규제 튜닝 전(#294 이전) 결과: 메타러너 선택만, 규제 · 격자는 말하지 않는다
+        self.assertIn("Validation Qini 로 메타러너를 골랐다 — 이 결과 파일에는 규제 선택 기록이 없다", lines[2])
+        self.assertNotIn("규제를 함께", "\n".join(lines))
+        self.assertNotIn("tuning.grid", "\n".join(lines))
         self.assertIn("참고 Test Qini(선택에 쓰지 않음)", lines[3])
 
     def test_uplift_states_are_told_apart(self) -> None:
@@ -253,6 +312,15 @@ class TestCliSelectionLines(unittest.TestCase):
         self.assertEqual("absent", cli.uplift_selection_state({})[0])
         self.assertIn("규제 max_depth=3에서의 메타러너별 점수 — 메타러너 × 규제 6개 조합 전체는 tuning.grid",
                       "\n".join(cli.uplift_selection_lines(selected, fmt)))
+        self.assertEqual("Validation Qini 로 메타러너 × 규제를 함께 골랐다", cli.uplift_selection_state(selected)[1])
+        single = {"best_method_selection": {**selected["best_method_selection"], "base_learner_is_current": True,
+                                            "tuning": {"enabled": False, "grid": [{}] * 2}},
+                  "tuning_report": {"selection_ok": True}}
+        self.assertEqual(("selected", "Validation Qini 로 메타러너를 골랐다 — 규제 후보가 하나라 규제는 고르지 않았다"),
+                         cli.uplift_selection_state(single))
+        text = "\n".join(cli.uplift_selection_lines(single, fmt))
+        self.assertIn("현행 규제에서의 메타러너별 점수", text)
+        self.assertNotIn("tuning.grid", text)
         text = "\n".join(cli.uplift_selection_lines(failed, fmt))
         self.assertIn("! Validation Qini 로 고르지 못했다 — 유효한 Validation Qini 가 없다", text)
         self.assertNotIn("선택 기준", text)                       # 빈 점수를 선택 근거처럼 적지 않는다

@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if __package__ in (None, ""):  # `python src/main.py` — sys.path[0] 이 src/ 라 `import src.…` 가 되지 않는다
@@ -422,11 +422,16 @@ def churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
     """#303 ML-011 — 이탈 모델을 **어떤 점수로** 골랐는지. 선택 점수와 참고 점수(무작위 CV)를 다른 줄에 적는다.
 
     무작위 CV 로 고른 실행은 무작위 CV 점수가 곧 선택 점수라 "참고" 줄이 없다. 정식이 아니면 그 이유를 적는다.
-    ``selection`` 블록이 없는 이전 판 결과는 ``selection_basis`` 가 알려 주는 범위까지 적는다(#320 리뷰).
+    ``selection`` 블록이 없는 이전 판 결과는 그 결과의 ``selection_basis`` · ``selection_metric`` 과 모델별 점수로
+    같은 블록을 다시 만들어 같은 형식으로 적는다 — 기준선은 선택 대상 밖에 둔다(#320 리뷰).
     """
     selection = churn.get("selection")
-    if not isinstance(selection, Mapping):
-        return _legacy_churn_selection_lines(churn, fmt)
+    legacy = not isinstance(selection, Mapping)
+    if legacy:
+        selection = _legacy_churn_selection(churn)
+        if selection is None:
+            return [f"  churn      선택 기준 {churn.get('selection_basis') or '—'} · 확정 {churn.get('best_proposed')} — "
+                    "이전 판 결과에 선택 기준 · 지표가 없어 어느 점수로 골랐는지 알 수 없다"]
     candidates = [c for c in selection.get("candidates") or [] if isinstance(c, Mapping)]
     proposed = " · ".join(f"{c.get('name')}{'*' if c.get('chosen') else ''} {fmt(c.get('selection_score'))}"
                           for c in candidates if c.get("eligible"))
@@ -434,6 +439,9 @@ def churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
                            for c in candidates if not c.get("eligible"))
     lines = [f"  churn      선택 기준 {selection.get('basis_label')}",
              f"             제안 {proposed} → 확정 {selection.get('chosen')} ({fmt(selection.get('chosen_score'))})"]
+    if legacy:
+        lines.insert(1, "             (이전 판 결과 — 선택 기록 블록이 없어 selection_basis · selection_metric 과 "
+                        "모델별 점수로 다시 적었다)")
     if baselines:
         lines.append(f"             기준선(선택 대상 아님) {baselines}")
     if selection.get("reference_label"):
@@ -445,31 +453,48 @@ def churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
     return lines
 
 
-def _legacy_churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
-    """``selection`` 블록이 없는 이전 판 결과 — ``selection_basis`` · ``selection_metric`` 이 알려 주는 범위까지만 적는다."""
-    basis = churn.get("selection_basis")
-    metric = churn.get("selection_metric") or "roc_auc"
+def _legacy_churn_selection(churn: Mapping[str, Any]) -> dict[str, Any] | None:
+    """#303 이전 결과의 ``selection_basis`` · ``selection_metric`` · 모델별 점수로 ``selection`` 블록을 다시 만든다.
+
+    규칙은 결정 모듈의 ``selection_record`` 와 같다(CLI 는 결정 모듈을 import 하지 않아 여기 다시 적는다) — 선택
+    대상은 제안 모델(``kind=proposed``)뿐이고 기준선은 점수만 싣는다. 정식은 시간 순서 검증 ∧ ROC-AUC(DR-303).
+    기준이나 지표가 결과에 없으면 None — 어느 점수로 골랐는지 추정하지 않는다(#320 리뷰).
+    """
+    basis, metric = churn.get("selection_basis"), churn.get("selection_metric")
+    if basis not in ("temporal_validation", "random_cv") or not metric:
+        return None
+    temporal = basis == "temporal_validation"
     label = METRIC_NAMES.get(metric, metric)
     chosen = churn.get("best_proposed")
-    models = [m for m in churn.get("models") or [] if isinstance(m, Mapping)]
 
-    def listing(score: Callable[[Mapping[str, Any]], Any]) -> str:
-        return " · ".join(f"{m.get('name')}{'*' if m.get('name') == chosen else ''} {fmt(score(m))}" for m in models)
+    def number(value: Any) -> float | None:
+        finite = isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
+        return float(value) if finite else None
 
-    def cv(m: Mapping[str, Any]) -> Any:
-        return ((m.get("cv") or {}).get(metric) or {}).get("mean")
+    def field(record: Any, key: str) -> Any:
+        return record.get(key) if isinstance(record, Mapping) else None
 
-    head = f"  churn      선택 기준 {basis or '—'} · 확정 {chosen} — 이전 판 결과(선택 기록 블록 없음)"
-    if basis == "temporal_validation":
-        return [head,
-                f"             선택 점수(시간 순서 검증 {label}) "
-                + listing(lambda m: (m.get("temporal_validation") or {}).get(metric)),
-                f"             참고 무작위 CV {label} 평균(선택에 쓰지 않음) {listing(cv)}"]
-    if basis == "random_cv":
-        return [head,
-                f"             선택 점수(무작위 CV {label} 평균) {listing(cv)}",
-                "             ! 정식 선택이 아니다 — 앞 기준일 데이터가 없는 개발 실행 (DR-303)"]
-    return [head, f"             무작위 CV {label} 평균 {listing(cv)} — 선택 기준이 결과에 없어 선택 점수인지 알 수 없다"]
+    candidates = []
+    for m in churn.get("models") or []:
+        if not isinstance(m, Mapping):
+            continue
+        cv = number(field(field(m.get("cv"), metric), "mean"))
+        candidates.append({"name": m.get("name"), "kind": m.get("kind"), "eligible": m.get("kind") == "proposed",
+                           "selection_score": number(field(m.get("temporal_validation"), metric)) if temporal else cv,
+                           "random_cv_score": cv, "chosen": m.get("name") == chosen})
+    official = temporal and metric == "roc_auc"
+    return {
+        "basis": basis, "metric": metric, "official": official,
+        "official_reason": (None if official else
+                            f"설정 지표 {label} 로 골랐다 — 정식 기준은 시간 순서 검증 ROC-AUC(DR-303)" if temporal else
+                            "앞 기준일 데이터가 없어 무작위 교차검증 평균으로 골랐다 — 개발 실행용"),
+        "basis_label": (f"시간 순서 검증 {label}" + ("" if official else " — 설정 지표, 정식 기준(ROC-AUC) 아님")
+                        if temporal else f"무작위 교차검증 {label} 평균 — 앞 기준일 데이터 없음(개발 실행용)"),
+        "reference_label": f"무작위 교차검증 {label} 평균 — 참고, 선택에 쓰지 않음" if temporal else None,
+        "chosen": chosen,
+        "chosen_score": next((c["selection_score"] for c in candidates if c["chosen"]), None),
+        "candidates": candidates,
+    }
 
 
 def uplift_selection_state(uplift: Mapping[str, Any]) -> tuple[str, str]:
@@ -487,11 +512,34 @@ def uplift_selection_state(uplift: Mapping[str, Any]) -> tuple[str, str]:
     if selection.get("best_method") is None or report.get("selection_ok") is False:
         reason = report.get("selection_reason") or selection.get("reason") or "유효한 Validation Qini 가 없다"
         return "not_selected", f"Validation Qini 로 고르지 못했다 — {reason}"
-    return "selected", "Validation Qini 로 메타러너 × 규제를 함께 골랐다"
+    record = uplift_regularization_record(selection)
+    if record == "joint":
+        return "selected", "Validation Qini 로 메타러너 × 규제를 함께 골랐다"
+    if record == "single":
+        return "selected", "Validation Qini 로 메타러너를 골랐다 — 규제 후보가 하나라 규제는 고르지 않았다"
+    return "selected", "Validation Qini 로 메타러너를 골랐다 — 이 결과 파일에는 규제 선택 기록이 없다"
 
 
-def uplift_regularization_note(selection: Mapping[str, Any]) -> str:
-    """Validation Qini 표가 어느 규제의 메타러너별 점수인지 — 격자 전체는 ``tuning.grid``(#320 리뷰)."""
+def uplift_regularization_record(selection: Mapping[str, Any]) -> str:
+    """규제 선택 기록 — ``joint``(메타러너 × 규제 격자를 함께 고름) · ``single``(규제 후보 하나) · ``none``.
+
+    ``tuning.grid`` 가 있어야 규제를 함께 골랐다고 쓴다. #294 이전 결과에는 ``tuning`` · ``base_learner`` 가 없어
+    메타러너 선택만 적는다(#320 리뷰). 후보가 하나뿐이면 결정 모듈이 ``tuning.enabled=false`` 로 남긴다.
+    """
+    tuning = selection.get("tuning")
+    if not isinstance(tuning, Mapping) or not isinstance(tuning.get("grid"), list):
+        return "none"
+    return "single" if tuning.get("enabled") is False else "joint"
+
+
+def uplift_regularization_note(selection: Mapping[str, Any]) -> str | None:
+    """Validation Qini 표가 어느 규제의 메타러너별 점수인지 — 격자 전체는 ``tuning.grid``(#320 리뷰).
+
+    규제 선택 기록이 없는 결과(#294 이전)는 None — 규제나 격자를 말하지 않는다.
+    """
+    record = uplift_regularization_record(selection)
+    if record == "none":
+        return None
     learner = selection.get("base_learner")
     if selection.get("base_learner_is_current"):
         shown = "현행 규제"
@@ -499,9 +547,10 @@ def uplift_regularization_note(selection: Mapping[str, Any]) -> str:
         shown = "규제 " + " · ".join(f"{k}={v}" for k, v in learner.items())
     else:
         shown = "고른 규제"
-    grid = (selection.get("tuning") or {}).get("grid") if isinstance(selection.get("tuning"), Mapping) else None
-    whole = f"메타러너 × 규제 {len(grid)}개 조합 전체는 tuning.grid" if isinstance(grid, list) else "격자 전체는 tuning.grid"
-    return f"{shown}에서의 메타러너별 점수 — {whole}"
+    if record == "single":
+        return f"{shown}에서의 메타러너별 점수"
+    grid = selection["tuning"]["grid"]
+    return f"{shown}에서의 메타러너별 점수 — 메타러너 × 규제 {len(grid)}개 조합 전체는 tuning.grid"
 
 
 def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
@@ -517,7 +566,8 @@ def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
         scores = " · ".join(f"{name}{'*' if name == chosen else ''} {fmt(value, 4)}"
                             for name, value in selection["validation_qini"].items())
         lines.append(f"             선택 기준 {selection.get('basis')} — {scores}")
-        lines.append(f"             {uplift_regularization_note(selection)}")
+        regularization = uplift_regularization_note(selection)
+        lines.append(f"             {regularization if regularization else note}")
     elif state != "selected":
         lines.append(f"             ! {note}")
     models = [m for m in uplift.get("models") or [] if isinstance(m, Mapping)]

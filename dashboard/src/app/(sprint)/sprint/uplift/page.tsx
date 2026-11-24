@@ -41,6 +41,11 @@ function selectionNote(a: UpliftEval, state: SelectionState): string {
     const why = a.tuning_report?.selection_reason ?? sel?.reason ?? "유효한 Validation Qini 가 없습니다";
     return `Validation Qini 로 고르지 못했습니다 — ${why}. 학습 방법은 기본값이고, 아래 '모델 비교'의 Test 지표도 선택 근거가 아닙니다.`;
   }
+  const test = "'모델 비교'의 Test 지표는 고른 뒤 보고만 합니다(DR-303).";
+  const grid = sel?.tuning?.grid;
+  if (!Array.isArray(grid)) {
+    return `학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 메타러너를 골랐습니다. 이 결과 파일에는 규제 선택 기록이 없어 아래 표는 메타러너별 점수만 보여 줍니다. ${test}`;
+  }
   const learner = sel?.base_learner;
   let shown = "고른 규제";
   if (sel?.base_learner_is_current) {
@@ -50,9 +55,10 @@ function selectionNote(a: UpliftEval, state: SelectionState): string {
       .map(([k, v]) => `${k}=${String(v)}`)
       .join(" · ")}`;
   }
-  const grid = sel?.tuning?.grid;
-  const whole = Array.isArray(grid) ? `메타러너 × 규제 ${grid.length}개 조합 전체` : "격자 전체";
-  return `학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 메타러너 × 규제를 함께 골랐습니다. 아래 표는 ${shown}에서의 메타러너별 점수이고, ${whole}는 결과 파일의 tuning.grid 에 있습니다. '모델 비교'의 Test 지표는 고른 뒤 보고만 합니다(DR-303).`;
+  if (sel?.tuning?.enabled === false) {
+    return `학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 메타러너를 골랐습니다(규제 후보가 하나라 규제는 고르지 않았습니다). 아래 표는 ${shown}에서의 메타러너별 점수입니다. ${test}`;
+  }
+  return `학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 메타러너 × 규제를 함께 골랐습니다. 아래 표는 ${shown}에서의 메타러너별 점수이고, 메타러너 × 규제 ${grid.length}개 조합 전체는 결과 파일의 tuning.grid 에 있습니다. ${test}`;
 }
 
 export default async function UpliftPage() {
