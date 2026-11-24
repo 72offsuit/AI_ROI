@@ -96,6 +96,22 @@ def _scores(n=300, seed=1):
     }
 
 
+#: 리뷰 반례용 계획비 — 작은 수라 손으로 검산할 수 있다.
+TINY_COST = {"T1": 1.0, "T2": 2.0, "T3": 12.0, "T4": 100.0}
+
+
+def _one(cate: dict) -> dict:
+    """고객 1명(S1 규칙 대상)의 점수 — CLV · margin_rate 를 1 로 두어 기대 증분가치 = CATE."""
+    idx = ["C00000001"]
+    return {
+        "cate": pd.DataFrame([cate], index=idx)[["T1", "T2", "T3", "T4"]].astype(float),
+        "clv": pd.Series(1.0, index=idx),
+        "days_since_last_purchase": pd.Series(60.0, index=idx),
+        "eligible": pd.Series(True, index=idx),
+        "margin_rate": 1.0,
+    }
+
+
 @unittest.skipUnless(DEPS, REASON)
 class TestBindingAndHybridWhatIf(unittest.TestCase):
     """#274 · DR-170 E1~E4 · E6 — 구속 예산 S4 대 S5 · 혼합 전략 S6 · 예산 근거."""
@@ -124,9 +140,11 @@ class TestBindingAndHybridWhatIf(unittest.TestCase):
         for r in out["rows"]:
             self.assertAlmostEqual(s4_cost * r["ratio_of_s4_cost"], r["budget_krw"])
             self.assertLessEqual(r["spend_krw"], r["budget_krw"] + 1e-6)
-        # 예산이 남으면(E1) 해석 문장을 싣는다
+        # 예산이 남으면(E1) 해석 문장 — 구속 여부와 배정 동일 여부를 따로 본다
         self.assertIs(False, out["binding_at_plan_budget"])
-        self.assertIn("추가 효과가 0", out["interpretation"])
+        self.assertEqual(out["same_assignment_at_plan_budget"], out["n_customers_assigned_differently"] == 0)
+        self.assertIn("예산이 남는다", out["interpretation"])
+        self.assertEqual(["S4", "S5"], [r["strategy_id"] for r in out["plan_budget_rows"]])
         self.assertIn("기대값", out["limitation"])
 
     def test_binding_flag_when_plan_budget_is_tight(self) -> None:
@@ -134,8 +152,36 @@ class TestBindingAndHybridWhatIf(unittest.TestCase):
 
         out = binding_what_if(self.s, COST, 20_000)
         self.assertIs(True, out["binding_at_plan_budget"])
-        self.assertIsNone(out["interpretation"])
+        self.assertIn("예산이 걸린다", out["interpretation"])
         self.assertLessEqual(out["s4_planned_cost_krw"], 20_000)
+
+    def test_slack_budget_still_compares_actual_s4_s5_assignments(self) -> None:
+        """PR #313 리뷰 반례 — 예산이 남아도 S5 탐욕 근사(효율 우선 · 업그레이드 1회)는 S4 와 다를 수 있다.
+
+        계획비 T1 · T2 · T3 = 1 · 2 · 12, 기대 증분가치 3 · 5 · 23, 예산 20 → S4 = T3(순이익 11), S5 = T2(3)."""
+        from src.decision.optimize import binding_what_if
+
+        out = binding_what_if(_one({"T1": 3.0, "T2": 5.0, "T3": 23.0, "T4": -1.0}), TINY_COST, 20.0)
+        self.assertIs(False, out["binding_at_plan_budget"])
+        self.assertIs(False, out["same_assignment_at_plan_budget"])
+        self.assertEqual(1, out["n_customers_assigned_differently"])
+        self.assertEqual({"S4": {"T3": 1}, "S5": {"T2": 1}},
+                         {r["strategy_id"]: r["treatment_mix"] for r in out["plan_budget_rows"]})
+        gap = out["s5_minus_s4_at_plan_budget"]
+        self.assertAlmostEqual(-8.0, gap["expected_net_diff_krw"])
+        self.assertEqual((1, 0), (gap["n_compared"], gap["n_excluded_unscored"]))
+        self.assertNotIn("추가 효과가 0", out["interpretation"])
+        self.assertIn("탐욕 근사", out["interpretation"])
+        self.assertIn("S5 − S4 = -8원", out["interpretation"])
+
+    def test_slack_budget_and_same_assignment_says_no_extra_effect(self) -> None:
+        from src.decision.optimize import binding_what_if
+
+        out = binding_what_if(_one({"T1": 3.0, "T2": -1.0, "T3": -1.0, "T4": -1.0}), TINY_COST, 20.0)
+        self.assertIs(False, out["binding_at_plan_budget"])
+        self.assertIs(True, out["same_assignment_at_plan_budget"])
+        self.assertAlmostEqual(0.0, out["s5_minus_s4_at_plan_budget"]["expected_net_diff_krw"])
+        self.assertIn("추가 효과가 0", out["interpretation"])
 
     def test_s5_not_worse_than_s4_when_budget_binds(self) -> None:
         """DR-145 「이 결정이 틀렸다면」 — 같은 예산에서 S5 < S4 면 탐욕 근사가 나쁘다. 이 데이터에서는 그렇지 않다."""
@@ -167,6 +213,39 @@ class TestBindingAndHybridWhatIf(unittest.TestCase):
         self.assertGreater(rows["S1"]["n_unscored"], 0)
         self.assertIn("결손", rows["S1"]["expectation_scope"])
         self.assertIsNotNone(out["comparability"])
+        # S1 대비 차이는 짝 비교 — 결손 고객은 비교에서 빠진다
+        self.assertEqual(rows["S1"]["n_unscored"], rows["S6"]["vs_S1_n_excluded_unscored"])
+        self.assertEqual(rows["S1"]["n_scored"], rows["S6"]["vs_S1_n_compared"])
+
+    def test_vs_s1_is_paired_on_customers_scored_in_both(self) -> None:
+        """PR #313 리뷰 반례 — 같은 고객 1명, T3 점수만 없다. S1 합은 비고 S6 은 T1(순이익 9)을 고른다.
+
+        두 합을 따로 내 빼면 9 가 나오지만 범위가 다른 수끼리 뺀 것이다 — 짝 비교로는 비교할 고객이 0명이라 None."""
+        from src.decision.optimize import hybrid_what_if
+
+        s = _one({"T1": 10.0, "T2": np.nan, "T3": np.nan, "T4": np.nan})
+        out = hybrid_what_if(s, TINY_COST, TINY_COST["T3"])
+        rows = {r["row_id"]: r for r in out["rows"]}
+        self.assertEqual({"T3": 1}, rows["S1"]["treatment_mix"])
+        self.assertEqual({"T1": 1}, rows["S6"]["treatment_mix"])
+        self.assertIsNone(rows["S1"]["expected_net_krw"])            # 배정 1명 · 점수 0명 — 0 이 아니다
+        self.assertIsNone(rows["S1"]["expected_conversion"])
+        self.assertAlmostEqual(9.0, rows["S6"]["expected_net_krw"])
+        self.assertIsNone(rows["S6"]["expected_net_vs_S1_krw"])
+        self.assertEqual((0, 1), (rows["S6"]["vs_S1_n_compared"], rows["S6"]["vs_S1_n_excluded_unscored"]))
+        self.assertIsNotNone(out["comparability"])
+
+    def test_paired_difference_equals_total_difference_without_missing_scores(self) -> None:
+        from src.decision.optimize import hybrid_what_if
+
+        s = dict(self.s, cate=self.s["cate"].fillna(0.01))
+        out = hybrid_what_if(s, COST, self.c_rule)
+        base = out["rows"][0]
+        for r in out["rows"]:
+            self.assertEqual(0, r["vs_S1_n_excluded_unscored"], r["row_id"])
+            self.assertAlmostEqual(r["expected_net_krw"] - base["expected_net_krw"], r["expected_net_vs_S1_krw"],
+                                   places=4, msg=r["row_id"])
+        self.assertIsNone(out["comparability"])
 
     def test_ext_spends_the_saved_budget_outside_the_rule(self) -> None:
         """확장(E4)은 규칙 밖 고객에게만 — 규칙 대상과 겹치면 합친 배정의 대상 수가 S6 + 추가 수보다 작아진다."""
@@ -211,6 +290,15 @@ class TestBindingAndHybridWhatIf(unittest.TestCase):
         self.assertAlmostEqual(10_000.0 - 7030.0, out["expected_net_krw"])
         self.assertEqual(1, out["n_unscored"])
         self.assertAlmostEqual(0.1, out["expected_conversion"])
+        # 배정은 있는데 점수 있는 고객이 0명 — 빈 합 0 이 아니라 계산 불가
+        none = assignment_expectation({"C2": "T3"}, gain, COST, conv)
+        self.assertEqual((None, None, None), (none["expected_gain_krw"], none["expected_net_krw"],
+                                              none["expected_conversion"]))
+        self.assertEqual((0, 1), (none["n_scored"], none["n_unscored"]))
+        self.assertIn("0명", none["expectation_scope"])
+        # 배정이 0명이면 기대값은 관측된 0 이다
+        empty = assignment_expectation({}, gain, COST, conv)
+        self.assertEqual((0.0, 0.0), (empty["expected_net_krw"], empty["expected_conversion"]))
 
     def test_budget_rationale(self) -> None:
         from src.decision.optimize import budget_rationale

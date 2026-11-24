@@ -301,7 +301,7 @@ def plan_S5(scores, budget_krw, costs) -> dict[str, str]:
     return optimize_budget(gain, costs, budget_krw)
 
 
-def _s6_choices(scores, costs, sid: str = "S6") -> tuple[list[tuple[str, str]], dict[str, Any]]:
+def _s6_choices(scores, costs, sid: str = "S6") -> tuple[list[tuple[str, str]], dict[str, Any], set[str]]:
     """S6(D-1) 의 고객 순서와 처치 — 대상 = S1 규칙 대상 전원(상한 없음, 같은 순서), 처치 = 고객별
     ``CATE_t × 가치 − cost_t`` 최대 t. 모든 선택지가 음수여도 고른다(보낼지는 규칙이 정한다).
     점수 결손 고객은 규칙 처치(T3)를 받고 ``n_rule_fallback`` 으로 센다 — 0 으로 채우지 않는다.
@@ -323,7 +323,7 @@ def _s6_choices(scores, costs, sid: str = "S6") -> tuple[list[tuple[str, str]], 
         "n_changed_from_rule": sum(1 for _, t in order if t != rule_t),
         "rule_treatment": rule_t,
     }
-    return order, detail
+    return order, detail, {cid for cid in targets if not scored[cid]}
 
 
 def _fill_in_order(order: list[tuple[str, str]], budget_krw: float, costs: Mapping[str, Any]) -> dict[str, str]:
@@ -345,22 +345,36 @@ def plan_S6(scores, budget_krw, costs) -> dict[str, str]:
     예산 상한은 C_rule 이다. T3 가 가장 비싼 처치라 C_rule 에서는 아무도 잘리지 않는다. 더 작은 예산이면
     S1 순서대로 넘기기 직전까지(``plan_S1`` 과 같다)."""
     _need_budget(budget_krw, costs, "S6")
-    order, _ = _s6_choices(scores, costs)
+    order, _, _ = _s6_choices(scores, costs)
     return _fill_in_order(order, budget_krw, costs)
+
+
+#: s6_breakdown 필드가 가리키는 대상(PR #313 리뷰) — 예산으로 자르기 전 후보인지, 자른 뒤 배정인지.
+S6_COUNT_BASIS = {
+    "candidates": ("n_rule_targets · n_rule_fallback · n_changed_from_rule — 예산으로 자르기 전, "
+                   "S1 규칙 대상 전원(후보) 기준"),
+    "assigned": ("n_assigned · n_dropped_by_budget · n_rule_fallback_assigned · n_changed_from_rule_assigned · "
+                 "planned_cost_krw · treatment_mix — 예산으로 자른 뒤 배정 기준"),
+}
 
 
 def s6_breakdown(scores: Mapping[str, Any], budget_krw: float, costs: Mapping[str, Any]) -> dict[str, Any]:
     """S6 배정의 구성 — 규칙 대상 수 · 규칙 처치(T3)에서 바뀐 수 · 결손으로 규칙 처치를 받은 수 · 예산으로 잘린 수.
 
-    ``plan`` 과 같은 검사(필수 점수 · Eligible 거르기)를 거친다."""
+    후보(예산 자르기 전) 기준 수와 배정(자른 뒤) 기준 수를 따로 싣는다 — ``count_basis`` 가 어느 쪽인지 적는다.
+    C_rule 에서는 아무도 잘리지 않아 두 기준이 같다. ``plan`` 과 같은 검사(필수 점수 · Eligible 거르기)를 거친다."""
     _need_budget(budget_krw, costs, "S6")
     pool = _prepared("S6", scores)
-    order, detail = _s6_choices(pool, costs)
+    order, detail, fallback = _s6_choices(pool, costs)
     assigned = _fill_in_order(order, budget_krw, costs)
+    rule_t = detail["rule_treatment"]
     detail["n_assigned"] = len(assigned)
     detail["n_dropped_by_budget"] = len(order) - len(assigned)
+    detail["n_rule_fallback_assigned"] = sum(1 for cid in assigned if cid in fallback)
+    detail["n_changed_from_rule_assigned"] = sum(1 for t in assigned.values() if t != rule_t)
     detail["planned_cost_krw"] = sum(float(costs[t]) for t in assigned.values())
     detail["treatment_mix"] = plan_summary(assigned)["treatment_mix"]
+    detail["count_basis"] = dict(S6_COUNT_BASIS)
     return detail
 
 

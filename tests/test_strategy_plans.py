@@ -208,6 +208,24 @@ class TestHybridS6(unittest.TestCase):
         nxt = list(full)[len(a)]
         self.assertGreater(sum(COSTS[t] for t in a.values()) + COSTS[full[nxt]], budget)
 
+    def test_breakdown_separates_candidate_and_assigned_counts(self) -> None:
+        """PR #313 리뷰 — 대체 · 변경 수는 후보 기준, 배정 수는 자른 뒤 기준. 둘을 따로 싣고 어느 쪽인지 적는다."""
+        from src.decision.strategies import s6_breakdown
+
+        full = plan("S6", self.s, self.c_rule, COSTS)
+        budget = sum(COSTS[t] for t in full.values()) / 2
+        b = s6_breakdown(self.s, budget, COSTS)
+        a = plan("S6", self.s, budget, COSTS)
+        self.assertGreater(b["n_dropped_by_budget"], 0)
+        self.assertEqual(sum(1 for t in a.values() if t != "T3"), b["n_changed_from_rule_assigned"])
+        self.assertLessEqual(b["n_changed_from_rule_assigned"], b["n_changed_from_rule"])
+        self.assertLessEqual(b["n_rule_fallback_assigned"], b["n_rule_fallback"])
+        self.assertEqual({"candidates", "assigned"}, set(b["count_basis"]))
+        self.assertIn("자르기 전", b["count_basis"]["candidates"])
+        at_c_rule = s6_breakdown(self.s, self.c_rule, COSTS)       # C_rule 에서는 잘리지 않아 두 기준이 같다
+        self.assertEqual(at_c_rule["n_changed_from_rule"], at_c_rule["n_changed_from_rule_assigned"])
+        self.assertEqual(at_c_rule["n_rule_fallback"], at_c_rule["n_rule_fallback_assigned"])
+
     def test_without_ai_scores_s6_is_not_run(self) -> None:
         for key in ("cate", "clv", "margin_rate"):
             s = {k: v for k, v in self.s.items() if k != key}
@@ -279,9 +297,14 @@ class TestRoi(unittest.TestCase):
         self.assertAlmostEqual(-40.0, better["incremental_marketing_cost"])
         worse = summarize_strategy({"id": "S4", "marketing_cost": 60.0, "contribution_profit": 290.0}, self.BASE)
         self.assertEqual("cheaper_and_worse", worse["roi_case"])
-        self.assertIn("이익 감소", worse["roi_case_note"])
+        self.assertIn("S1 보다 비용 절감 · 이익 감소", worse["roi_case_note"])
         same = summarize_strategy({"id": "S4", "marketing_cost": 100.0, "contribution_profit": 300.0}, self.BASE)
         self.assertEqual("cheaper_and_worse", same["roi_case"])   # 증분이익 0 은 '더 큰 이익' 이 아니다
+        # PR #313 리뷰 — 설명은 실제 부호를 따른다(S1 자기 비교 0 · 0 을 '절감 · 감소'로 쓰지 않는다)
+        self.assertIn("S1 과 같은 비용 · 같은 이익", same["roi_case_note"])
+        self.assertNotIn("절감", same["roi_case_note"])
+        flat = summarize_strategy({"id": "S4", "marketing_cost": 100.0, "contribution_profit": 290.0}, self.BASE)
+        self.assertIn("S1 과 같은 비용 · 이익 감소", flat["roi_case_note"])
 
     def test_roi_case_is_empty_when_roi_is_defined_or_inputs_missing(self) -> None:
         r = summarize_strategy({"id": "S3", "marketing_cost": 150.0, "contribution_profit": 340.0}, self.BASE)

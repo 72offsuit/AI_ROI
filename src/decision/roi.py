@@ -220,18 +220,24 @@ def summarize_strategy(metrics: Mapping[str, Any], baseline_metrics: Mapping[str
 
 
 #: DR-170 E5 — 추가 마케팅비 ≤ 0 일 때의 구분. 정의(분모)는 바꾸지 않는다.
+#: 구분값의 범위. 행마다 실제 부호 · 동률은 ``roi_case_note`` 가 말한다(PR #313 리뷰 — S1 자기 비교 0 · 0 을
+#: "비용 절감 · 이익 감소"로 쓰지 않는다).
 ROI_CASES: dict[str, str] = {
     "cheaper_and_better": "S1 보다 적거나 같은 비용으로 더 큰 이익 — ROI 는 정의상 계산 불가",
-    "cheaper_and_worse": "S1 보다 비용 절감 · 이익 감소 — ROI 는 정의상 계산 불가",
+    "cheaper_and_worse": "S1 보다 적거나 같은 비용 · 이익이 같거나 감소 — ROI 는 정의상 계산 불가",
 }
 
 
 def _roi_case(inc: float | None, dcost: float | None) -> tuple[str | None, str | None]:
-    """두 값이 다 있고 추가 마케팅비 ≤ 0 일 때만 구분한다. 그 밖에는 (None, None) — 사유는 ``roi_status`` 에 있다."""
+    """두 값이 다 있고 추가 마케팅비 ≤ 0 일 때만 구분한다. 그 밖에는 (None, None) — 사유는 ``roi_status`` 에 있다.
+
+    설명은 실제 부호를 따른다 — 비용은 절감 · 같음, 이익은 증가 · 같음 · 감소."""
     if inc is None or dcost is None or dcost > 0:
         return None, None
     case = "cheaper_and_better" if inc > 0 else "cheaper_and_worse"
-    return case, ROI_CASES[case]
+    cost = "S1 보다 비용 절감" if dcost < 0 else "S1 과 같은 비용"
+    profit = "더 큰 이익" if inc > 0 else ("같은 이익" if inc == 0 else "이익 감소")
+    return case, f"{cost} · {profit} — ROI 는 정의상 계산 불가"
 
 
 def _verdict(triggered: bool | None, basis: dict[str, str | None], reason: str | None) -> dict[str, Any]:
