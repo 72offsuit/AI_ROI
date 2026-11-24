@@ -71,9 +71,11 @@ class ComparisonProtocol:
             if any(set(groups[i]) & set(groups[j]) for i in range(3) for j in range(i)):
                 raise SequenceContractError('without temporal origins customer sets must be disjoint')
         elif isinstance(self.origins, TemporalOrigins):
-            # Each role has unique IDs at one origin. Strictly separated origins
-            # therefore give disjoint (customer, origin) pairs across roles.
             self.origins.validate()
+            # Customers may return at a later Validation origin; Test holds out customers.
+            train_ids, validation_ids, test_ids = groups
+            if not set(test_ids).isdisjoint(set(train_ids).union(validation_ids)):
+                raise SequenceContractError('Test customers must be disjoint from Train and Validation')
         else:
             raise SequenceContractError('invalid temporal origin evidence')
 

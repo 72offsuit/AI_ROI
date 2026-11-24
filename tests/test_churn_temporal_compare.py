@@ -20,7 +20,7 @@ def protocol(ids, *, purpose='synthetic'):
     from src.decision.churn_dl_compare import ComparisonProtocol, TemporalOrigins
 
     return ComparisonProtocol('temporal-example', 'fixture-v1', 'simulator', purpose, 'fixture',
-                              ids, ids[::-1], ids, origins=TemporalOrigins(PRIOR, T1, T2))
+                              ids, ids[::-1], ('T2-only-1', 'T2-only-2'), origins=TemporalOrigins(PRIOR, T1, T2))
 
 
 def with_coverage_run(batch, run_id):
@@ -34,6 +34,16 @@ def with_coverage_run(batch, run_id):
 
 @unittest.skipUnless(BASE, 'BLOCKED: numpy/pandas/sklearn/PyYAML required')
 class TemporalComparisonTests(unittest.TestCase):
+    def test_temporal_protocol_rejects_test_customers_from_either_earlier_role(self):
+        from src.decision.churn_sequence import SequenceContractError
+
+        # One returning customer is valid across Train and Validation.
+        p = replace(protocol(('shared', 'train-only')), validation_ids=('shared', 'validation-only'))
+        for overlap in ('train-only', 'validation-only', 'shared'):
+            with self.subTest(overlap=overlap):
+                with self.assertRaisesRegex(SequenceContractError, 'Test customers must be disjoint'):
+                    replace(p, test_ids=('new', overlap))
+
     def test_same_customers_recur_only_at_distinct_valid_origins(self):
         from src.decision.churn_dl_compare import TemporalOrigins
 

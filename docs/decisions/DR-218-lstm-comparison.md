@@ -109,13 +109,13 @@ PR #279·#280과 공통 파일을 함께 수정하면 저장·평가 계약이 �
 ### 공통 시간 분할로 변경 (2026-11-23)
 
 [시스템 팀 합의](https://github.com/72offsuit/AI_ROI/issues/218#issuecomment-7081897616)와
-[Plan PR #6의 PRD §43.1·SRS SPLIT-004](https://github.com/72offsuit/Plan/pull/6)에 따른다.
-Plan PR은 이번 작업 기준에서 미병합이고, 초안의 SPLIT-001에는 여전히 고객 단독 분리 문구가 있어
-문서 정합성은 리드에게 남긴다. #218 실행에서는 합의한 고객·기준일 쌍을 표본의 식별 단위로 쓴다.
+[11/24 리드 검토](https://github.com/72offsuit/AI_ROI/pull/317#pullrequestreview-6033454227)에 따른다.
+[Plan #6의 SRS SPLIT-001·004](https://github.com/72offsuit/Plan/blob/b1c633263308ce459a844d0796dc41fd0f4b9b75/AI_Customer_Retention_ROI_SRS_v2.0.md)에 따라
+학습·검증은 (고객, 기준일) 쌍으로 분리하고, 과제 Test에서는 학습·검증에 참여한 고객을 모두 제외한다.
 
 - 선택 실험은 `t_prior`에서 적합하고 `t1` 무처치 고객에서 검증한다. 두 모델이 각 기준일에서
   같은 명부와 라벨을 사용한다. `t_prior`의 42일 라벨 창은 `t1`에서 끝난다.
-- 같은 고객은 다른 기준일에 다시 등장할 수 있다. 한 모델의 적합과 평가에 같은 고객·기준일 쌍이
+- 같은 고객은 학습과 검증에서 다른 기준일에 다시 등장할 수 있다. 한 모델의 적합과 평가에 같은 고객·기준일 쌍이
   중복되면 거부한다. 시간대가 달라도 같은 순간이면 같은 기준일이다. 라벨 창이 다음 기준일에
   걸치면 거부한다. 5-Fold는 보고용이다. 이 비교에서 무작위 CV를 선택의 대체 근거로 쓰지 않는다.
 - #303에 맞춰 모델 선택과 시간 분할 앙상블 후보의 1차 점수는 시간 순서 검증 ROC-AUC로 한다.
@@ -123,7 +123,9 @@ Plan PR은 이번 작업 기준에서 미병합이고, 초안의 SPLIT-001에는
   가중치를 선택한다. 기존 합성 인터페이스의 log loss 선택은 유지한다.
 - 선택 후에는 `t1` 무처치 표본으로 ML을 적합하고, LSTM은 동결한 epoch 수만큼 다시 적합한다.
   선택 실험의 `t1` 검증 확률과 최종 `t1` 학습 모델을 구분한다. 최종 적합에 Test를 전달하지 않는다.
-- `t2` 무처치 Test는 GATE 3의 선택 동결 뒤 한 번 사용한다. Final Holdout은 GATE 4의 별도 seed다.
+- 과제 Test는 `t2` 무처치 적격 고객 중 `t_prior` 학습·`t1` 검증 고객을 모두 제외한 명부로 고정하고 GATE 3의 선택 동결 뒤 한 번 평가한다.
+  같은 무처치 적격 고객 중 학습·검증에 참여했던 고객은 DR-179의 기존 고객 미래 평가(`future_existing`)에 속한다.
+  [#319 명부의 역할 정의](https://github.com/72offsuit/AI_ROI/blob/c16f6e86648a5b60c7fed87ed329e5cdcd1289fc/docs/decisions/DR-218-common-roster.md#L49-L52)를 따른다. Final Holdout은 GATE 4의 별도 seed다.
   이번 소비 경로는 Train/Validation만 연결한다. Test 명부 자체와 그 결과 라벨은 다른 입력이다.
 - 정식 비교는 GATE 1 봉인 입력을 쓴다. 인성이 제공할 기준일별 명부, `t_prior`/`t1` Feature Store,
   관측 근거를 인수한다. `SP-20261112-134424-95f2164e`는 개발 연결·자원 확인용으로만 사용한다.
