@@ -12,9 +12,48 @@ import { fmtDec, fmtInt, fmtInterval, fmtSigned, isNum, outcomeName } from "@/li
 import { CurveChart, IntervalChart } from "@/components/sprint/charts";
 import { Section, SprintGate, SprintHeader, TableWrap, TD, TDR, TH, THR } from "@/components/sprint/SprintFrame";
 import { KindTag, Txt, Val } from "@/components/sprint/Value";
+import type { UpliftEval } from "@/lib/artifacts/sprint-types";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "스프린트 결과 · Uplift" };
+
+type SelectionState = "selected" | "not_selected" | "loaded" | "absent";
+
+/**
+ * How the fitted method was decided, from metadata the file already has (#320 review): a loaded
+ * model, a Validation-Qini choice, or no usable Validation Qini (the run then fits the default).
+ */
+function selectionState(a: UpliftEval): SelectionState {
+  if (a.model_source || a.loaded_from) return "loaded";
+  const sel = a.best_method_selection;
+  if (!sel) return "absent";
+  if (sel.best_method == null || a.tuning_report?.selection_ok === false) return "not_selected";
+  return "selected";
+}
+
+function selectionNote(a: UpliftEval, state: SelectionState): string {
+  const sel = a.best_method_selection;
+  if (state === "loaded") {
+    return `불러온 모델입니다 — 이 실행에서 다시 고르지 않았습니다(학습 실행 ${a.trained_run ?? "—"}).`;
+  }
+  if (state === "absent") return "이 결과 파일에는 학습 방법을 고른 기록이 없습니다.";
+  if (state === "not_selected") {
+    const why = a.tuning_report?.selection_reason ?? sel?.reason ?? "유효한 Validation Qini 가 없습니다";
+    return `Validation Qini 로 고르지 못했습니다 — ${why}. 학습 방법은 기본값이고, 아래 '모델 비교'의 Test 지표도 선택 근거가 아닙니다.`;
+  }
+  const learner = sel?.base_learner;
+  let shown = "고른 규제";
+  if (sel?.base_learner_is_current) {
+    shown = "현행 규제";
+  } else if (learner && Object.keys(learner).length > 0) {
+    shown = `규제 ${Object.entries(learner)
+      .map(([k, v]) => `${k}=${String(v)}`)
+      .join(" · ")}`;
+  }
+  const grid = sel?.tuning?.grid;
+  const whole = Array.isArray(grid) ? `메타러너 × 규제 ${grid.length}개 조합 전체` : "격자 전체";
+  return `학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 메타러너 × 규제를 함께 골랐습니다. 아래 표는 ${shown}에서의 메타러너별 점수이고, ${whole}는 결과 파일의 tuning.grid 에 있습니다. '모델 비교'의 Test 지표는 고른 뒤 보고만 합니다(DR-303).`;
+}
 
 export default async function UpliftPage() {
   const source = sprintSource();
@@ -33,6 +72,7 @@ export default async function UpliftPage() {
   const models = a.models ?? [];
   const ks = Array.from(new Set(models.flatMap((m) => Object.keys(m.uplift_at_k ?? {}))));
   const outcome = outcomeName(a.primary_outcome, a.outcome_window_days);
+  const state = selectionState(a);
 
   return (
     <div className="flex flex-col gap-lg">
@@ -117,15 +157,12 @@ export default async function UpliftPage() {
         )}
       </Section>
 
-      <Section
-        title="모델 선택"
-        note="학습 방법은 학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 골랐습니다. 아래 '모델 비교'의 Test 지표는 고른 뒤 보고만 합니다(DR-303)."
-      >
+      <Section title="모델 선택" note={selectionNote(a, state)}>
         <p className="text-body-sm text-text">
           학습 방법 · <Txt text={a.fitted_method} /> (
           <Txt text={a.fitted_method_source} />)
         </p>
-        {a.best_method_selection?.validation_qini ? (
+        {state === "selected" && a.best_method_selection?.validation_qini ? (
           <TableWrap label="Uplift 후보별 Validation Qini 표">
             <thead>
               <tr>
@@ -147,12 +184,12 @@ export default async function UpliftPage() {
               ))}
             </tbody>
           </TableWrap>
-        ) : (
-          <p className="text-body-sm text-text-secondary">이 결과 파일에는 Validation Qini 가 없습니다.</p>
-        )}
-        <p className="text-caption text-text-secondary">
-          기준 · <Txt text={a.best_method_selection?.basis} />
-        </p>
+        ) : null}
+        {state === "selected" ? (
+          <p className="text-caption text-text-secondary">
+            기준 · <Txt text={a.best_method_selection?.basis} />
+          </p>
+        ) : null}
       </Section>
 
       <Section title="모델 비교 — Test (선택 뒤 보고만)">

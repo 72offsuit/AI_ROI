@@ -35,7 +35,7 @@ import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if __package__ in (None, ""):  # `python src/main.py` — sys.path[0] 이 src/ 라 `import src.…` 가 되지 않는다
@@ -414,17 +414,19 @@ def _mirror_into_latest(run_dir: Path, names: list[str]) -> None:
                 shutil.copyfile(run_dir / name, latest / name)
 
 
+#: 결과 파일의 지표 키 → 표시 이름(CLI 는 결정 모듈을 import 하지 않는다).
+METRIC_NAMES = {"roc_auc": "ROC-AUC", "pr_auc": "PR-AUC", "f1": "F1"}
+
+
 def churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
     """#303 ML-011 — 이탈 모델을 **어떤 점수로** 골랐는지. 선택 점수와 참고 점수(무작위 CV)를 다른 줄에 적는다.
 
-    ``selection`` 블록이 없는 이전 판 결과는 기준 이름과 무작위 CV 점수를 "참고"로 적는다 — 선택 점수인 척하지 않는다.
+    무작위 CV 로 고른 실행은 무작위 CV 점수가 곧 선택 점수라 "참고" 줄이 없다. 정식이 아니면 그 이유를 적는다.
+    ``selection`` 블록이 없는 이전 판 결과는 ``selection_basis`` 가 알려 주는 범위까지 적는다(#320 리뷰).
     """
     selection = churn.get("selection")
     if not isinstance(selection, Mapping):
-        cv = " · ".join(f"{m.get('name')} {fmt(((m.get('cv') or {}).get('roc_auc') or {}).get('mean'))}"
-                        for m in churn.get("models") or [])
-        return [f"  churn      선택 기준 {churn.get('selection_basis') or '—'} · 확정 {churn.get('best_proposed')}",
-                f"             참고 무작위 CV ROC-AUC {cv} — 선택 점수 표시는 이 판 결과에 없다"]
+        return _legacy_churn_selection_lines(churn, fmt)
     candidates = [c for c in selection.get("candidates") or [] if isinstance(c, Mapping)]
     proposed = " · ".join(f"{c.get('name')}{'*' if c.get('chosen') else ''} {fmt(c.get('selection_score'))}"
                           for c in candidates if c.get("eligible"))
@@ -438,19 +440,86 @@ def churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
         reference = " · ".join(f"{c.get('name')} {fmt(c.get('random_cv_score'))}" for c in candidates)
         lines.append(f"             참고 {selection['reference_label']} — {reference}")
     if not selection.get("official"):
-        lines.append("             ! 정식 선택 기준(시간 순서 검증)이 아니다 — 개발 실행용(DR-303)")
+        reason = selection.get("official_reason") or "정식 기준(시간 순서 검증 ROC-AUC)으로 고른 실행이 아니다"
+        lines.append(f"             ! 정식 선택이 아니다 — {reason} (DR-303)")
     return lines
 
 
-def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
-    """#303 ML-011 — Uplift 학습 방법과 고른 점수(Validation Qini). Test Qini 는 참고로 따로 적는다."""
-    lines = [f"  uplift     학습 방법 {uplift.get('fitted_method')} ({uplift.get('fitted_method_source')})"]
+def _legacy_churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
+    """``selection`` 블록이 없는 이전 판 결과 — ``selection_basis`` · ``selection_metric`` 이 알려 주는 범위까지만 적는다."""
+    basis = churn.get("selection_basis")
+    metric = churn.get("selection_metric") or "roc_auc"
+    label = METRIC_NAMES.get(metric, metric)
+    chosen = churn.get("best_proposed")
+    models = [m for m in churn.get("models") or [] if isinstance(m, Mapping)]
+
+    def listing(score: Callable[[Mapping[str, Any]], Any]) -> str:
+        return " · ".join(f"{m.get('name')}{'*' if m.get('name') == chosen else ''} {fmt(score(m))}" for m in models)
+
+    def cv(m: Mapping[str, Any]) -> Any:
+        return ((m.get("cv") or {}).get(metric) or {}).get("mean")
+
+    head = f"  churn      선택 기준 {basis or '—'} · 확정 {chosen} — 이전 판 결과(선택 기록 블록 없음)"
+    if basis == "temporal_validation":
+        return [head,
+                f"             선택 점수(시간 순서 검증 {label}) "
+                + listing(lambda m: (m.get("temporal_validation") or {}).get(metric)),
+                f"             참고 무작위 CV {label} 평균(선택에 쓰지 않음) {listing(cv)}"]
+    if basis == "random_cv":
+        return [head,
+                f"             선택 점수(무작위 CV {label} 평균) {listing(cv)}",
+                "             ! 정식 선택이 아니다 — 앞 기준일 데이터가 없는 개발 실행 (DR-303)"]
+    return [head, f"             무작위 CV {label} 평균 {listing(cv)} — 선택 기준이 결과에 없어 선택 점수인지 알 수 없다"]
+
+
+def uplift_selection_state(uplift: Mapping[str, Any]) -> tuple[str, str]:
+    """#320 리뷰 — Uplift 학습 방법이 어떻게 정해졌나. (상태, 설명) — 상태는 selected · not_selected · loaded · absent.
+
+    기존 메타데이터만 읽는다: 불러온 모델 기록(``model_source`` · ``loaded_from``), ``best_method_selection.best_method``,
+    ``tuning_report.selection_ok`` · ``selection_reason``. 고르지 못하면 실행 루프는 기본 학습 방법을 쓴다.
+    """
+    if uplift.get("model_source") or uplift.get("loaded_from"):
+        return "loaded", f"불러온 모델 — 이 실행에서 다시 고르지 않았다(학습 실행 {uplift.get('trained_run') or '—'})"
     selection = uplift.get("best_method_selection")
-    if isinstance(selection, Mapping) and selection.get("validation_qini"):
+    if not isinstance(selection, Mapping):
+        return "absent", "선택 기록이 이 결과 파일에 없다"
+    report = uplift.get("tuning_report") if isinstance(uplift.get("tuning_report"), Mapping) else {}
+    if selection.get("best_method") is None or report.get("selection_ok") is False:
+        reason = report.get("selection_reason") or selection.get("reason") or "유효한 Validation Qini 가 없다"
+        return "not_selected", f"Validation Qini 로 고르지 못했다 — {reason}"
+    return "selected", "Validation Qini 로 메타러너 × 규제를 함께 골랐다"
+
+
+def uplift_regularization_note(selection: Mapping[str, Any]) -> str:
+    """Validation Qini 표가 어느 규제의 메타러너별 점수인지 — 격자 전체는 ``tuning.grid``(#320 리뷰)."""
+    learner = selection.get("base_learner")
+    if selection.get("base_learner_is_current"):
+        shown = "현행 규제"
+    elif isinstance(learner, Mapping) and learner:
+        shown = "규제 " + " · ".join(f"{k}={v}" for k, v in learner.items())
+    else:
+        shown = "고른 규제"
+    grid = (selection.get("tuning") or {}).get("grid") if isinstance(selection.get("tuning"), Mapping) else None
+    whole = f"메타러너 × 규제 {len(grid)}개 조합 전체는 tuning.grid" if isinstance(grid, list) else "격자 전체는 tuning.grid"
+    return f"{shown}에서의 메타러너별 점수 — {whole}"
+
+
+def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
+    """#303 ML-011 — Uplift 학습 방법과 고른 점수(Validation Qini). Test Qini 는 참고로 따로 적는다.
+
+    고르지 못했거나(기본 학습 방법) 불러온 모델이면 Validation Qini 로 골랐다고 쓰지 않고 그 사유를 적는다(#320 리뷰).
+    """
+    lines = [f"  uplift     학습 방법 {uplift.get('fitted_method')} ({uplift.get('fitted_method_source')})"]
+    state, note = uplift_selection_state(uplift)
+    selection = uplift.get("best_method_selection")
+    if state == "selected" and isinstance(selection, Mapping) and selection.get("validation_qini"):
         chosen = selection.get("best_method")
         scores = " · ".join(f"{name}{'*' if name == chosen else ''} {fmt(value, 4)}"
                             for name, value in selection["validation_qini"].items())
         lines.append(f"             선택 기준 {selection.get('basis')} — {scores}")
+        lines.append(f"             {uplift_regularization_note(selection)}")
+    elif state != "selected":
+        lines.append(f"             ! {note}")
     models = [m for m in uplift.get("models") or [] if isinstance(m, Mapping)]
     if models:
         lines.append("             참고 Test Qini(선택에 쓰지 않음) — "

@@ -56,7 +56,10 @@ export interface SelectionCandidate {
 export interface ChurnSelection {
   basis?: string | null;
   metric?: string | null;
+  /** True only for temporal validation scored by ROC-AUC (DR-303); otherwise `official_reason` says why not. */
   official?: boolean | null;
+  official_reason?: string | null;
+  official_criterion?: string | null;
   basis_label?: string | null;
   reference_label?: string | null;
   chosen?: string | null;
@@ -74,6 +77,7 @@ export interface ChurnEval extends SprintHeader {
   importance_method?: string | null;
   best_proposed?: string | null;
   selection_basis?: string | null;
+  selection_metric?: string | null;
   /** Absent in result files written before #303 — the screen then says so instead of guessing. */
   selection?: ChurnSelection | null;
 }
@@ -101,11 +105,22 @@ export interface UpliftEval extends SprintHeader {
   fitted_method_source?: string | null;
   /** Chosen by Validation Qini — Test Qini in `models` is reported after the choice, not used for it. */
   best_method_selection?: {
+    /** Null when no candidate had a usable Validation Qini — the run then fits the default method. */
     best_method?: string | null;
     basis?: string | null;
+    reason?: string | null;
+    /** Per meta-learner at the chosen regularization only; the full grid is `tuning.grid`. */
     validation_qini?: Record<string, number | null> | null;
+    base_learner?: Record<string, unknown> | null;
+    base_learner_is_current?: boolean | null;
+    tuning?: { grid?: { config_id?: number | null; method?: string | null; qini?: number | null }[] | null } | null;
     n_validation?: number | null;
   } | null;
+  tuning_report?: { selection_ok?: boolean | null; selection_reason?: string | null } | null;
+  /** Present when the model was loaded instead of fitted in this run (`--load-models`). */
+  model_source?: string | null;
+  loaded_from?: string | null;
+  trained_run?: string | null;
   arms?: Record<string, number | null>;
   ate?: Record<string, { value?: number | null; ci95?: [number | null, number | null] | null } | null>;
   models?: {

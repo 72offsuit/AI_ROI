@@ -23,6 +23,33 @@ const METRICS: { key: string; label: string; domain?: [number, number] }[] = [
   { key: "lift_at_10", label: "Lift@10%" },
 ];
 
+/**
+ * What the selection section and the CV table say depends on what the file says the model was
+ * chosen by (#320 review): with no earlier-origin data the random-CV mean *is* the selection score.
+ */
+function selectionNotes(basis: string | null | undefined): { selection: string; cv: string; legacy: string } {
+  const secondary = "보조 지표(상위 20% 리프트 · ECE)는 같은 데이터에서 함께 보고 선택을 바꾸지 않습니다.";
+  if (basis === "random_cv") {
+    return {
+      selection: `이 실행은 앞 기준일 데이터가 없어 무작위 교차검증 평균으로 골랐습니다 — 아래 '선택 점수'가 곧 무작위 교차검증 점수입니다. 개발 실행용이라 정식 선택(GATE 3)에 쓰지 않습니다(DR-303). ${secondary}`,
+      cv: "이 실행은 이 교차검증 평균으로 모델을 골랐습니다(앞 기준일 데이터 없음 · 개발 실행용). 같은 데이터로 튜닝 · 비교한 점수라 낙관적입니다.",
+      legacy: "무작위 교차검증 평균으로 골랐습니다 — 아래 교차검증 표가 선택 점수입니다(개발 실행용).",
+    };
+  }
+  if (basis === "temporal_validation") {
+    return {
+      selection: `확정 모델은 아래 '선택 점수'(시간 순서 검증)로 골랐습니다. 무작위 교차검증 점수는 참고이며 선택에 쓰지 않았습니다(DR-303). ${secondary}`,
+      cv: "참고 지표입니다. 같은 데이터로 튜닝 · 비교한 점수라 낙관적이고, 모델 선택에는 위 '모델 선택'의 점수(시간 순서 검증)를 썼습니다.",
+      legacy: "시간 순서 검증으로 골랐습니다 — 아래 교차검증 표는 참고입니다.",
+    };
+  }
+  return {
+    selection: "이 결과 파일에는 어떤 점수로 골랐는지 적혀 있지 않습니다.",
+    cv: "같은 데이터로 튜닝 · 비교한 점수라 낙관적입니다. 이 결과 파일에는 선택 기준이 적혀 있지 않습니다.",
+    legacy: "선택 기준이 적혀 있지 않아 아래 교차검증 표가 선택 점수인지 알 수 없습니다.",
+  };
+}
+
 export default async function ChurnPage() {
   const source = sprintSource();
   const churn = await loadSprint("churn_eval");
@@ -66,7 +93,7 @@ export default async function ChurnPage() {
 
           <Section
             title="모델 선택"
-            note="확정 모델은 아래 '선택 점수'로 골랐습니다. 무작위 교차검증 점수는 참고이며 선택에 쓰지 않았습니다(DR-303). 보조 지표(상위 20% 리프트 · ECE)는 같은 데이터에서 함께 보고 선택을 바꾸지 않습니다."
+            note={selectionNotes(churn.artifact.selection?.basis ?? churn.artifact.selection_basis).selection}
           >
             {churn.artifact.selection ? (
               <>
@@ -92,7 +119,9 @@ export default async function ChurnPage() {
                 </dl>
                 {churn.artifact.selection.official === false ? (
                   <p className="text-body-sm text-text-secondary">
-                    정식 선택 기준(시간 순서 검증)이 아닙니다 — 앞 기준일 데이터가 없는 개발 실행입니다.
+                    정식 선택이 아닙니다 —{" "}
+                    {churn.artifact.selection.official_reason ??
+                      "정식 기준(시간 순서 검증 ROC-AUC)으로 고른 실행이 아닙니다"}
                   </p>
                 ) : null}
                 <TableWrap label="후보별 선택 점수 표">
@@ -104,7 +133,9 @@ export default async function ChurnPage() {
                       <th className={THR}>선택 점수</th>
                       <th className={THR}>상위 20% 리프트</th>
                       <th className={THR}>ECE</th>
-                      <th className={THR}>참고 · 무작위 CV</th>
+                      {churn.artifact.selection.reference_label ? (
+                        <th className={THR}>참고 · 무작위 CV</th>
+                      ) : null}
                     </tr>
                   </thead>
                   <tbody>
@@ -133,9 +164,11 @@ export default async function ChurnPage() {
                         <td className={TDR}>
                           <Val text={fmtDec(c.ece)} />
                         </td>
-                        <td className={TDR}>
-                          <Val text={fmtDec(c.random_cv_score)} />
-                        </td>
+                        {churn.artifact.selection?.reference_label ? (
+                          <td className={TDR}>
+                            <Val text={fmtDec(c.random_cv_score)} />
+                          </td>
+                        ) : null}
                       </tr>
                     ))}
                   </tbody>
@@ -144,14 +177,15 @@ export default async function ChurnPage() {
             ) : (
               <p className="text-body-sm text-text">
                 이 결과 파일에는 후보별 선택 점수가 없습니다(#303 이전 실행). 선택 기준{" "}
-                <Txt text={churn.artifact.selection_basis} /> · 확정 <Txt text={churn.artifact.best_proposed} />
+                <Txt text={churn.artifact.selection_basis} /> · 확정 <Txt text={churn.artifact.best_proposed} /> —{" "}
+                {selectionNotes(churn.artifact.selection_basis).legacy}
               </p>
             )}
           </Section>
 
           <Section
             title="모델 비교 — 무작위 교차검증 (평균 ± 표준편차)"
-            note="참고 지표입니다. 같은 데이터로 튜닝 · 비교한 점수라 낙관적이고, 모델 선택에는 위 '모델 선택'의 점수를 썼습니다."
+            note={selectionNotes(churn.artifact.selection?.basis ?? churn.artifact.selection_basis).cv}
           >
             <TableWrap label="이탈 모델 교차검증 지표 표">
               <thead>

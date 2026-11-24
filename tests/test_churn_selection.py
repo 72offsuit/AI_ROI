@@ -98,11 +98,24 @@ class TestSelectionRecord(unittest.TestCase):
         record = selection_record(self.MODELS, "random_cv", "roc_auc", "random_forest", 5)
         rows = {r["name"]: r for r in record["candidates"]}
         self.assertFalse(record["official"])
-        self.assertIsNone(record["reference_label"])
+        self.assertIn("무작위 교차검증", record["official_reason"])
+        self.assertIsNone(record["reference_label"])             # 무작위 CV 가 곧 선택 점수 — 참고 열이 없다
         self.assertIn("개발 실행용", record["basis_label"])
         self.assertEqual(0.806, rows["random_forest"]["selection_score"])
         self.assertEqual(1, rows["random_forest"]["rank"])
         self.assertIsNone(rows["random_forest"]["lift_at_20"])      # CV 평균에 없는 지표는 None — 0 이 아니다
+
+    def test_other_configured_metric_is_not_official(self) -> None:
+        """#320 리뷰 — 설정이 허용하는 PR-AUC 로 고르면 시간 순서 검증이어도 정식 선택이 아니다."""
+        from src.decision.churn import selection_record
+
+        models = [{**m, "temporal_validation": {**m["temporal_validation"], "pr_auc": 0.3}} for m in self.MODELS]
+        record = selection_record(models, "temporal_validation", "pr_auc", "random_forest", 5)
+        self.assertFalse(record["official"])
+        self.assertIn("PR-AUC", record["official_reason"])
+        self.assertIn("ROC-AUC", record["official_criterion"])
+        self.assertIn("정식 기준(ROC-AUC) 아님", record["basis_label"])
+        self.assertIsNone(selection_record(self.MODELS, "temporal_validation", "roc_auc", "hist_gb", 5)["official_reason"])
 
 
 @unittest.skipUnless(HAVE_ML, SKIP_REASON)
@@ -178,15 +191,35 @@ class TestCliSelectionLines(unittest.TestCase):
         self.assertNotIn("0.806", lines[1])
         self.assertNotIn("개발 실행용", text)
 
-    def test_old_results_do_not_pretend_to_show_selection_scores(self) -> None:
+    def test_old_results_follow_their_selection_basis(self) -> None:
+        """#320 리뷰 — 이전 판 결과는 selection_basis 가 알려 주는 대로: 무작위 CV 로 골랐으면 그 점수가 선택 점수다."""
         from src import main as cli
 
-        churn = {"selection_basis": "temporal_validation", "best_proposed": "xgboost",
-                 "models": [{"name": "random_forest", "cv": {"roc_auc": {"mean": 0.806}}}]}
+        models = [{"name": "random_forest", "cv": {"roc_auc": {"mean": 0.806}}, "temporal_validation": {"roc_auc": 0.70}},
+                  {"name": "xgboost", "cv": {"roc_auc": {"mean": 0.78}}, "temporal_validation": {"roc_auc": 0.74}}]
+        temporal = cli.churn_selection_lines({"selection_basis": "temporal_validation", "best_proposed": "xgboost",
+                                              "models": models}, fmt)
+        self.assertIn("확정 xgboost", temporal[0])
+        self.assertIn("선택 점수(시간 순서 검증 ROC-AUC) random_forest 0.700 · xgboost* 0.740", temporal[1])
+        self.assertIn("참고 무작위 CV ROC-AUC 평균(선택에 쓰지 않음) random_forest 0.806", temporal[2])
+        random = cli.churn_selection_lines({"selection_basis": "random_cv", "best_proposed": "random_forest",
+                                            "models": models}, fmt)
+        text = "\n".join(random)
+        self.assertIn("선택 점수(무작위 CV ROC-AUC 평균) random_forest* 0.806", text)
+        self.assertNotIn("참고", text)
+        self.assertIn("정식 선택이 아니다", text)
+        unknown = "\n".join(cli.churn_selection_lines({"best_proposed": "xgboost", "models": models}, fmt))
+        self.assertIn("선택 점수인지 알 수 없다", unknown)
+
+    def test_new_results_chosen_by_random_cv_have_no_reference_line(self) -> None:
+        from src import main as cli
+        from src.decision.churn import selection_record
+
+        churn = {"selection": selection_record(TestSelectionRecord.MODELS, "random_cv", "roc_auc", "random_forest", 5)}
         text = "\n".join(cli.churn_selection_lines(churn, fmt))
-        self.assertIn("확정 xgboost", text)
-        self.assertIn("참고 무작위 CV ROC-AUC random_forest 0.806", text)
-        self.assertIn("이 판 결과에 없다", text)
+        self.assertIn("random_forest* 0.806", text)
+        self.assertNotIn("참고", text)
+        self.assertIn("! 정식 선택이 아니다 — 앞 기준일 데이터가 없어 무작위 교차검증 평균으로 골랐다", text)
 
     def test_uplift_lines_show_validation_qini_and_test_as_reference(self) -> None:
         from src import main as cli
@@ -197,7 +230,34 @@ class TestCliSelectionLines(unittest.TestCase):
                   "models": [{"name": "s_learner", "qini": 0.009}, {"name": "t_learner", "qini": 0.011}]}
         lines = cli.uplift_selection_lines(uplift, fmt)
         self.assertIn("선택 기준 validation Qini — t_learner* 0.0123 · x_learner 0.0101", lines[1])
-        self.assertIn("참고 Test Qini(선택에 쓰지 않음)", lines[2])
+        self.assertIn("고른 규제에서의 메타러너별 점수", lines[2])
+        self.assertIn("참고 Test Qini(선택에 쓰지 않음)", lines[3])
+
+    def test_uplift_states_are_told_apart(self) -> None:
+        """#320 리뷰 — 선택 성공 · 선택 불가(기본 학습 방법) · 불러온 모델을 기존 메타데이터로 구분한다."""
+        from src import main as cli
+
+        selected = {"best_method_selection": {"best_method": "x_learner", "basis": "validation Qini",
+                                              "validation_qini": {"t_learner": 0.01, "x_learner": 0.02},
+                                              "base_learner": {"max_depth": 3}, "base_learner_is_current": False,
+                                              "tuning": {"grid": [{}] * 6}},
+                    "tuning_report": {"selection_ok": True}}
+        failed = {"fitted_method": "t_learner", "fitted_method_source": "fit_uplift 기본값 (평가 결과에 best_method 없음)",
+                  "best_method_selection": {"best_method": None, "basis": "validation Qini",
+                                            "validation_qini": {"t_learner": None, "x_learner": None}},
+                  "tuning_report": {"selection_ok": False, "selection_reason": "유효한 Validation Qini 가 없다 — 현행값을 쓴다"}}
+        loaded = {"model_source": "loaded (재학습 없음)", "loaded_from": "models/x", "trained_run": "SP-1"}
+        self.assertEqual("selected", cli.uplift_selection_state(selected)[0])
+        self.assertEqual("not_selected", cli.uplift_selection_state(failed)[0])
+        self.assertEqual("loaded", cli.uplift_selection_state(loaded)[0])
+        self.assertEqual("absent", cli.uplift_selection_state({})[0])
+        self.assertIn("규제 max_depth=3에서의 메타러너별 점수 — 메타러너 × 규제 6개 조합 전체는 tuning.grid",
+                      "\n".join(cli.uplift_selection_lines(selected, fmt)))
+        text = "\n".join(cli.uplift_selection_lines(failed, fmt))
+        self.assertIn("! Validation Qini 로 고르지 못했다 — 유효한 Validation Qini 가 없다", text)
+        self.assertNotIn("선택 기준", text)                       # 빈 점수를 선택 근거처럼 적지 않는다
+        self.assertIn("불러온 모델 — 이 실행에서 다시 고르지 않았다(학습 실행 SP-1)",
+                      "\n".join(cli.uplift_selection_lines(loaded, fmt)))
 
 
 if __name__ == "__main__":

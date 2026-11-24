@@ -584,9 +584,13 @@ SELECTION_RULE: dict[str, str] = {
     "secondary": "상위 20% 리프트 · 보정(ECE · Brier) — 같은 데이터에서 함께 싣고 선택을 바꾸지 않는다",
     "fallback": "앞 기준일 데이터가 없으면 무작위 교차검증 평균 — 개발 실행용, 정식 선택(GATE 3)에는 쓰지 않는다",
     "not_used": "무작위 교차검증(시간 순서 검증이 있을 때는 참고) · 시간 홀드아웃(t2) · 과제 Test · Final Holdout",
+    "official": "정식(official) = 시간 순서 검증 · ROC-AUC 로 고른 실행뿐 — 다른 설정 지표(PR-AUC 등)나 무작위 CV 로 고른 실행은 개발용",
     "decision": "docs/decisions/DR-303-model-selection.md",
 }
 METRIC_LABELS = {"roc_auc": "ROC-AUC", "pr_auc": "PR-AUC", "f1": "F1"}
+#: DR-303 정식 선택 지표. 설정(``tuning.metric``)이 다른 지표를 허용해도 그 실행은 정식 선택이 아니다(#320 리뷰).
+OFFICIAL_METRIC = "roc_auc"
+OFFICIAL_CRITERION = "시간 순서 검증 ROC-AUC(DR-303)"
 
 
 def _finite(value: Any) -> float | None:
@@ -602,6 +606,8 @@ def selection_record(models: list[dict], basis: str, metric: str, chosen: str, n
     ``selection_score`` 는 선택에 쓴 점수(시간 순서 검증, 없으면 무작위 CV 평균)이고 ``random_cv_score`` 는 참고다.
     ``rank`` 는 제안 모델 안에서 선택 점수 순위(동점은 후보 순서 — ``max`` 가 고르는 순서와 같다). 기준선은 순위가 없다.
     보조 지표(상위 20% 리프트 · ECE · Brier)는 선택과 같은 데이터에서 싣고 선택을 바꾸지 않는다.
+    ``official`` 은 시간 순서 검증 **그리고** ROC-AUC 일 때만 참이다 — 아니면 ``official_reason`` 에 왜 아닌지 적는다.
+    무작위 CV 로 고른 실행은 무작위 CV 점수가 곧 선택 점수라 ``reference_label`` 이 없다.
     """
     def on_basis(model: dict, key: str) -> float | None:
         if basis == "temporal_validation":
@@ -619,10 +625,19 @@ def selection_record(models: list[dict], basis: str, metric: str, chosen: str, n
         row["rank"] = rank
     label = METRIC_LABELS.get(metric, metric)
     temporal = basis == "temporal_validation"
+    official = temporal and metric == OFFICIAL_METRIC
+    if official:
+        reason = None
+    elif not temporal:
+        reason = "앞 기준일 데이터가 없어 무작위 교차검증 평균으로 골랐다 — 개발 실행용"
+    else:
+        reason = f"설정 지표 {label} 로 골랐다 — 정식 기준은 {OFFICIAL_CRITERION}"
     return {
         "rule": dict(SELECTION_RULE),
-        "basis": basis, "metric": metric, "official": temporal,
-        "basis_label": (f"시간 순서 검증 {label}(t_prior 학습 → t1 평가)" if temporal else
+        "basis": basis, "metric": metric, "official": official,
+        "official_reason": reason, "official_criterion": OFFICIAL_CRITERION,
+        "basis_label": (f"시간 순서 검증 {label}(t_prior 학습 → t1 평가)"
+                        + ("" if metric == OFFICIAL_METRIC else " — 설정 지표, 정식 기준(ROC-AUC) 아님") if temporal else
                         f"무작위 {n_folds}-Fold 교차검증 {label} 평균 — 앞 기준일 데이터 없음(개발 실행용)"),
         "reference_label": (f"무작위 {n_folds}-Fold 교차검증 {label} 평균 — 참고, 선택에 쓰지 않음" if temporal else None),
         "chosen": chosen,
