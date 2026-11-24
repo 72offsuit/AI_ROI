@@ -144,6 +144,104 @@ class TestEligibleIsTheCommonPool(unittest.TestCase):
         self.assertEqual({"C2": "T3"}, a)
 
 
+@unittest.skipUnless(DEPS, REASON)
+class TestHybridS6(unittest.TestCase):
+    """S6 Rule + AI — #274 D-1 · DR-170 E3. 대상은 S1 규칙, 처치는 AI(CATE × 가치 − 비용 최대)."""
+
+    def setUp(self) -> None:
+        self.s = scores()
+        self.s1 = plan("S1", self.s, None, COSTS)
+        self.c_rule = len(self.s1) * COSTS["T3"]
+
+    def _net(self, cid):
+        value = float(self.s["clv"][cid]) * 0.3
+        return {t: float(self.s["cate"].at[cid, t]) * value - COSTS[t] for t in ("T1", "T2", "T3", "T4")}
+
+    def test_same_customers_and_order_as_s1_at_c_rule(self) -> None:
+        a = plan("S6", self.s, self.c_rule, COSTS)
+        self.assertTrue(self.s1, "S1 대상이 비면 이 검사는 공허하다")
+        self.assertEqual(list(self.s1), list(a))
+        self.assertLessEqual(sum(COSTS[t] for t in a.values()), self.c_rule)
+
+    def test_treatment_is_the_best_expected_net(self) -> None:
+        a = plan("S6", self.s, self.c_rule, COSTS)
+        nan_rows = set(self.s["cate"].index[20:25])
+        checked = 0
+        for cid, t in a.items():
+            if cid in nan_rows:
+                continue
+            net = self._net(cid)
+            self.assertEqual(max(net, key=net.get), t, cid)
+            checked += 1
+        self.assertGreater(checked, 0)
+
+    def test_rule_decides_who_even_when_every_option_loses(self) -> None:
+        """역효과(CATE < 0) 고객도 규칙 대상이면 보낸다 — 순손실이 가장 작은(가장 싼) 처치로."""
+        dogs = [cid for cid in self.s["cate"].index[:20] if cid in self.s1]
+        self.assertTrue(dogs, "규칙 대상 안에 역효과 고객이 있어야 이 검사가 의미 있다")
+        a = plan("S6", self.s, self.c_rule, COSTS)
+        for cid in dogs:
+            self.assertEqual("T4", a[cid], cid)
+
+    def test_missing_scores_fall_back_to_the_rule_treatment(self) -> None:
+        from src.decision.strategies import s6_breakdown
+
+        a = plan("S6", self.s, self.c_rule, COSTS)
+        fallback = [cid for cid in self.s["cate"].index[20:25] if cid in self.s1]
+        self.assertTrue(fallback, "규칙 대상 안에 결손 고객이 있어야 이 검사가 의미 있다")
+        for cid in fallback:
+            self.assertEqual("T3", a[cid])
+        detail = s6_breakdown(self.s, self.c_rule, COSTS)
+        self.assertEqual(len(fallback), detail["n_rule_fallback"])
+        self.assertEqual(len(self.s1), detail["n_rule_targets"])
+        self.assertEqual(0, detail["n_dropped_by_budget"])
+        self.assertEqual(sum(1 for t in a.values() if t != "T3"), detail["n_changed_from_rule"])
+        self.assertEqual(plan_summary(a)["treatment_mix"], detail["treatment_mix"])
+
+    def test_smaller_budget_stops_in_rule_order(self) -> None:
+        """S1 과 같은 예산 규칙 — 순서대로 넘기기 직전에 멈춘다(뒤의 싼 고객으로 채우지 않는다)."""
+        full = plan("S6", self.s, self.c_rule, COSTS)
+        budget = sum(COSTS[t] for t in full.values()) / 2   # S6 은 T3 보다 싼 처치를 고르기도 해 C_rule 비율로는 안 잘릴 수 있다
+        a = plan("S6", self.s, budget, COSTS)
+        self.assertEqual(list(full)[:len(a)], list(a))
+        self.assertLess(len(a), len(full))
+        nxt = list(full)[len(a)]
+        self.assertGreater(sum(COSTS[t] for t in a.values()) + COSTS[full[nxt]], budget)
+
+    def test_breakdown_separates_candidate_and_assigned_counts(self) -> None:
+        """PR #313 리뷰 — 대체 · 변경 수는 후보 기준, 배정 수는 자른 뒤 기준. 둘을 따로 싣고 어느 쪽인지 적는다."""
+        from src.decision.strategies import s6_breakdown
+
+        full = plan("S6", self.s, self.c_rule, COSTS)
+        budget = sum(COSTS[t] for t in full.values()) / 2
+        b = s6_breakdown(self.s, budget, COSTS)
+        a = plan("S6", self.s, budget, COSTS)
+        self.assertGreater(b["n_dropped_by_budget"], 0)
+        self.assertEqual(sum(1 for t in a.values() if t != "T3"), b["n_changed_from_rule_assigned"])
+        self.assertLessEqual(b["n_changed_from_rule_assigned"], b["n_changed_from_rule"])
+        self.assertLessEqual(b["n_rule_fallback_assigned"], b["n_rule_fallback"])
+        self.assertEqual({"candidates", "assigned"}, set(b["count_basis"]))
+        self.assertIn("자르기 전", b["count_basis"]["candidates"])
+        at_c_rule = s6_breakdown(self.s, self.c_rule, COSTS)       # C_rule 에서는 잘리지 않아 두 기준이 같다
+        self.assertEqual(at_c_rule["n_changed_from_rule"], at_c_rule["n_changed_from_rule_assigned"])
+        self.assertEqual(at_c_rule["n_rule_fallback"], at_c_rule["n_rule_fallback_assigned"])
+
+    def test_without_ai_scores_s6_is_not_run(self) -> None:
+        for key in ("cate", "clv", "margin_rate"):
+            s = {k: v for k, v in self.s.items() if k != key}
+            with self.subTest(missing=key), self.assertRaises(NotComputable):
+                plan("S6", s, self.c_rule, COSTS)
+
+    def test_s6_stays_inside_eligible(self) -> None:
+        s = dict(self.s)
+        idx = s["churn_p"].index
+        s["eligible"] = pd.Series([i % 2 == 0 for i in range(len(idx))], index=idx)
+        a = plan("S6", s, 10**9, COSTS)
+        self.assertTrue(a)
+        self.assertEqual(set(plan("S1", s, None, COSTS)), set(a))
+        self.assertTrue(all(int(cid[1:]) % 2 == 0 for cid in a))
+
+
 class TestMissingScores(unittest.TestCase):
     """필요한 점수가 없으면 판별 가능한 예외 — 빈 배정으로 대신하지 않는다 (표준 라이브러리)."""
 
@@ -188,6 +286,31 @@ class TestRoi(unittest.TestCase):
         r = summarize_strategy({"id": "S5", "marketing_cost": 100.0, "contribution_profit": 310.0}, self.BASE)
         self.assertIsNone(r["roi"])
         self.assertIn("계산 불가", r["roi_status"])
+
+    def test_roi_case_when_extra_cost_is_not_positive(self) -> None:
+        """#274 · DR-170 E5 — 분모 ≤ 0 이면 ROI 는 계산 불가 그대로, 구분만 더한다. 두 값은 함께 싣는다."""
+        better = summarize_strategy({"id": "S5", "marketing_cost": 60.0, "contribution_profit": 310.0}, self.BASE)
+        self.assertIsNone(better["roi"])
+        self.assertEqual("cheaper_and_better", better["roi_case"])
+        self.assertIn("더 큰 이익", better["roi_case_note"])
+        self.assertAlmostEqual(10.0, better["incremental_profit_vs_S1"])
+        self.assertAlmostEqual(-40.0, better["incremental_marketing_cost"])
+        worse = summarize_strategy({"id": "S4", "marketing_cost": 60.0, "contribution_profit": 290.0}, self.BASE)
+        self.assertEqual("cheaper_and_worse", worse["roi_case"])
+        self.assertIn("S1 보다 비용 절감 · 이익 감소", worse["roi_case_note"])
+        same = summarize_strategy({"id": "S4", "marketing_cost": 100.0, "contribution_profit": 300.0}, self.BASE)
+        self.assertEqual("cheaper_and_worse", same["roi_case"])   # 증분이익 0 은 '더 큰 이익' 이 아니다
+        # PR #313 리뷰 — 설명은 실제 부호를 따른다(S1 자기 비교 0 · 0 을 '절감 · 감소'로 쓰지 않는다)
+        self.assertIn("S1 과 같은 비용 · 같은 이익", same["roi_case_note"])
+        self.assertNotIn("절감", same["roi_case_note"])
+        flat = summarize_strategy({"id": "S4", "marketing_cost": 100.0, "contribution_profit": 290.0}, self.BASE)
+        self.assertIn("S1 과 같은 비용 · 이익 감소", flat["roi_case_note"])
+
+    def test_roi_case_is_empty_when_roi_is_defined_or_inputs_missing(self) -> None:
+        r = summarize_strategy({"id": "S3", "marketing_cost": 150.0, "contribution_profit": 340.0}, self.BASE)
+        self.assertEqual((None, None), (r["roi_case"], r["roi_case_note"]))
+        r = summarize_strategy({"id": "S2", "marketing_cost": 60.0, "contribution_profit": None}, self.BASE)
+        self.assertEqual((None, None), (r["roi_case"], r["roi_case_note"]))
 
     def test_missing_profit_propagates_none(self) -> None:
         r = summarize_strategy({"id": "S2", "marketing_cost": 120.0, "contribution_profit": None}, self.BASE)

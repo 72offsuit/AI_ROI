@@ -170,6 +170,10 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "segment_stats": ("src.decision.segments", "segment_stats"),
     "what_if": ("src.decision.optimize", "what_if"),
     "what_if_budgets": ("src.decision.optimize", "what_if_budgets"),
+    # #274 · DR-170 E1~E4 · E6 — 구속 예산 S4 대 S5 · 혼합 전략 S6(D-1) · 예산 근거 표시
+    "binding_what_if": ("src.decision.optimize", "binding_what_if"),
+    "hybrid_what_if": ("src.decision.optimize", "hybrid_what_if"),
+    "budget_rationale": ("src.decision.optimize", "budget_rationale"),
     "summarize_strategy": ("src.decision.roi", "summarize_strategy"),
     "analyze_ab": ("src.decision.ab_test", "analyze_ab"),
     # #214 — 저장 · 불러오기 · 평가만 · NFR-01 버전
@@ -1300,6 +1304,30 @@ def call_plan(strategy: str, scores: Mapping[str, Any], budget: Any, costs: Any)
         raise
 
 
+def what_if_section(key: str, scores: Mapping[str, Any], costs: Any, budget: Any) -> dict[str, Any]:
+    """#274 What-if 절 하나. 필요한 점수가 없으면(``NotComputable``) **그 절만** not_run 이고 다른 절은 그대로 낸다."""
+    try:
+        return dict(decision_fn(key)(scores, costs, budget))
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:
+        if type(error).__name__ == "NotComputable":
+            return {"status": "not_run", "reason": f"NotComputable: {error}"}
+        raise
+
+
+def budget_rationale_record(budget: Mapping[str, Any], s1_entry: Mapping[str, Any] | None,
+                            s0_entry: Mapping[str, Any] | None) -> dict[str, Any]:
+    """DR-170 E6 · SRS OPT-007 — C_rule 을 고객당 단가 · 매출 대비 비율로도 적는다. 매출 = S0 분기의 측정 매출(표시용)."""
+    try:
+        fn = decision_fn("budget_rationale")
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    s0_metrics = (s0_entry or {}).get("metrics") or {}
+    return {"status": "ok", **fn(budget.get("c_rule_planned_krw"), (s1_entry or {}).get("n_targeted"),
+                                 s0_metrics.get("measured_revenue"))}
+
+
 def _strategy_name(strategy: str) -> str | None:
     try:
         module = importlib.import_module(DECISION_API["plan"][0])
@@ -2334,6 +2362,8 @@ def run(config: SprintConfig) -> Path:
             if strategy == BASELINE_STRATEGY:
                 # S1 이 끝난 직후 — 성공했든 아니든 S2~S5 의 예산을 정하고 근거를 남긴다.
                 ctx["budget"] = resolve_budget(config.budget_krw, entry if log.ok(name) else None, basis)
+                ctx["budget"]["rationale"] = budget_rationale_record(
+                    ctx["budget"], entry if log.ok(name) else None, strategy_results.get("S0"))
                 comparison["budget"] = ctx["budget"]
                 if ctx["budget"]["planning_budget_krw"] is None:
                     _log(f"  S2~S5 예산 없음 — {ctx['budget']['reason']}")
@@ -2372,6 +2402,13 @@ def run(config: SprintConfig) -> Path:
                 "definition": "expected_gain = CATE(retention) × CLV × margin_rate, 비용 = planning_costs",
                 "rows": decision_fn("what_if")(budgets, gain, costs, expected_conversion=cate),
             }
+            # #274 · DR-170 E1 · E2 — 예산이 걸리는 구간(S4 계획 비용 × 0.25 · 0.5 · 0.75)에서 S4(자르기) 대 S5(최적화)
+            comparison["what_if"]["binding"] = what_if_section("binding_what_if", scores, costs, base_budget)
+            # #274 · DR-170 E3 · E4 — 같은 예산 C_rule 에서 규칙만(S1) · 규칙 + AI(S6, D-1) · AI 만(S4 · S5). 분기 실측은 #305
+            c_rule = (ctx.get("budget") or {}).get("c_rule_planned_krw")
+            comparison["what_if"]["hybrid"] = (
+                what_if_section("hybrid_what_if", scores, costs, c_rule) if c_rule is not None else
+                {"status": "not_run", "reason": "C_rule 없음 — S6 은 S1 규칙 대상과 같은 예산(C_rule)이 전제다(DR-170 E3)"})
 
         # ROI 요약 — 기준 S1 --------------------------------------------------
         with log.stage("roi_summary", requires=(f"strategy_{BASELINE_STRATEGY}",)):
