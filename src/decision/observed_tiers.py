@@ -5,14 +5,15 @@
 
 | 축 | 열 | 근거 값 | 구간 |
 |---|---|---|---|
-| 가치 등급 | ``value_tier`` | ``spend_180d`` — 창 안 주문 금액 합 | 등급 모집단 구매 고객의 50 · 80 분위수 → 하위 50% · 중위 30% · 상위 20% |
+| 가치 등급 | ``value_tier`` | ``spend_180d`` — 창 안 주문 금액 합 | 등급 모집단 구매 고객의 50 · 80 분위수 경계 → 50분위 경계 미만 · 50~80 · 80분위 경계 이상 |
 | 구매 횟수 | ``frequency_tier`` | ``orders_180d`` — 창 안 주문 수 | 1회 · 2~4회 · 5~12회 · 13회 이상 |
 | 가입 시기 | ``signup_tier`` | ``tenure_days`` — T0 날짜 − 가입일(KST) | 180일 미만 신규 · 이상 기존 |
 | 주 구매 상품군 | ``category_tier`` | 창 안 품목 금액이 가장 큰 상품군(비중 ``main_category_share``) | 5종, 금액이 같으면 ``Category`` 순서 |
 
 - 창은 ``[T0 − 180일, T0)`` 다(`sprint_table` 창과 같은 규약). 창 안 주문이 없으면 가치 ``V0_NONE`` ·
   횟수 ``F0_NONE`` · 상품군 ``NONE`` 이다 — 관측된 0 이다.
-- 근거가 결손이면 ``UNKNOWN`` 이고 사유를 attrs 에 남긴다. 다른 값으로 메우지 않는다.
+- 근거가 결손이면 ``UNKNOWN`` 이고 사유를 attrs 에 남긴다. 다른 값으로 메우지 않는다. 상품군은 창 안
+  주문의 품목 · 상품군 · 금액을 **일부라도** 모르면 ``UNKNOWN`` · 비중 결손이다 — 남은 품목으로 확정하지 않는다.
 - 주문은 ``purchase`` 이벤트이고 같은 ``order_id`` 는 1건이다(`sprint_table._orders` 와 같은 규칙).
 - 가입일은 교환 묶음 고객 명부, 품목은 교환 묶음 ``order_items``, 상품 → 상품군은 T0 미만 이벤트의
   ``product_id`` · ``category`` 다(교환 계약 v1 · 이벤트 스키마 — 공개 계약만).
@@ -43,8 +44,9 @@ DECISION = "docs/decisions/DR-221-observed-tiers.md"
 
 #: 창 길이(일). 가치 · 횟수 · 상품군이 같은 창을 쓴다.
 WINDOW_DAYS = 180
-#: 가치 등급 경계 — 하위 50% · 중위 30% · 상위 20%. 상위 20% 는 AI 세그먼트의 고가치 경계
-#: (config/model_config.yaml segmentation.clv_high_q = 0.8)와 같은 뜻이다.
+#: 가치 등급 경계 분위 — 50분위 경계 미만 · 50~80분위 경계 · 80분위 경계 이상(경계와 같으면 위 등급).
+#: 금액이 같은 고객이 많으면 등급 인원 비율은 50 · 30 · 20% 와 다를 수 있다. 80분위는 AI 세그먼트의
+#: 고가치 경계(config/model_config.yaml segmentation.clv_high_q = 0.8)와 같은 분위다.
 VALUE_QUANTILES: tuple[float, float] = (0.5, 0.8)
 QUANTILE_METHOD = "linear"
 #: (최소, 최대(None = 상한 없음), 코드). 180일 ÷ 횟수 = 평균 간격 — 4회 이하는 45일 이상(이탈 기준 42일보다 김),
@@ -66,8 +68,8 @@ BASIS_COLUMNS: tuple[str, ...] = ("spend_180d", "orders_180d", "tenure_days", "m
 
 #: 코드 → 뜻(보고서 · CSV 머리말용). 화면 표시명은 대시보드가 정한다.
 TIER_LABELS: dict[str, dict[str, str]] = {
-    "value_tier": {"V0_NONE": "180일 구매 없음", "V1_LOW": "하위 50%", "V2_MID": "중위 30%",
-                   "V3_HIGH": "상위 20%", UNKNOWN: "판정 불가(금액 결손)"},
+    "value_tier": {"V0_NONE": "180일 구매 없음", "V1_LOW": "50분위 경계 미만", "V2_MID": "50~80분위 경계",
+                   "V3_HIGH": "80분위 경계 이상", UNKNOWN: "판정 불가(금액 결손)"},
     "frequency_tier": {"F0_NONE": "0회", "F1_ONCE": "1회", "F2_RARE": "2~4회", "F3_REGULAR": "5~12회",
                        "F4_FREQUENT": "13회 이상"},
     "signup_tier": {"NEW": "신규(가입 180일 미만)", "EXISTING": "기존(가입 180일 이상)",
@@ -108,9 +110,10 @@ def _category_tiers(orders: pd.DataFrame, ids: pd.Index, order_items: Any,
     items = items.merge(keys, on="order_id", how="inner")
     items["category"] = items["product_id"].map(mapping)
     items["_amount"] = items["quantity"].astype(float) * items["unit_price"].astype(float)
+    amount_known = np.isfinite(items["_amount"].to_numpy(dtype=float))
 
-    per = (items.dropna(subset=["category"]).groupby(["customer_id", "category"])["_amount"].sum()
-           .unstack(fill_value=0.0))
+    known = items[items["category"].notna() & amount_known]
+    per = known.groupby(["customer_id", "category"])["_amount"].sum().unstack(fill_value=0.0)
     ordered = [c for c in CATEGORY_ORDER if c in per.columns]
     per = per.reindex(columns=ordered + sorted(set(per.columns) - set(ordered)))
     total = per.sum(axis=1)
@@ -121,13 +124,29 @@ def _category_tiers(orders: pd.DataFrame, ids: pd.Index, order_items: Any,
     if len(per):
         category.loc[per.index] = per.idxmax(axis=1).to_numpy()   # 동률이면 앞 열 = CATEGORY_ORDER
         share.loc[per.index] = (per.max(axis=1) / total).to_numpy()
+
+    # 창 안 주문의 품목 · 상품군 · 금액을 일부라도 모르면 남은 품목으로 1위 · 비중을 확정하지 않는다 —
+    # 모르는 금액이 어느 상품군인지에 따라 1위가 바뀔 수 있다. 한 고객이 여러 사유에 들 수 있다.
+    buyers = set(keys["customer_id"])
+    flagged = {
+        "ORDER_WITHOUT_ITEMS": set(keys.loc[~keys["order_id"].isin(set(items["order_id"])), "customer_id"]),
+        "ITEM_UNMAPPED": set(items.loc[items["category"].isna(), "customer_id"]),
+        "ITEM_AMOUNT_MISSING": set(items.loc[~amount_known, "customer_id"]),
+    }
+    partial = sorted(set().union(*flagged.values()) & set(ids))
+    category.loc[partial] = UNKNOWN
+    share.loc[partial] = np.nan
+    flagged["NO_KNOWN_ITEMS"] = buyers - set(per.index)
     window_orders = set(keys["order_id"])
     audit = {
         "n_window_orders": len(window_orders),
         "n_window_orders_without_items": len(window_orders - set(items["order_id"])),
         "n_items": int(len(items)),
         "n_items_unmapped": int(items["category"].isna().sum()),
+        "n_items_amount_missing": int((~amount_known).sum()),
         "n_conflicting_products": int(mapping.attrs.get("conflicting_products", 0)),
+        "n_buyers_category_unknown": int(category.loc[sorted(buyers & set(ids))].eq(UNKNOWN).sum()),
+        "category_unknown_customers": {code: len(customers & buyers) for code, customers in flagged.items()},
     }
     return category, share, audit
 
@@ -193,8 +212,11 @@ def observed_tiers(events: pd.DataFrame, index_time, population, signups: Mappin
         mapping = (product_categories_from_events(events, t0) if product_categories is None
                    else pd.Series(product_categories, dtype=object))
         category, share, item_audit = _category_tiers(orders, ids, order_items, mapping)
-        if ((category == UNKNOWN) & (n_orders > 0)).any():
-            reasons["category_tier"] = "NO_KNOWN_ITEMS: 창 안 주문에 상품군을 아는 품목이 없다"
+        codes = [code for code, n in item_audit["category_unknown_customers"].items() if n]
+        if codes:
+            reasons["category_tier"] = (
+                f"{' · '.join(codes)}: 창 안 주문의 품목 · 상품군 · 금액을 일부라도 모르면 남은 품목으로 "
+                "확정하지 않는다(사유별 고객 수 = items.category_unknown_customers)")
     category[n_orders == 0] = "NONE"
     if (value == UNKNOWN).any():
         reasons["value_tier"] = "AMOUNT_MISSING: 창 안 주문 금액 결손"
@@ -212,7 +234,8 @@ def observed_tiers(events: pd.DataFrame, index_time, population, signups: Mappin
         "window": {"start": window_start.isoformat(), "end": t0.isoformat(), "days": WINDOW_DAYS,
                    "semantics": "[T0 − 180일, T0)"},
         "data_start": None if data_start is None else data_start.isoformat(),
-        "window_complete": bool(data_start is not None and data_start <= window_start),
+        # 가장 이른 이벤트(전체 고객)가 창 시작 이전인가만 본다 — 창 안 연속 관측이나 고객별 관측을 보장하지 않는다.
+        "data_start_before_window": bool(data_start is not None and data_start <= window_start),
         "value_quantiles": list(VALUE_QUANTILES),
         "quantile_method": QUANTILE_METHOD,
         "value_boundaries_krw": bounds,
