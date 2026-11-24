@@ -191,6 +191,9 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "predict_lifetime": ("src.decision.clv_lifetime", "predict_lifetime"),
     "evaluate_lifetime": ("src.decision.clv_lifetime", "evaluate_lifetime"),
     "clv_table": ("src.decision.clv_lifetime", "clv_table"),
+    # #218 — 기준일별 공통 명부 · 관측 등급(DR-218-common-roster · DR-221-observed-tiers)
+    "build_split_roster": ("src.decision.split_roster", "build_split_roster"),
+    "order_items_frame": ("src.decision.split_roster", "order_items_frame"),
 }
 
 
@@ -780,11 +783,10 @@ def observed_values(frame: Any, column: str) -> list[Any]:
     return sorted({v for v in frame[column].dropna().unique().tolist()}, key=str)
 
 
-def customer_signups(until: datetime) -> dict[str, Any]:
-    """활성 세계의 고객 명부 — ``sim.exchange_bundle(until)`` 의 ``customers.signup_date`` (교환 계약 v1).
+def exchange_read(until: datetime) -> Any:
+    """활성 세계의 교환 묶음(교환 계약 v1) — ``sim.exchange_bundle(until)`` 을 측정 계층 ``exchange.read_exchange`` 로 읽는다.
 
-    이벤트 계약에는 가입일이 없다(measurement_contract §6.4). 명부는 공개 계약이고 측정 계층
-    ``exchange.read_exchange`` 로 읽는다. 받지 못하면 ``NotRun`` — 가입일을 다른 값으로 근사하지 않는다.
+    가입일 명부(``signup_dates``)와 주문 품목(``orders``)이 여기 있다. 받지 못하면 ``NotRun`` — 다른 값으로 근사하지 않는다.
     """
     from src.measurement import exchange as ex
     from src.measurement.sink import EventSource
@@ -795,6 +797,19 @@ def customer_signups(until: datetime) -> dict[str, Any]:
     read = ex.read_exchange(Path(str(bundle["path"])), EventSource.SIMULATOR)
     if read is None:
         raise NotRun("교환 묶음을 읽지 못했다 — 가입일 명부가 없다")
+    return read
+
+
+def customer_signups(until: datetime, keep: dict[str, Any] | None = None) -> dict[str, Any]:
+    """활성 세계의 고객 명부 — ``sim.exchange_bundle(until)`` 의 ``customers.signup_date`` (교환 계약 v1).
+
+    이벤트 계약에는 가입일이 없다(measurement_contract §6.4). 명부는 공개 계약이고 측정 계층
+    ``exchange.read_exchange`` 로 읽는다. 받지 못하면 ``NotRun`` — 가입일을 다른 값으로 근사하지 않는다.
+    ``keep`` 을 주면 읽은 묶음을 ``keep["read"]`` 에 둔다 — 같은 묶음의 주문 품목을 다시 받지 않고 쓴다(#218).
+    """
+    read = exchange_read(until)
+    if keep is not None:
+        keep["read"] = read
     return dict(read.signup_dates)
 
 
@@ -1513,25 +1528,59 @@ def persist_models(root: Path, run_id: str, ctx: Mapping[str, Any],
     return {"root": str(target), "feature_version": feature_version, "models": results}
 
 
+def _feature_store_tables(ctx: Mapping[str, Any]) -> list[tuple[str, Any, Any, str, str | None]]:
+    """저장할 표 — (이름, 표, 기준 시각, 종류, 없을 때 사유). 표가 None 이면 not_run 으로 남긴다.
+
+    #218 — 앞 기준일(t_prior) Feature · 라벨과 기준일별 관측 등급(DR-221)을 더한다. t2 라벨은 저장하지 않는다
+    (과제 Test 라벨은 GATE 3 동결 뒤에만 연다).
+    """
+    def from_ctx(key: str, at: str) -> tuple[Any, Any, str | None]:
+        if key not in ctx or ctx.get(at) is None:
+            return None, None, f"{key} 가 없다 — 단계 미실행 또는 실패"
+        return ctx[key], ctx[at], None
+
+    rows: list[tuple[str, Any, Any, str, str | None]] = []
+    for name, key, at, kind in (("features_t1", "X1", "t1", "feature"), ("labels_t1", "Y1", "t1", "label"),
+                                ("features_t2", "X2", "t2", "feature")):
+        frame, when, reason = from_ctx(key, at)
+        rows.append((name, frame, when, kind, reason))
+    prior = ctx.get("churn_prior") or {}
+    tables = prior.get("tables") or {}
+    reason = (None if prior.get("status") == "ok" and tables else
+              f"앞 기준일 {prior.get('status', 'not_run')} — {prior.get('reason') or '단계에 도달하지 않았다'}")
+    rows.append(("features_t_prior", tables.get("X"), prior.get("index_time"), "feature", reason))
+    rows.append(("labels_t_prior", tables.get("Y"), prior.get("index_time"), "label", reason))
+    roster = ctx.get("split_roster_tiers") or {}
+    for origin, at in (("t_prior", prior.get("index_time")), ("t1", ctx.get("t1")), ("t2", ctx.get("t2"))):
+        frame = roster.get(origin)
+        rows.append((f"observed_tiers_{origin}", frame, at, "tier",
+                     None if frame is not None else "명부의 이 기준일 관측 등급이 없다(split_roster 참고)"))
+    return rows
+
+
 def persist_features(root: Path, run_id: str, ctx: Mapping[str, Any]) -> dict[str, Any]:
-    """Feature(t1 · t2)와 라벨(t1)을 ``<root>/<run_id>/`` 에 parquet 로 남긴다 (FS-001 · FS-002)."""
+    """Feature(t_prior · t1 · t2) · 라벨(t_prior · t1) · 관측 등급(#218)을 ``<root>/<run_id>/`` 에 parquet 로 남긴다 (FS-001 · FS-002)."""
     target = Path(root) / run_id
     write = decision_fn("write_feature_table")
     version = decision_fn("feature_version")()
     results: dict[str, Any] = {}
-    for name, key, at, kind in (("features_t1", "X1", "t1", "feature"), ("labels_t1", "Y1", "t1", "label"),
-                                ("features_t2", "X2", "t2", "feature")):
-        if key not in ctx or ctx.get(at) is None:
-            results[name] = {"status": "not_run", "reason": f"{key} 가 없다 — 단계 미실행 또는 실패"}
+    for name, frame, at, kind, missing in _feature_store_tables(ctx):
+        if frame is None or at is None:
+            results[name] = {"status": "not_run", "reason": missing or f"{name} 의 기준 시각이 없다"}
             continue
         try:
-            record = write(target, name, ctx[key], feature_version=version if kind == "feature" else None,
-                           cutoff_time=ctx[at], kind=kind)
+            record = write(target, name, frame, feature_version=version if kind == "feature" else None,
+                           cutoff_time=at, kind=kind)
         except Exception as error:  # 삼키지 않는다 — failed
             results[name] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
             continue
-        results[name] = {"status": "ok", "file": str(target / record["file"]), "rows": record["rows"]}
+        results[name] = {"status": "ok", "file": str(target / record["file"]), "rows": record["rows"],
+                         "file_sha256": record.get("file_sha256")}
     return {"root": str(target), "feature_version": version, "tables": results}
+
+
+#: ``churn_prior_origin`` 기록 중 결과 JSON(churn_eval.prior_origin)에 싣지 않는 표 · 고객 목록.
+PRIOR_PRIVATE_KEYS: frozenset[str] = frozenset({"X", "y", "tables"})
 
 
 def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any]:
@@ -1576,7 +1625,10 @@ def churn_prior_origin(ctx: Mapping[str, Any], main_root: Path) -> dict[str, Any
         if not two_classes(y):
             raise NotRun("앞 기준일 라벨이 한 값뿐이다")
         record.update(status="ok", reason=None, n=int(len(y)), pos_rate=float(y.mean()),
-                      X=X_prior.loc[y.index], y=y)
+                      X=X_prior.loc[y.index], y=y,
+                      # #218 — Feature Store(features_t_prior · labels_t_prior) · 명부(Eligible(t_prior))용 전체 표.
+                      # 결과 JSON 에는 싣지 않는다(PRIOR_PRIVATE_KEYS).
+                      tables={"X": X_prior, "Y": Y_prior, "eligible": list(eligible)})
     except NotRun as reason:
         record.update(status="not_run", reason=str(reason))
     except Exception as error:  # 삼키지 않는다 — failed 와 사유. churn 은 무작위 교차검증으로 고른다
@@ -1731,6 +1783,95 @@ def cate_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Path], 
                      "--load-models) 실행의 파일로 한다" if not loaded else
                      "불러온 모델(재학습 없음)의 예측 — t1 · t2 모두 학습에 쓰지 않은 데이터"),
             "contract": "DR-S8 결정 1 — customer_id · t0 · cate_T1~cate_T4, 계산 불가는 null"}
+
+
+ROSTER_FILE = "split_roster.csv"
+#: 명부 요약에 지문을 함께 싣는 Feature Store 표(#218 — ML · LSTM 비교가 인수할 때 대조한다).
+ROSTER_STORE_TABLES: tuple[str, ...] = (
+    "features_t_prior", "labels_t_prior", "features_t1", "labels_t1", "features_t2",
+    "observed_tiers_t_prior", "observed_tiers_t1", "observed_tiers_t2",
+)
+
+
+def prepare_split_roster(ctx: dict[str, Any]) -> dict[str, Any]:
+    """#218 — 기준일별 공통 명부(DR-218-common-roster)와 관측 등급(DR-221)을 계산해 ``ctx`` 에 둔다. 파일은 ``write_split_roster``.
+
+    - t_prior: 앞 기준일 Eligible — Feature · 라벨이 있는 고객이 ``train``.
+    - t1: 탐색 RCT 배정 고객(= Eligible(t1)) — T0 · Feature · 라벨이 있는 고객이 ``validation``.
+    - t2: Eligible(t2) — **라벨을 보지 않고** ``test`` · ``future_existing`` 을 정한다.
+    기준일 하나가 없으면 그 기준일만 not_run 이다. 등급의 주 구매 상품군은 t2 교환 묶음 품목(분기 restore 전)을 쓴다.
+    결과 단계가 아니다 — 실패해도 다른 결과는 그대로 쓴다(사유를 run_meta.split_roster 에 남긴다).
+    """
+    try:
+        build = decision_fn("build_split_roster")
+        to_items = decision_fn("order_items_frame")
+        for key in ("events_t2", "signups_t1"):
+            if key not in ctx:
+                raise NotRun(f"{key} 가 없다 — 이벤트 · 가입일 명부 단계에 도달하지 않았다")
+        cohorts: dict[str, Any] = {}
+        not_run: dict[str, str] = {}
+        prior = ctx.get("churn_prior") or {}
+        if prior.get("status") == "ok" and prior.get("tables"):
+            window = prior["label_window"]
+            cohorts["t_prior"] = {"index_time": prior["index_time"], "label_window": (window["start"], window["end"]),
+                                  "eligible": prior["tables"]["eligible"], "labeled": [str(c) for c in prior["y"].index]}
+        else:
+            not_run["t_prior"] = (f"앞 기준일 {prior.get('status', 'not_run')} — "
+                                  f"{prior.get('reason') or '단계에 도달하지 않았다'}")
+        assignment = ctx.get("rct_assignment")
+        if assignment and ctx.get("Y_rct") is not None and ctx.get("t1") is not None:
+            labeled = ctx["Y_rct"]["churn"].dropna().index
+            cohorts["t1"] = {"index_time": ctx["t1"],
+                             "label_window": (ctx["t1"], ctx["t1"] + timedelta(days=LABEL_WINDOW_DAYS)),
+                             "eligible": list(assignment), "labeled": [str(c) for c in labeled],
+                             "rct_arm": dict(assignment)}
+        else:
+            not_run["t1"] = "탐색 RCT 배정 · t1 라벨(training_set 단계)이 없다"
+        if ctx.get("eligible_t2") is not None and ctx.get("t2") is not None:
+            cohorts["t2"] = {"index_time": ctx["t2"], "label_window": None, "eligible": list(ctx["eligible_t2"]),
+                             "labeled": None, "rct_arm": dict(assignment or {})}
+        else:
+            not_run["t2"] = "Eligible(t2) 판정이 없다(scores_t2 단계)"
+        if not cohorts:
+            raise NotRun("명부를 만들 기준일이 하나도 없다 — " + "; ".join(f"{k}: {v}" for k, v in not_run.items()))
+        orders = ctx.get("exchange_orders_t2")
+        evidence = (ctx.get("event_read_evidence") or {}).get("t2") or {}
+        roster, record, tiers = build(ctx["events_t2"], ctx["signups_t1"], cohorts=cohorts,
+                                      order_items=to_items(orders), observation_complete=evidence.get("status") == "ok",
+                                      not_run=not_run)
+        ctx["split_roster"] = roster
+        ctx["split_roster_tiers"] = tiers
+        return {"status": "ok", "reason": None, **record,
+                "inputs": {"events": "t2 까지 읽은 관측 이벤트 — 기준일마다 그 시각 미만만 쓴다",
+                           "signups": "t1 교환 묶음 고객 명부(Eligible 판정과 같은 출처)",
+                           "order_items": "t2 교환 묶음 품목" if orders is not None else None,
+                           "observation_evidence": evidence.get("status"),
+                           "verified_run_ids": evidence.get("verified_run_ids")}}
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+
+
+def write_split_roster(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Path], record: Mapping[str, Any],
+                       persistence: Mapping[str, Any]) -> dict[str, Any]:
+    """명부를 ``split_roster.csv`` 로 쓰고 결과 폴더 사본에 올린다. Feature Store 표의 지문을 요약에 함께 싣는다."""
+    if record.get("status") != "ok" or ctx.get("split_roster") is None:
+        return dict(record)
+    try:
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        ctx["split_roster"].to_csv(path, index=False)
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {**record, "status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    extra_files[ROSTER_FILE] = path
+    tables = ((persistence.get("features") or {}).get("tables") or {})
+    store: dict[str, Any] = {name: {key: tables[name].get(key) for key in ("status", "rows", "file_sha256", "reason")}
+                             for name in ROSTER_STORE_TABLES if name in tables}
+    if not store:
+        store = {"status": "not_requested", "reason": "--feature-store-root 없이 실행 — Feature 표를 저장하지 않았다"}
+    return {**record, "file": ROSTER_FILE, "file_sha256": digest, "feature_store": store}
 
 
 def shap_summary_file(model: Any, X: Any, out: Path, seed: int, extra_files: dict[str, Path]) -> dict[str, Any]:
@@ -1991,7 +2132,7 @@ def run(config: SprintConfig) -> Path:
                 evaluate = decision_fn("evaluate_churn_models")
                 fit = decision_fn("fit_best_churn")
                 prior = ctx.get("churn_prior") or {"status": "not_run", "reason": "앞 기준일 단계에 도달하지 않았다"}
-                churn_eval["prior_origin"] = {k: v for k, v in prior.items() if k not in ("X", "y")}
+                churn_eval["prior_origin"] = {k: v for k, v in prior.items() if k not in PRIOR_PRIVATE_KEYS}
                 extra = ({"prior": (prior["X"], prior["y"])}
                          if prior.get("status") == "ok" and "prior" in inspect.signature(evaluate).parameters else {})
                 with override_attr(DECISION_API["evaluate_churn_models"][0], "N_SPLITS", config.cv_folds) as folds:
@@ -2163,13 +2304,18 @@ def run(config: SprintConfig) -> Path:
                 detail = ("이 시뮬레이터 판이 purchase 를 만들지 않는다 "
                           f"({ctx.get('purchase_detail', 'purchase 생성 여부를 확인하지 못했다')})")
             else:
+                bundle_t2: dict[str, Any] = {}
                 try:
-                    judged = eligibility(ctx["events_t2"], ctx["t2"], X2.index, customer_signups(ctx["t2"]))
+                    judged = eligibility(ctx["events_t2"], ctx["t2"], X2.index,
+                                         customer_signups(ctx["t2"], keep=bundle_t2))
                 except NotRun as reason:
                     detail = f"Eligible(t2) 를 판정하지 못했다 — {reason}"
             if detail is None:
                 scores.update(s1_inputs(ctx["events_t2"], ctx["t2"], X2.index, judged["flags"]))
                 ctx["eligible_t2"] = [cid for cid, flag in judged["flags"].items() if flag]
+                # #218 — 명부의 주 구매 상품군(DR-221)용 품목 = 방금 가입일 명부를 읽은 t2 묶음(시뮬레이터 추가 호출 없음).
+                # 없으면 상품군만 판정 불가가 되고 사유가 명부 요약에 남는다.
+                ctx["exchange_orders_t2"] = getattr(bundle_t2.get("read"), "orders", None)
                 comparison["s1_inputs"] = {
                     "source": "이벤트(t2 미만 purchase) · 교환 묶음 가입일 명부 — 오케스트레이션 계산",
                     "index_time": ctx["t2"],
@@ -2485,6 +2631,8 @@ def run(config: SprintConfig) -> Path:
         # #217 — 고객별 τ̂ (S8 채점 입력). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 uplift_eval 에 남긴다.
         uplift_eval["cate_file"] = cate_file(out / "artifacts" / CATE_FILE, ctx, extra_outputs,
                                              loaded=config.load_models is not None)
+        # #218 — 기준일별 공통 명부 · 관측 등급. Feature Store 저장 전에 계산하고(등급 표도 저장), 파일은 저장 뒤에 쓴다(표 지문).
+        roster_record = prepare_split_roster(ctx)
         realism, extra_files = realism_copy(Path(config.realism_report))
         extra_files = {**extra_files, **extra_outputs}
         budget_record = ctx.get("budget") or {
@@ -2523,6 +2671,7 @@ def run(config: SprintConfig) -> Path:
             except Exception as error:
                 persistence["features"] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"}
         persistence["status"] = persistence_status(persistence)
+        roster_record = write_split_roster(out / "artifacts" / ROSTER_FILE, ctx, extra_files, roster_record, persistence)
 
         model_versions: dict[str, Any] = {
             kind: record.get("model_version")
@@ -2589,6 +2738,7 @@ def run(config: SprintConfig) -> Path:
             "decision_modules": {k: decision_available(k) for k in DECISION_API},
             "versions": nfr01,           # NFR-01 (#214)
             "persistence": persistence,  # ML-008 · FS-001/002 (#214)
+            "split_roster": roster_record,  # #218 · DR-218-common-roster · DR-221-observed-tiers
             "models_loaded_from": {
                 "path": config.load_models, "trained_run": (loaded_manifest.get("run") or {}).get("run_id"),
                 "kinds": sorted(loaded_models),
