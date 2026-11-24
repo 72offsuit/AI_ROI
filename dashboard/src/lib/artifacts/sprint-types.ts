@@ -38,6 +38,33 @@ export interface ChurnModel {
   temporal_holdout?: Record<string, MeanStd> | null;
 }
 
+/** One candidate in `churn_eval.selection` (#303 ML-011): the score it was chosen by, kept apart from random CV. */
+export interface SelectionCandidate {
+  name: string;
+  kind: ModelKind;
+  eligible?: boolean | null;
+  selection_score?: number | null;
+  random_cv_score?: number | null;
+  lift_at_20?: number | null;
+  ece?: number | null;
+  brier?: number | null;
+  chosen?: boolean | null;
+  rank?: number | null;
+}
+
+/** `churn_eval.selection` — how the model was chosen (#303 · DR-303-model-selection). */
+export interface ChurnSelection {
+  basis?: string | null;
+  metric?: string | null;
+  official?: boolean | null;
+  basis_label?: string | null;
+  reference_label?: string | null;
+  chosen?: string | null;
+  chosen_score?: number | null;
+  candidates?: SelectionCandidate[];
+  rule?: Record<string, string> | null;
+}
+
 export interface ChurnEval extends SprintHeader {
   label_def?: string | null;
   n?: number | null;
@@ -45,6 +72,10 @@ export interface ChurnEval extends SprintHeader {
   models?: ChurnModel[];
   shap_top?: { feature: string; mean_abs?: number | null }[];
   importance_method?: string | null;
+  best_proposed?: string | null;
+  selection_basis?: string | null;
+  /** Absent in result files written before #303 — the screen then says so instead of guessing. */
+  selection?: ChurnSelection | null;
 }
 
 export interface ClvEval extends SprintHeader {
@@ -65,6 +96,16 @@ export interface UpliftEval extends SprintHeader {
   /** Label window of that outcome in days (#299). */
   outcome_window_days?: number | null;
   n?: number | null;
+  /** Method actually fitted and why (#303 ML-011). */
+  fitted_method?: string | null;
+  fitted_method_source?: string | null;
+  /** Chosen by Validation Qini — Test Qini in `models` is reported after the choice, not used for it. */
+  best_method_selection?: {
+    best_method?: string | null;
+    basis?: string | null;
+    validation_qini?: Record<string, number | null> | null;
+    n_validation?: number | null;
+  } | null;
   arms?: Record<string, number | null>;
   ate?: Record<string, { value?: number | null; ci95?: [number | null, number | null] | null } | null>;
   models?: {

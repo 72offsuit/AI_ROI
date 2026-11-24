@@ -240,6 +240,51 @@ def lift_at(y: np.ndarray, score: np.ndarray, frac: float = 0.10) -> float:
     return float(y[top].mean() / base)
 
 
+def capture_at(y: np.ndarray, score: np.ndarray, frac: float = 0.10) -> float:
+    """포착률 — 점수 상위 ``frac`` 고객이 전체 이탈자 중 몇 %를 담나(SRS ML-009). 이탈자가 없으면 NaN."""
+    y = np.asarray(y).astype(int)
+    positives = int(y.sum())
+    if positives == 0:
+        return float("nan")
+    k = max(1, int(math.ceil(len(y) * frac)))
+    top = np.argsort(-np.asarray(score, dtype=float), kind="mergesort")[:k]
+    return float(y[top].sum() / positives)
+
+
+#: SRS ML-009 — 상위 리프트 · 포착률을 내는 대상 비율.
+TOP_SHARES = (0.10, 0.20, 0.30)
+
+
+def classification_report(y, score, predicted=None, *, threshold: float | None = None,
+                          threshold_unit: str = "probability", probability: bool = True) -> dict:
+    """SRS ML-009 — 혼동행렬(운영 임계) · 상위 10/20/30% 리프트 · 포착률 · 확률 분포(구간별 고객 수).
+
+    ``predicted`` 가 없으면 ``score >= threshold`` 로 판정한다. 규칙 기준선처럼 점수가 확률이 아니면
+    ``probability=False`` — 확률 분포를 싣지 않는다(None). 리프트 · 포착률은 점수 **순서**만 쓴다.
+    """
+    y = np.asarray(y).astype(int)
+    s = np.asarray(score, dtype=float)
+    if predicted is None:
+        if threshold is None:
+            raise ValueError("predicted 또는 threshold 가 필요하다")
+        predicted = s >= threshold
+    pred = np.asarray(predicted).astype(bool)
+    tp = int((pred & (y == 1)).sum())
+    fp = int((pred & (y == 0)).sum())
+    fn = int((~pred & (y == 1)).sum())
+    tn = int((~pred & (y == 0)).sum())
+    top = [{"share": share, "n_top": max(1, int(math.ceil(len(y) * share))) if len(y) else 0,
+            "lift": lift_at(y, s, share) if len(y) else float("nan"),
+            "capture": capture_at(y, s, share) if len(y) else float("nan")} for share in TOP_SHARES]
+    distribution = ([{"low": row["low"], "high": row["high"], "n": row["n"]} for row in calibration(y, s)["bins"]]
+                    if probability else None)
+    return {"n": int(len(y)), "positives": int(y.sum()),
+            "threshold": None if threshold is None else float(threshold), "threshold_unit": threshold_unit,
+            "confusion_matrix": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+            "top": top, "probability_distribution": distribution,
+            "probability_note": None if probability else "규칙 기준선의 점수는 확률이 아니다 — 확률 분포를 싣지 않는다"}
+
+
 #: 보정(calibration) 표 · ECE 의 확률 구간 수 — [0, 0.1), [0.1, 0.2), … 등간격 (#215).
 CALIBRATION_BINS = 10
 #: 임계값 비교표의 "상위 비율" 행 — 마케팅이 한 번에 감당할 수 있는 대상 비율의 예시 (#215).
@@ -355,6 +400,12 @@ def _metrics(y: np.ndarray, score: np.ndarray, threshold: float) -> dict[str, fl
         "pr_auc": float(average_precision_score(y, score)) if two_class else float("nan"),
         "f1": float(f1_score(y, (score >= threshold).astype(int), zero_division=0)),
         "lift_at_10": lift_at(y, score, 0.10),
+        # SRS ML-009 — 상위 20 · 30% 리프트와 상위 10/20/30% 포착률(#303)
+        "lift_at_20": lift_at(y, score, 0.20),
+        "lift_at_30": lift_at(y, score, 0.30),
+        "capture_at_10": capture_at(y, score, 0.10),
+        "capture_at_20": capture_at(y, score, 0.20),
+        "capture_at_30": capture_at(y, score, 0.30),
         "brier": cal["brier"],
         "ece": cal["ece"],
     }
@@ -508,15 +559,76 @@ def temporal_validation(name: str, overrides: Mapping[str, Any] | None, X: pd.Da
     Xv = X[list(Xp.columns)]
     factory = (lambda: make_model(name, seed, overrides))
     model = factory().fit(Xp, yp)
+    score = _score(model, Xv)
     if name == "rule_recency":
         from sklearn.metrics import f1_score
 
-        metrics = _not_probability(_metrics(y, _score(model, Xv), 0.0))
-        metrics["f1"] = float(f1_score(y, (model._days(Xv) >= model.threshold_days_).astype(int), zero_division=0))
+        predicted = model._days(Xv) >= model.threshold_days_
+        metrics = _not_probability(_metrics(y, score, 0.0))
+        metrics["f1"] = float(f1_score(y, predicted.astype(int), zero_division=0))
+        report = classification_report(y, score, predicted, threshold=model.threshold_days_, threshold_unit="days",
+                                       probability=False)
     else:
-        metrics = _metrics(y, _score(model, Xv), _threshold_from_train(factory, Xp, yp, seed))
+        threshold = _threshold_from_train(factory, Xp, yp, seed)
+        metrics = _metrics(y, score, threshold)
+        report = classification_report(y, score, threshold=threshold)
     return {"scheme": "temporal_validation", "n_train": int(len(yp)), "n_valid": int(len(y)),
-            "pos_rate_train": float(np.mean(yp)), "pos_rate_valid": float(np.mean(y)), **metrics}
+            "pos_rate_train": float(np.mean(yp)), "pos_rate_valid": float(np.mean(y)), **metrics,
+            "report": report}  # SRS ML-009 — 앞 기준일 학습 임계로 t1 에서 판정
+
+
+#: #303 · DR-303-model-selection — 이탈 모델 선택 규칙. GATE 3 전에 고정한다(결과를 보고 바꾸지 않는다).
+SELECTION_RULE: dict[str, str] = {
+    "primary": "시간 순서 검증 ROC-AUC — 앞 기준일(t_prior) 데이터로 학습해 t1 학습 모집단에서 평가, 제안 모델 중 최댓값",
+    "tie_break": "같은 점수면 후보 순서(random_forest → hist_gb → xgboost → lightgbm)가 앞선 모델",
+    "secondary": "상위 20% 리프트 · 보정(ECE · Brier) — 같은 데이터에서 함께 싣고 선택을 바꾸지 않는다",
+    "fallback": "앞 기준일 데이터가 없으면 무작위 교차검증 평균 — 개발 실행용, 정식 선택(GATE 3)에는 쓰지 않는다",
+    "not_used": "무작위 교차검증(시간 순서 검증이 있을 때는 참고) · 시간 홀드아웃(t2) · 과제 Test · Final Holdout",
+    "decision": "docs/decisions/DR-303-model-selection.md",
+}
+METRIC_LABELS = {"roc_auc": "ROC-AUC", "pr_auc": "PR-AUC", "f1": "F1"}
+
+
+def _finite(value: Any) -> float | None:
+    if value is None:
+        return None
+    value = float(value)
+    return None if math.isnan(value) else value
+
+
+def selection_record(models: list[dict], basis: str, metric: str, chosen: str, n_folds: int) -> dict:
+    """#303 ML-011 — 고른 기준과 후보별 **선택 점수**를 무작위 교차검증 점수와 나눠 싣는다.
+
+    ``selection_score`` 는 선택에 쓴 점수(시간 순서 검증, 없으면 무작위 CV 평균)이고 ``random_cv_score`` 는 참고다.
+    ``rank`` 는 제안 모델 안에서 선택 점수 순위(동점은 후보 순서 — ``max`` 가 고르는 순서와 같다). 기준선은 순위가 없다.
+    보조 지표(상위 20% 리프트 · ECE · Brier)는 선택과 같은 데이터에서 싣고 선택을 바꾸지 않는다.
+    """
+    def on_basis(model: dict, key: str) -> float | None:
+        if basis == "temporal_validation":
+            return _finite((model.get("temporal_validation") or {}).get(key))
+        return _finite(((model.get("cv") or {}).get(key) or {}).get("mean"))
+
+    rows = [{"name": m["name"], "kind": m["kind"], "eligible": m["kind"] == "proposed",
+             "selection_score": on_basis(m, metric),
+             "lift_at_20": on_basis(m, "lift_at_20"), "ece": on_basis(m, "ece"), "brier": on_basis(m, "brier"),
+             "random_cv_score": _finite(((m.get("cv") or {}).get(metric) or {}).get("mean")),
+             "chosen": m["name"] == chosen, "rank": None} for m in models]
+    ranked = sorted((r for r in rows if r["eligible"] and r["selection_score"] is not None),
+                    key=lambda r: -r["selection_score"])   # 안정 정렬 — 동점은 후보 순서
+    for rank, row in enumerate(ranked, start=1):
+        row["rank"] = rank
+    label = METRIC_LABELS.get(metric, metric)
+    temporal = basis == "temporal_validation"
+    return {
+        "rule": dict(SELECTION_RULE),
+        "basis": basis, "metric": metric, "official": temporal,
+        "basis_label": (f"시간 순서 검증 {label}(t_prior 학습 → t1 평가)" if temporal else
+                        f"무작위 {n_folds}-Fold 교차검증 {label} 평균 — 앞 기준일 데이터 없음(개발 실행용)"),
+        "reference_label": (f"무작위 {n_folds}-Fold 교차검증 {label} 평균 — 참고, 선택에 쓰지 않음" if temporal else None),
+        "chosen": chosen,
+        "chosen_score": next((r["selection_score"] for r in rows if r["chosen"]), None),
+        "candidates": rows,
+    }
 
 
 # ── 평가 ────────────────────────────────────────────────────────────────────
@@ -546,8 +658,7 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
     models = []
     oof: dict[str, np.ndarray] = {}  # 검증 fold 예측 — 임계값 비교표 · 보정표(#215)
     for name in usable:
-        per_fold: dict[str, list[float]] = {"roc_auc": [], "pr_auc": [], "f1": [], "lift_at_10": [],
-                                            "brier": [], "ece": []}
+        per_fold: dict[str, list[float]] = {}   # 키는 _metrics 의 지표 이름(ML-009 #303 포함)
         thresholds = []
         oof[name] = np.full(len(yv), np.nan)
         for k, (tr, va) in enumerate(folds):
@@ -570,7 +681,7 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
                 thresholds.append(threshold)
             oof[name][va] = score
             for key, value in metrics.items():
-                per_fold[key].append(value)
+                per_fold.setdefault(key, []).append(value)
         entry = {"name": name, "kind": _kind(name),
                  "cv": {key: _summary(values) for key, values in per_fold.items()},
                  "threshold": {"rule": ("학습 fold F1 최대 경과일(days)" if name == "rule_recency"
@@ -594,6 +705,13 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
     best = max((m for m in models if m["kind"] == "proposed"), key=selection_score)
     importance = churn_importance(X, yv, best["name"], seed, overrides.get(best["name"]))
     best_oof = oof[best["name"]]
+    # #303 ML-009 — 고른 모델의 혼동행렬 · 상위 리프트 · 포착률 · 확률 분포를 **선택에 쓴 데이터**에서 낸다.
+    if basis == "temporal_validation":
+        chosen_report = {"basis": basis, **best["temporal_validation"]["report"],
+                         "note": "앞 기준일 학습 모델을 t1 에서 평가 — 임계는 앞 기준일 학습 데이터 내부 OOF F1 최대"}
+    else:
+        chosen_report = {"basis": basis, **classification_report(yv, best_oof, threshold=_best_f1_threshold(yv, best_oof)),
+                         "note": "바깥 CV 검증 예측(OOF) — 임계는 같은 OOF 의 F1 최대(표시용, threshold_table 과 같은 규칙)"}
     return {
         "label_def": LABEL_DEF, "n": int(len(yv)), "pos_rate": float(yv.mean()),
         "n_features": int(X.shape[1]), "seed": int(seed),
@@ -606,6 +724,9 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
         "models_unavailable": [{"name": n, "reason": why} for n, why in unavailable.items()],
         "selection_basis": basis,
         "selection_metric": metric,
+        # #303 ML-011 — 고른 기준 · 후보별 선택 점수를 무작위 CV 점수와 나눠 싣는다(CLI · 대시보드가 이 블록을 읽는다)
+        "selection": selection_record(models, basis, metric, best["name"], len(folds)),
+        "selection_report": chosen_report,
         "temporal_validation_data": prior_status,
         "selection_note": ("시간 순서 검증(앞 기준일 학습 → t1 학습 모집단 평가)으로 튜닝 · 선택했다. 같은 t1 데이터의 "
                            "무작위 교차검증 점수는 선택에 쓰인 데이터라 낙관적이다 — 학습에 안 쓴 성능은 시간 홀드아웃(t2)"
@@ -841,24 +962,31 @@ def evaluate_temporal_holdout(model_factory=None, X_train: pd.DataFrame | None =
     if isinstance(spec, ChurnModel):
         name, source = spec.name, "given_fitted_model (재학습 없음)"
         threshold = spec.threshold
-        metrics = _metrics(yte, predict_churn_proba(spec, Xte).to_numpy(), threshold)
+        score = predict_churn_proba(spec, Xte).to_numpy()
+        metrics = _metrics(yte, score, threshold)
+        report = classification_report(yte, score, threshold=threshold)
     else:
         name = spec if isinstance(spec, str) else getattr(spec, "__name__", "custom")
         factory = (lambda: make_model(spec, seed)) if isinstance(spec, str) else spec
         source = "refit_on_X_train"
         Xte = Xte[list(Xtr.columns)]
         fitted = factory().fit(Xtr, ytr)
+        score = _score(fitted, Xte)
         if isinstance(fitted, RecencyRule):
             from sklearn.metrics import f1_score
-            metrics = _not_probability(_metrics(yte, _score(fitted, Xte), 0.0))
-            metrics["f1"] = float(f1_score(yte, (fitted._days(Xte) >= fitted.threshold_days_).astype(int),
-                                           zero_division=0))
+            predicted = fitted._days(Xte) >= fitted.threshold_days_
+            metrics = _not_probability(_metrics(yte, score, 0.0))
+            metrics["f1"] = float(f1_score(yte, predicted.astype(int), zero_division=0))
             threshold = fitted.threshold_days_
+            report = classification_report(yte, score, predicted, threshold=threshold, threshold_unit="days",
+                                           probability=False)
         else:
             threshold = _threshold_from_train(factory, Xtr, ytr, seed)
-            metrics = _metrics(yte, _score(fitted, Xte), threshold)
+            metrics = _metrics(yte, score, threshold)
+            report = classification_report(yte, score, threshold=threshold)
     return {"name": name, "scheme": "temporal_holdout", "model_source": source,
             "n_train": int(len(ytr)), "n_test": int(len(yte)),
             "pos_rate_train": float(ytr.mean()), "pos_rate_test": float(yte.mean()),
             "threshold": float(threshold), "population_audit": temporal_population_audit(
-                X_train, y_train, X_test, y_test), **metrics}
+                X_train, y_train, X_test, y_test), **metrics,
+            "report": report}  # SRS ML-009 (#303)

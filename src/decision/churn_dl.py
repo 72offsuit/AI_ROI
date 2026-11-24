@@ -127,15 +127,14 @@ def evaluate_churn_gru(seqs: np.ndarray, y, seed: int) -> dict:
 
     yv = np.asarray(y).astype(int)
     # #215 — `_metrics` 가 보정 지표(brier · ece)도 낸다. GRU 출력은 확률이므로 그대로 싣는다.
-    per_fold: dict[str, list[float]] = {"roc_auc": [], "pr_auc": [], "f1": [], "lift_at_10": [],
-                                        "brier": [], "ece": []}
+    per_fold: dict[str, list[float]] = {}   # 키는 _metrics 의 지표 이름(ML-009 #303 포함)
     runs = []
     for k, (tr, va) in enumerate(fold_indices(yv, seed)):
         net, info = fit_gru(seqs[tr], yv[tr], seed + k)
         # 임계: 학습 fold 의 Early Stopping 검증 부분이 아니라 학습 fold 전체 확률에서 F1 최대
         threshold = _best_f1_threshold(yv[tr], predict_gru(net, seqs[tr]))
         for key, value in _metrics(yv[va], predict_gru(net, seqs[va]), threshold).items():
-            per_fold[key].append(value)
+            per_fold.setdefault(key, []).append(value)
         runs.append(info)
     return {"name": "gru_daily", "kind": "proposed_dl",
             "cv": {key: _summary(values) for key, values in per_fold.items()},

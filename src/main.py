@@ -414,6 +414,50 @@ def _mirror_into_latest(run_dir: Path, names: list[str]) -> None:
                 shutil.copyfile(run_dir / name, latest / name)
 
 
+def churn_selection_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
+    """#303 ML-011 — 이탈 모델을 **어떤 점수로** 골랐는지. 선택 점수와 참고 점수(무작위 CV)를 다른 줄에 적는다.
+
+    ``selection`` 블록이 없는 이전 판 결과는 기준 이름과 무작위 CV 점수를 "참고"로 적는다 — 선택 점수인 척하지 않는다.
+    """
+    selection = churn.get("selection")
+    if not isinstance(selection, Mapping):
+        cv = " · ".join(f"{m.get('name')} {fmt(((m.get('cv') or {}).get('roc_auc') or {}).get('mean'))}"
+                        for m in churn.get("models") or [])
+        return [f"  churn      선택 기준 {churn.get('selection_basis') or '—'} · 확정 {churn.get('best_proposed')}",
+                f"             참고 무작위 CV ROC-AUC {cv} — 선택 점수 표시는 이 판 결과에 없다"]
+    candidates = [c for c in selection.get("candidates") or [] if isinstance(c, Mapping)]
+    proposed = " · ".join(f"{c.get('name')}{'*' if c.get('chosen') else ''} {fmt(c.get('selection_score'))}"
+                          for c in candidates if c.get("eligible"))
+    baselines = " · ".join(f"{c.get('name')} {fmt(c.get('selection_score'))}"
+                           for c in candidates if not c.get("eligible"))
+    lines = [f"  churn      선택 기준 {selection.get('basis_label')}",
+             f"             제안 {proposed} → 확정 {selection.get('chosen')} ({fmt(selection.get('chosen_score'))})"]
+    if baselines:
+        lines.append(f"             기준선(선택 대상 아님) {baselines}")
+    if selection.get("reference_label"):
+        reference = " · ".join(f"{c.get('name')} {fmt(c.get('random_cv_score'))}" for c in candidates)
+        lines.append(f"             참고 {selection['reference_label']} — {reference}")
+    if not selection.get("official"):
+        lines.append("             ! 정식 선택 기준(시간 순서 검증)이 아니다 — 개발 실행용(DR-303)")
+    return lines
+
+
+def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
+    """#303 ML-011 — Uplift 학습 방법과 고른 점수(Validation Qini). Test Qini 는 참고로 따로 적는다."""
+    lines = [f"  uplift     학습 방법 {uplift.get('fitted_method')} ({uplift.get('fitted_method_source')})"]
+    selection = uplift.get("best_method_selection")
+    if isinstance(selection, Mapping) and selection.get("validation_qini"):
+        chosen = selection.get("best_method")
+        scores = " · ".join(f"{name}{'*' if name == chosen else ''} {fmt(value, 4)}"
+                            for name, value in selection["validation_qini"].items())
+        lines.append(f"             선택 기준 {selection.get('basis')} — {scores}")
+    models = [m for m in uplift.get("models") or [] if isinstance(m, Mapping)]
+    if models:
+        lines.append("             참고 Test Qini(선택에 쓰지 않음) — "
+                     + " · ".join(f"{m.get('name')} {fmt(m.get('qini'), 4)}" for m in models))
+    return lines
+
+
 def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> list[str]:
     """사람이 읽는 요약 — 결과 JSON 에서 옮긴다. 없는 값은 '—' 로 적는다(0 으로 적지 않는다)."""
     def fmt(value: Any, digits: int = 3) -> str:
@@ -428,16 +472,14 @@ def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> lis
         lines.append(f"    ! {stage['name']}: {stage['reason']}")
     churn = _read_json(run_dir / "churn_eval.json")
     if churn.get("status") == "ok":
-        models = " · ".join(f"{m.get('name')} {fmt(((m.get('cv') or {}).get('roc_auc') or {}).get('mean'))}"
-                            for m in churn.get("models") or [])
-        lines.append(f"  churn      CV ROC-AUC {models} · 확정 {churn.get('best_proposed')}")
+        lines.extend(churn_selection_lines(churn, fmt))
         holdout = churn.get("temporal_holdout")
         if isinstance(holdout, Mapping):
             lines.append(f"             시간 홀드아웃 {holdout.get('name')} ROC-AUC {fmt(holdout.get('roc_auc'))} "
-                         f"(n={holdout.get('n_test')})")
+                         f"(n={holdout.get('n_test')}) — 선택 뒤 보고만")
     uplift = _read_json(run_dir / "uplift_eval.json")
     if uplift.get("status") == "ok":
-        lines.append(f"  uplift     학습 방법 {uplift.get('fitted_method')} ({uplift.get('fitted_method_source')})")
+        lines.extend(uplift_selection_lines(uplift, fmt))
     clv = _read_json(run_dir / "clv_eval.json")
     if clv.get("status") == "ok":
         models = " · ".join(f"{m.get('name')} {fmt(m.get('spearman'))}" for m in clv.get("models") or [])

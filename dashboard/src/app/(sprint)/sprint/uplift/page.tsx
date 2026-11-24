@@ -11,7 +11,7 @@ import { loadSprint, sprintSource } from "@/lib/artifacts/sprint";
 import { fmtDec, fmtInt, fmtInterval, fmtSigned, isNum, outcomeName } from "@/lib/format/sprint";
 import { CurveChart, IntervalChart } from "@/components/sprint/charts";
 import { Section, SprintGate, SprintHeader, TableWrap, TD, TDR, TH, THR } from "@/components/sprint/SprintFrame";
-import { KindTag, Val } from "@/components/sprint/Value";
+import { KindTag, Txt, Val } from "@/components/sprint/Value";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "스프린트 결과 · Uplift" };
@@ -117,7 +117,45 @@ export default async function UpliftPage() {
         )}
       </Section>
 
-      <Section title="모델 비교">
+      <Section
+        title="모델 선택"
+        note="학습 방법은 학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 골랐습니다. 아래 '모델 비교'의 Test 지표는 고른 뒤 보고만 합니다(DR-303)."
+      >
+        <p className="text-body-sm text-text">
+          학습 방법 · <Txt text={a.fitted_method} /> (
+          <Txt text={a.fitted_method_source} />)
+        </p>
+        {a.best_method_selection?.validation_qini ? (
+          <TableWrap label="Uplift 후보별 Validation Qini 표">
+            <thead>
+              <tr>
+                <th className={TH}>방법</th>
+                <th className={THR}>Validation Qini (선택 점수)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(a.best_method_selection.validation_qini).map(([name, value]) => (
+                <tr key={name}>
+                  <td className={TD}>
+                    {name}
+                    {name === a.best_method_selection?.best_method ? " (확정)" : ""}
+                  </td>
+                  <td className={TDR}>
+                    <Val text={fmtDec(value, 4)} />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </TableWrap>
+        ) : (
+          <p className="text-body-sm text-text-secondary">이 결과 파일에는 Validation Qini 가 없습니다.</p>
+        )}
+        <p className="text-caption text-text-secondary">
+          기준 · <Txt text={a.best_method_selection?.basis} />
+        </p>
+      </Section>
+
+      <Section title="모델 비교 — Test (선택 뒤 보고만)">
         <TableWrap label="Uplift 모델 지표 표">
           <thead>
             <tr>

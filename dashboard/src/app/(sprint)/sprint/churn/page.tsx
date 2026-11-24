@@ -64,7 +64,95 @@ export default async function ChurnPage() {
             </dl>
           </Section>
 
-          <Section title="모델 비교 — 교차검증 (평균 ± 표준편차)">
+          <Section
+            title="모델 선택"
+            note="확정 모델은 아래 '선택 점수'로 골랐습니다. 무작위 교차검증 점수는 참고이며 선택에 쓰지 않았습니다(DR-303). 보조 지표(상위 20% 리프트 · ECE)는 같은 데이터에서 함께 보고 선택을 바꾸지 않습니다."
+          >
+            {churn.artifact.selection ? (
+              <>
+                <dl className="grid grid-cols-1 gap-sm md:grid-cols-3">
+                  <div>
+                    <dt className="text-caption text-text-secondary">선택 기준</dt>
+                    <dd className="text-body-md text-text">
+                      <Txt text={churn.artifact.selection.basis_label} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-caption text-text-secondary">확정 모델</dt>
+                    <dd className="text-headline-sm text-text">
+                      <Txt text={churn.artifact.selection.chosen} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-caption text-text-secondary">선택 점수</dt>
+                    <dd className="text-headline-sm text-text">
+                      <Val text={fmtDec(churn.artifact.selection.chosen_score)} />
+                    </dd>
+                  </div>
+                </dl>
+                {churn.artifact.selection.official === false ? (
+                  <p className="text-body-sm text-text-secondary">
+                    정식 선택 기준(시간 순서 검증)이 아닙니다 — 앞 기준일 데이터가 없는 개발 실행입니다.
+                  </p>
+                ) : null}
+                <TableWrap label="후보별 선택 점수 표">
+                  <thead>
+                    <tr>
+                      <th className={TH}>모델</th>
+                      <th className={TH}>구분</th>
+                      <th className={THR}>순위</th>
+                      <th className={THR}>선택 점수</th>
+                      <th className={THR}>상위 20% 리프트</th>
+                      <th className={THR}>ECE</th>
+                      <th className={THR}>참고 · 무작위 CV</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(churn.artifact.selection.candidates ?? []).map((c) => (
+                      <tr key={c.name}>
+                        <td className={TD}>
+                          {c.name}
+                          {c.chosen ? " (확정)" : ""}
+                        </td>
+                        <td className={TD}>
+                          <KindTag kind={c.kind} />
+                        </td>
+                        <td className={TDR}>
+                          {c.eligible === false ? (
+                            <span className="text-text-secondary">선택 대상 아님</span>
+                          ) : (
+                            <Val text={fmtInt(c.rank)} />
+                          )}
+                        </td>
+                        <td className={TDR}>
+                          <Val text={fmtDec(c.selection_score)} />
+                        </td>
+                        <td className={TDR}>
+                          <Val text={fmtDec(c.lift_at_20, 2)} />
+                        </td>
+                        <td className={TDR}>
+                          <Val text={fmtDec(c.ece)} />
+                        </td>
+                        <td className={TDR}>
+                          <Val text={fmtDec(c.random_cv_score)} />
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+              </>
+            ) : (
+              <p className="text-body-sm text-text">
+                이 결과 파일에는 후보별 선택 점수가 없습니다(#303 이전 실행). 선택 기준{" "}
+                <Txt text={churn.artifact.selection_basis} /> · 확정 <Txt text={churn.artifact.best_proposed} />
+              </p>
+            )}
+          </Section>
+
+          <Section
+            title="모델 비교 — 무작위 교차검증 (평균 ± 표준편차)"
+            note="참고 지표입니다. 같은 데이터로 튜닝 · 비교한 점수라 낙관적이고, 모델 선택에는 위 '모델 선택'의 점수를 썼습니다."
+          >
             <TableWrap label="이탈 모델 교차검증 지표 표">
               <thead>
                 <tr>
