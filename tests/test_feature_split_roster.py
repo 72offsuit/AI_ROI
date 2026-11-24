@@ -8,10 +8,12 @@
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import itertools
 import unittest
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from types import SimpleNamespace
 
 HAVE_PANDAS = all(importlib.util.find_spec(name) is not None for name in ("numpy", "pandas"))
@@ -153,6 +155,27 @@ class SplitRosterTests(unittest.TestCase):
         self.assertAlmostEqual(2 / 3, check["shares"]["F2_RARE"])
         self.assertEqual(["F2_RARE", "F3_REGULAR", "F4_FREQUENT"], check["outside"])
 
+    def test_official_test_is_a_candidate_only_from_a_complete_roster_built_before_t2_outcomes(self):
+        roster, record, _ = self.build()
+        self.assertEqual({"status": "candidate", "n_test": 2, "reasons": []},
+                         {k: record["official_test"][k] for k in ("status", "n_test", "reasons")})
+        cohorts = _cohorts()
+        del cohorts["t_prior"]
+        withheld = {
+            "t_prior_missing": self.build(cohorts, not_run={"t_prior": "앞 기준일 not_run"}),
+            "no_observation_evidence": self.build(observation_complete=False),
+            "outcomes_read_first": self.build(t2_outcomes_read="S0 분기 결과 읽은 뒤 생성"),
+        }
+        for case, (_, rec, _) in withheld.items():
+            with self.subTest(case=case):
+                self.assertEqual("withheld", rec["official_test"]["status"])
+                self.assertEqual(1, len(rec["official_test"]["reasons"]))
+        self.assertIn("t_prior", withheld["t_prior_missing"][1]["official_test"]["reasons"][0])
+        cohorts = _cohorts()
+        del cohorts["t2"]
+        _, rec, _ = self.build(cohorts)
+        self.assertIsNone(rec["official_test"]["n_test"])
+
     def test_order_items_frame_from_exchange_orders(self):
         from src.decision.split_roster import order_items_frame
 
@@ -161,6 +184,115 @@ class SplitRosterTests(unittest.TestCase):
         frame = order_items_frame(orders)
         self.assertEqual([["o1", "p1", 2, 1_500]], frame.values.tolist())
         self.assertIsNone(order_items_frame(None))
+
+
+RUN_SPRINT = Path(__file__).resolve().parents[1] / "src" / "orchestration" / "run_sprint.py"
+
+
+def _run_sprint_parts(*names: str) -> dict:
+    """run_sprint 의 최상위 정의 몇 개만 AST 로 떼어 실행한다 — 모듈 전체(시뮬레이터 API 포함)를 import 하지 않는다."""
+    import importlib as _importlib
+    from typing import Any, Callable, Mapping
+
+    tree = ast.parse(RUN_SPRINT.read_text(encoding="utf-8"))
+    nodes = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.ClassDef)):
+            defined = {node.name}
+        elif isinstance(node, ast.Assign):
+            defined = {t.id for t in node.targets if isinstance(t, ast.Name)}
+        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+            defined = {node.target.id}
+        else:
+            continue
+        if defined & set(names):
+            nodes.append(node)
+    namespace = {"Any": Any, "Callable": Callable, "Mapping": Mapping, "importlib": _importlib,
+                 "timedelta": timedelta}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(RUN_SPRINT), "exec"), namespace)
+    missing = set(names) - set(namespace)
+    if missing:
+        raise AssertionError(f"run_sprint 에 없다: {sorted(missing)}")
+    return namespace
+
+
+@unittest.skipUnless(HAVE_PANDAS, SKIP_REASON)
+class RunSprintRosterOrderTests(unittest.TestCase):
+    """#319 리뷰 — 기존 시간 평가에 실제로 넘기는 고객과 과제 Test 후보가 겹치지 않는다."""
+
+    def roster(self):
+        from src.decision.split_roster import build_split_roster
+
+        return build_split_roster(_events(), SIGNUPS, cohorts=_cohorts(), order_items=None, observation_complete=True)
+
+    def test_temporal_holdout_scope_drops_official_test_candidates(self):
+        scope_fn = _run_sprint_parts("temporal_holdout_scope")["temporal_holdout_scope"]
+        roster, _, _ = self.roster()
+        official_test = set(roster.loc[(roster["origin"] == "t2") & (roster["role"] == "test"), "customer_id"])
+        self.assertEqual({"c", "f"}, official_test)
+        labeled = ["a", "b", "c", "d", "e", "f"]               # S0 분기 라벨이 있는 Feature(t2) 고객
+        eligible = {"a", "b", "c", "d", "f"}
+        treated = {"b"}
+        in_scope, scope = scope_fn(labeled, eligible, treated, roster)
+        self.assertEqual(["a", "d"], in_scope)                 # = t2 future_existing
+        self.assertEqual(set(), set(in_scope) & official_test)
+        self.assertEqual({"official_test_known": True, "n_excluded_official_test": 2, "n_official_test_evaluated": 0},
+                         {k: scope[k] for k in ("official_test_known", "n_excluded_official_test",
+                                                "n_official_test_evaluated")})
+        # 명부(t2 역할)가 없으면 뺄 후보를 모른다 — 평가는 하되 그 사실을 남긴다.
+        in_scope, scope = scope_fn(labeled, eligible, treated, None)
+        self.assertEqual(["a", "c", "d", "f"], in_scope)
+        self.assertIs(False, scope["official_test_known"])
+
+    def test_roster_is_built_before_any_t2_outcome_and_the_holdout_uses_its_scope(self):
+        tree = ast.parse(RUN_SPRINT.read_text(encoding="utf-8"))
+
+        def stage_line(fn, name):
+            for node in ast.walk(fn):
+                if (isinstance(node, ast.With) and isinstance(node.items[0].context_expr, ast.Call)
+                        and node.items[0].context_expr.args
+                        and isinstance(node.items[0].context_expr.args[0], ast.Constant)
+                        and node.items[0].context_expr.args[0].value == name):
+                    return node
+            return None
+
+        runner = next(fn for fn in tree.body if isinstance(fn, ast.FunctionDef)
+                      and stage_line(fn, "churn_temporal_holdout") is not None)
+        calls = {}
+        for node in ast.walk(runner):
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                calls.setdefault(node.func.id, []).append(node)
+        prepare = min(n.lineno for n in calls["prepare_split_roster"])
+        self.assertLess(stage_line(runner, "scores_t2").lineno, prepare)
+        # t2 분기 결과(라벨) = 기준 시각 ctx["t2"] 로 만드는 결과. t1 라벨(ctx["t1"])은 명부 입력이라 앞서도 된다.
+        t2_outcomes = [n.lineno for n in calls["build_outcomes"]
+                       if any(ast.unparse(arg) == "ctx['t2']" for arg in n.args)]
+        self.assertTrue(t2_outcomes)
+        self.assertLess(prepare, min(t2_outcomes))
+        holdout = stage_line(runner, "churn_temporal_holdout")
+        self.assertLess(prepare, holdout.lineno)
+        inside = {n.func.id for n in ast.walk(holdout) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)}
+        self.assertIn("temporal_holdout_scope", inside)
+
+    def test_prepare_withholds_official_test_after_t2_outcomes_were_read(self):
+        import pandas as pd
+
+        parts = _run_sprint_parts("DECISION_API", "NotRun", "decision_fn", "LABEL_WINDOW_DAYS",
+                                  "prepare_split_roster")
+        y_prior = pd.Series([0, 1], index=pd.Index(["a", "b"], name="customer_id"))
+        y_rct = pd.DataFrame({"churn": [0, 1, 0, None]}, index=pd.Index(["a", "b", "d", "e"], name="customer_id"))
+        ctx = {
+            "events_t2": _events(), "signups_t1": SIGNUPS, "t1": T1, "t2": T2,
+            "churn_prior": {"status": "ok", "index_time": T_PRIOR, "label_window": {"start": T_PRIOR, "end": T1},
+                            "y": y_prior, "tables": {"eligible": ["a", "b", "c"]}},
+            "rct_assignment": dict(ARMS), "Y_rct": y_rct, "eligible_t2": ["a", "b", "c", "d", "f"],
+            "event_read_evidence": {"t2": {"status": "ok", "verified_run_ids": ["run-1"]}},
+        }
+        before = parts["prepare_split_roster"](dict(ctx))
+        self.assertEqual(("ok", "candidate"), (before["status"], before["official_test"]["status"]))
+        after = parts["prepare_split_roster"]({**ctx, "t2_outcomes_read": "S0"})
+        self.assertEqual("withheld", after["official_test"]["status"])
+        self.assertIn("S0", after["official_test"]["reasons"][0])
 
 
 def pd_isna(value) -> bool:

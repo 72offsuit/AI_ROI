@@ -12,6 +12,8 @@ ML · LSTM 비교(#317) · 고객군 성능(#303 ML-010) · 등급별 이탈률(
 | 모두 | ``excluded`` | 사유 ``exclusion_reason``(``rct_treated`` · ``no_feature_or_label``) |
 
 - t2 역할은 **라벨을 보지 않고** 정한다(``labeled`` 를 받지 않는다). Test 라벨은 GATE 3 동결 뒤에만 연다.
+- 과제 Test 후보(``official_test.status = candidate``)는 세 기준일이 모두 있고 · t2 까지 관측 근거가 있고 · t2 분기
+  결과를 읽기 **전에** 만든 명부뿐이다. 아니면 ``withheld`` — t2 ``test`` 역할은 개발용이고 과제 Test 로 인수하지 않는다.
 - 규칙: 한 모델의 학습 표본과 평가 표본에 같은 (고객, 기준일) 쌍이 들어가지 않는다. 기준일이 다르면 같은 고객이
   여러 행에 나오는 것은 설계대로다(#218 답변).
 - 층화 키 ``stratum`` = ``value_tier`` × ``frequency_tier``(DR-221). ``UNKNOWN`` 도 한 층이다.
@@ -108,13 +110,14 @@ def _frequency_check(tiers: pd.DataFrame) -> dict[str, Any]:
 
 def build_split_roster(events: pd.DataFrame, signups: Mapping[str, Any], *, cohorts: Mapping[str, Mapping[str, Any]],
                        order_items: pd.DataFrame | None, observation_complete: bool,
-                       not_run: Mapping[str, str] | None = None,
+                       not_run: Mapping[str, str] | None = None, t2_outcomes_read: str | None = None,
                        ) -> tuple[pd.DataFrame, dict[str, Any], dict[str, pd.DataFrame]]:
     """기준일별 명부 · 요약 · 관측 등급 표.
 
     ``cohorts[origin]`` = ``{"index_time", "label_window": (start, end) | None, "eligible": [...],
     "labeled": [...] | None, "rct_arm": {customer_id: arm} | None}``. 빠진 기준일은 ``not_run[origin]`` 사유와 함께
     요약에 ``not_run`` 으로 남는다. t2 의 ``labeled`` 는 쓰지 않는다(라벨을 보지 않고 역할을 정한다).
+    ``t2_outcomes_read`` = 명부를 만들기 전에 t2 분기 결과(라벨)를 이미 읽었다면 그 사실 — 과제 Test 후보를 보류한다.
     """
     unknown = set(cohorts) - set(ORIGINS)
     if unknown:
@@ -160,7 +163,7 @@ def build_split_roster(events: pd.DataFrame, signups: Mapping[str, Any], *, coho
             "roles": {k: int(v) for k, v in role.value_counts().sort_index().items()},
             "exclusions": {k: int(v) for k, v in reason.dropna().value_counts().sort_index().items()},
             "observation_complete": bool(observation_complete),
-            "tiers": {k: meta[k] for k in ("version", "window", "window_complete", "value_boundaries_krw",
+            "tiers": {k: meta[k] for k in ("version", "window", "data_start_before_window", "value_boundaries_krw",
                                            "n_value_basis", "counts", "unknown_reasons", "items", "signup")},
             "tier_counts_by_role": {
                 r: {col: {str(k): int(v) for k, v in tiers.loc[role == r, col].value_counts().sort_index().items()}
@@ -184,5 +187,26 @@ def build_split_roster(events: pd.DataFrame, signups: Mapping[str, Any], *, coho
         "pair_rule": "한 모델의 학습 표본과 평가 표본에 같은 (customer_id, origin) 쌍이 들어가지 않는다",
         "n_rows": int(len(roster)),
         "origins": summary,
+        "official_test": _official_test(roster, summary, observation_complete, t2_outcomes_read),
     }
     return roster, record, tiers_by_origin
+
+
+def _official_test(roster: pd.DataFrame, summary: Mapping[str, Any], observation_complete: bool,
+                   t2_outcomes_read: str | None) -> dict[str, Any]:
+    """이 명부의 t2 ``test`` 역할을 과제 Test(ML-004) 후보로 인수할 수 있는가(#319 리뷰 · DR-218-common-roster)."""
+    reasons = [f"기준일 {origin} {summary[origin]['status']} — 학습 · 검증 고객을 다 알 수 없다"
+               for origin in ORIGINS if summary[origin]["status"] != "ok"]
+    if not observation_complete:
+        reasons.append("t2 까지 이벤트를 빠짐없이 읽었다는 실행 근거가 없다")
+    if t2_outcomes_read:
+        reasons.append(f"명부를 만들기 전에 t2 분기 결과를 읽었다 — {t2_outcomes_read}")
+    has_t2 = summary["t2"]["status"] == "ok"
+    return {
+        "status": "withheld" if reasons else "candidate",
+        "n_test": int((roster["role"] == "test").sum()) if has_t2 else None,
+        "reasons": reasons,
+        "rule": ("세 기준일이 모두 ok · t2 관측 근거 ok · t2 분기 결과를 읽기 전에 만든 명부만 과제 Test 후보다. 후보는 "
+                 "GATE 3 에서 동결하고 동결 뒤 1회만 평가한다 — 그 전에는 어떤 평가 · 선택에도 넣지 않는다. withheld "
+                 "명부의 test 역할은 개발용이다"),
+    }

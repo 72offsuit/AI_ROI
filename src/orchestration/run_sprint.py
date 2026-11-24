@@ -1801,6 +1801,10 @@ def prepare_split_roster(ctx: dict[str, Any]) -> dict[str, Any]:
     - t2: Eligible(t2) — **라벨을 보지 않고** ``test`` · ``future_existing`` 을 정한다.
     기준일 하나가 없으면 그 기준일만 not_run 이다. 등급의 주 구매 상품군은 t2 교환 묶음 품목(분기 restore 전)을 쓴다.
     결과 단계가 아니다 — 실패해도 다른 결과는 그대로 쓴다(사유를 run_meta.split_roster 에 남긴다).
+
+    **t2 분기 결과를 읽기 전에 부른다**(#319 리뷰) — ``scores_t2`` 바로 뒤. 그래야 기존 시간 평가
+    (``churn_temporal_holdout``)가 과제 Test 후보를 빼고 돌 수 있다. 결과를 이미 읽은 뒤 불리면(앞 단계 중단 뒤
+    ``finally`` 등) 명부는 만들되 과제 Test 후보를 보류한다(``official_test.status = withheld``).
     """
     try:
         build = decision_fn("build_split_roster")
@@ -1836,9 +1840,11 @@ def prepare_split_roster(ctx: dict[str, Any]) -> dict[str, Any]:
             raise NotRun("명부를 만들 기준일이 하나도 없다 — " + "; ".join(f"{k}: {v}" for k, v in not_run.items()))
         orders = ctx.get("exchange_orders_t2")
         evidence = (ctx.get("event_read_evidence") or {}).get("t2") or {}
+        read = ctx.get("t2_outcomes_read")
         roster, record, tiers = build(ctx["events_t2"], ctx["signups_t1"], cohorts=cohorts,
                                       order_items=to_items(orders), observation_complete=evidence.get("status") == "ok",
-                                      not_run=not_run)
+                                      not_run=not_run,
+                                      t2_outcomes_read=None if read is None else f"{read} 분기 결과 읽은 뒤 생성")
         ctx["split_roster"] = roster
         ctx["split_roster_tiers"] = tiers
         return {"status": "ok", "reason": None, **record,
@@ -1872,6 +1878,36 @@ def write_split_roster(path: Path, ctx: Mapping[str, Any], extra_files: dict[str
     if not store:
         store = {"status": "not_requested", "reason": "--feature-store-root 없이 실행 — Feature 표를 저장하지 않았다"}
     return {**record, "file": ROSTER_FILE, "file_sha256": digest, "feature_store": store}
+
+
+def temporal_holdout_scope(labeled: Any, eligible: Any, treated: Any, roster: Any) -> tuple[list[Any], dict[str, Any]]:
+    """#319 리뷰 — 기존 시간 평가(DR-179, 기존 고객의 미래 시점)에 넘길 고객과 그 근거.
+
+    Eligible(t2) ∩ t1 실험 무처치에서 **명부의 과제 Test 후보(t2 ``test``)를 뺀다** — 후보는 GATE 3 동결 뒤 1회
+    평가 전까지 어떤 평가에도 넣지 않는다. 명부에 t2 역할이 없으면 뺄 후보를 모른다: 평가는 하되
+    ``official_test_known = False`` 로 남기고, 그 실행의 명부는 과제 Test 로 인수하지 않는다(withheld).
+    """
+    test: set[str] = set()
+    known = False
+    if roster is not None and len(roster):
+        rows = roster[roster["origin"] == "t2"]
+        known = bool(len(rows))
+        test = {str(c) for c in rows.loc[rows["role"] == "test", "customer_id"]}
+    in_scope: list[Any] = []
+    excluded = 0
+    for cid in labeled:
+        if cid not in eligible or cid in treated:
+            continue
+        if str(cid) in test:
+            excluded += 1
+            continue
+        in_scope.append(cid)
+    return in_scope, {
+        "official_test_known": known,
+        "n_excluded_official_test": excluded,
+        "n_official_test_evaluated": len({str(c) for c in in_scope} & test),
+        "rule": "Eligible(t2) ∩ t1 실험 무처치 − 명부 과제 Test 후보(t2 test) — 명부는 t2 분기 결과를 읽기 전에 확정",
+    }
 
 
 def shap_summary_file(model: Any, X: Any, out: Path, seed: int, extra_files: dict[str, Path]) -> dict[str, Any]:
@@ -2336,6 +2372,10 @@ def run(config: SprintConfig) -> Path:
             comparison["scores_available"] = sorted(scores)
             comparison["scores_missing"] = reasons
 
+        # #218 · #319 리뷰 — 명부 역할을 t2 분기 결과(라벨)를 읽기 **전에** 확정한다. 아래 전략 단계가 분기 결과를 읽고,
+        # 기존 시간 평가는 이 명부의 과제 Test 후보를 빼고 돈다. 등급 표는 Feature Store 저장 때, 파일은 저장 뒤에 쓴다.
+        ctx["split_roster_record"] = prepare_split_roster(ctx)
+
         with log.stage("segments", requires=("scores_t2",)):
             skip_if_not_run(log, "segments")
             missing = [k for k in ("churn_p", "cate", "clv") if k not in scores]
@@ -2466,6 +2506,7 @@ def run(config: SprintConfig) -> Path:
                     build_outcomes = decision_fn("build_outcomes")
                     outcomes = build_outcomes(events, ctx["t2"], window_days=LABEL_WINDOW_DAYS,
                                               observation=observation, allow_incomplete=True)
+                    ctx.setdefault("t2_outcomes_read", strategy)  # 이 뒤에 만든 명부는 과제 Test 후보를 보류한다
                     if strategy == "S0":
                         # temporal holdout 은 Feature(t2) 고객으로 평가한다 — 집계 모집단과 따로다(#179 범위)
                         ctx["S0_outcomes"] = outcomes
@@ -2555,10 +2596,12 @@ def run(config: SprintConfig) -> Path:
             if not eligible:
                 raise NotRun("Eligible(t2) 가 없다 — 학습 모집단과 같은 범위로 평가할 수 없다")
             treated = {cid for cid, arm in (ctx.get("rct_assignment") or {}).items() if arm != "T0"}
-            in_scope = [cid for cid in labels_all.index if cid in eligible and cid not in treated]
+            # #319 리뷰 — 명부의 과제 Test 후보는 GATE 3 동결 전 어떤 평가에도 넣지 않는다(기존 고객 미래 시점 평가 = DR-179).
+            in_scope, scope = temporal_holdout_scope(labels_all.index, eligible, treated, ctx.get("split_roster"))
+            ctx["temporal_holdout_scope"] = scope
             holdout_y = labels_all.loc[in_scope]
             if holdout_y.empty:
-                raise NotRun("Eligible(t2) · t1 무처치 고객 중 유효한 churn 라벨이 없다")
+                raise NotRun("Eligible(t2) · t1 무처치 고객 중 과제 Test 후보가 아닌 유효한 churn 라벨이 없다")
             holdout_X = ctx["X2"].loc[holdout_y.index]
             audit = decision_fn("temporal_population_audit")(
                 *ctx["churn_train"], holdout_X, holdout_y,
@@ -2572,12 +2615,15 @@ def run(config: SprintConfig) -> Path:
                 pool["model_factory"] = ctx["churn_best_name"]
             holdout = call_by_name(decision_fn("evaluate_temporal_holdout"), pool)
             holdout = {**holdout, "population_audit": audit,
-                       "population": "Eligible(t2) ∩ t1 실험 무처치(T0 · 미배정) — 학습 모집단과 같은 정의",
+                       "population": ("Eligible(t2) ∩ t1 실험 무처치(T0 · 미배정) − 명부 과제 Test 후보 — 학습 모집단과 "
+                                      "같은 정의의 기존 고객 미래 시점 평가(DR-179)"),
+                       "official_test_scope": scope,
                        "eligible_source": eligible_source,
                        "n_labeled_all": int(len(labels_all)),
                        "n_excluded_not_eligible": int(sum(1 for cid in labels_all.index if cid not in eligible)),
                        "n_excluded_rct_treated": int(sum(1 for cid in labels_all.index
-                                                         if cid in eligible and cid in treated))}
+                                                         if cid in eligible and cid in treated)),
+                       "n_excluded_official_test": scope["n_excluded_official_test"]}
             if config.load_models is not None and "churn" in loaded_models:  # PR #279 리뷰 N1
                 holdout["training_cohort"] = {
                     "source": "불러온 모델 — 학습은 원래 실행에서 했다(재학습 없음)",
@@ -2588,7 +2634,8 @@ def run(config: SprintConfig) -> Path:
             churn_eval["temporal_holdout"] = holdout  # 확정 모델 1회 평가 — 전체 고객으로 다시 재지 않는다
             # 대시보드 ChurnModel.temporal_holdout — 같은 이름의 모델 행에 지표만 붙인다
             meta_keys = {"name", "scheme", "n_train", "n_test", "pos_rate_train", "pos_rate_test", "threshold",
-                         "n_labeled_all", "n_excluded_not_eligible", "n_excluded_rct_treated"}  # #215 범위 기록
+                         "n_labeled_all", "n_excluded_not_eligible", "n_excluded_rct_treated",
+                         "n_excluded_official_test"}  # #215 · #319 범위 기록
             models = churn_eval.get("models")
             for model in models if isinstance(models, list) else []:
                 if isinstance(model, dict) and isinstance(holdout, Mapping) and model.get("name") == holdout.get("name"):
@@ -2631,8 +2678,12 @@ def run(config: SprintConfig) -> Path:
         # #217 — 고객별 τ̂ (S8 채점 입력). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 uplift_eval 에 남긴다.
         uplift_eval["cate_file"] = cate_file(out / "artifacts" / CATE_FILE, ctx, extra_outputs,
                                              loaded=config.load_models is not None)
-        # #218 — 기준일별 공통 명부 · 관측 등급. Feature Store 저장 전에 계산하고(등급 표도 저장), 파일은 저장 뒤에 쓴다(표 지문).
-        roster_record = prepare_split_roster(ctx)
+        # #218 — 기준일별 공통 명부 · 관측 등급. scores_t2 뒤에 이미 만들었다(t2 분기 결과를 읽기 전). 앞 단계에서 중단돼
+        # 거기까지 못 갔으면 여기서 만든다 — 그때 분기 결과를 읽었으면 과제 Test 후보를 보류한다. 파일은 저장 뒤에 쓴다(표 지문).
+        roster_record = ctx.get("split_roster_record") or prepare_split_roster(ctx)
+        if isinstance(roster_record.get("official_test"), Mapping) and "temporal_holdout_scope" in ctx:
+            roster_record = {**roster_record, "official_test": {**roster_record["official_test"],
+                                                                "temporal_holdout": ctx["temporal_holdout_scope"]}}
         realism, extra_files = realism_copy(Path(config.realism_report))
         extra_files = {**extra_files, **extra_outputs}
         budget_record = ctx.get("budget") or {
