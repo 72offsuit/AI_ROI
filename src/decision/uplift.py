@@ -643,6 +643,16 @@ def _split(treatment: pd.Series, test_size: float, seed: int, stratified: bool):
 VALIDATION_SIZE = CONFIG.validation_size
 
 
+def selection_basis(primary_arm: str, joint: bool) -> str:
+    """``best_method_selection.basis`` 문구 — 규제 후보가 둘 이상이면(``joint``) 메타러너 × 규제를 함께 고른다.
+
+    후보가 하나뿐이면(``tuning.enabled = false``) 규제는 고르지 않으므로 메타러너만 골랐다고 적는다(PR #320 재리뷰).
+    """
+    how = ("메타러너 × 규제를 함께, 동점은 앞선 후보(현행값 먼저)" if joint
+           else "메타러너만(규제 후보 1개로 고정), 동점은 앞선 메타러너")
+    return f"validation Qini (train 의 {VALIDATION_SIZE:.0%}), arm {primary_arm} — {how} · DR-217-uplift-tuning"
+
+
 def _select_method(X_tr, t_tr, y_tr, methods, primary_arm: str, seed: int, stratified: bool,
                    configs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
     """train 을 다시 나눠 Validation Qini 로 **(제안 메타러너, 기저 학습기 규제)** 를 함께 고른다(DR-217-uplift-tuning).
@@ -681,8 +691,7 @@ def _select_method(X_tr, t_tr, y_tr, methods, primary_arm: str, seed: int, strat
     return {"best_method": best["method"] if best else None,
             "base_learner": dict(configs[best["config_id"]]) if best else None,
             "base_learner_is_current": bool(best) and best["config_id"] == 0,
-            "basis": (f"validation Qini (train 의 {VALIDATION_SIZE:.0%}), arm {primary_arm} — 메타러너 × 규제를 함께, "
-                      "동점은 앞선 후보(현행값 먼저) · DR-217-uplift-tuning"),
+            "basis": selection_basis(primary_arm, len(configs) > 1),
             "candidates": candidates,
             #: 고른 규제(없으면 현행값)에서 메타러너별 Validation Qini — 격자 전체는 ``tuning.grid``
             "validation_qini": {row["method"]: row["qini"] for row in grid if row["config_id"] == shown},

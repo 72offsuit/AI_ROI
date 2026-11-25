@@ -8,10 +8,11 @@
 import type { Metadata } from "next";
 
 import { loadSprint, sprintSource } from "@/lib/artifacts/sprint";
-import { fmtDec, fmtInt, fmtKrw, fmtMeanStd, fmtPct, meanStd } from "@/lib/format/sprint";
+import { fmtDec, fmtInt, fmtKrw, fmtMeanStd, fmtPct, isNum, meanStd } from "@/lib/format/sprint";
 import { BarChart, KindLegend } from "@/components/sprint/charts";
 import { Section, SprintGate, SprintHeader, TableWrap, TD, TDR, TH, THR } from "@/components/sprint/SprintFrame";
 import { KindTag, Txt, Val } from "@/components/sprint/Value";
+import type { ChurnEval, ChurnSelection, SelectionCandidate } from "@/lib/artifacts/sprint-types";
 
 export const dynamic = "force-dynamic";
 export const metadata: Metadata = { title: "스프린트 결과 · 이탈 예측" };
@@ -23,10 +24,100 @@ const METRICS: { key: string; label: string; domain?: [number, number] }[] = [
   { key: "lift_at_10", label: "Lift@10%" },
 ];
 
+const METRIC_LABELS: Record<string, string> = Object.fromEntries(METRICS.map((m) => [m.key, m.label]));
+
+/**
+ * Result files written before #303 have no `selection` block, but they do record what the model
+ * was chosen by (`selection_basis` · `selection_metric`) and keep each model's scores, so the block
+ * is rebuilt from those with the rule of `selection_record` in churn.py (#320 review): only proposed
+ * models are candidates, baselines keep their scores outside the choice. Null when the file does not
+ * say which score the model was chosen by — nothing is guessed.
+ */
+function legacySelection(a: ChurnEval): ChurnSelection | null {
+  const basis = a.selection_basis;
+  const metric = a.selection_metric;
+  if ((basis !== "temporal_validation" && basis !== "random_cv") || !metric) return null;
+  const temporal = basis === "temporal_validation";
+  const label = METRIC_LABELS[metric] ?? metric;
+  const rows: SelectionCandidate[] = (a.models ?? []).map((m) => {
+    const cv = meanStd(m.cv?.[metric]).mean;
+    const tv = m.temporal_validation?.[metric];
+    return {
+      name: m.name,
+      kind: m.kind,
+      eligible: m.kind === "proposed",
+      selection_score: temporal ? (isNum(tv) ? tv : null) : cv,
+      random_cv_score: cv,
+      chosen: m.name === a.best_proposed,
+      rank: null,
+    };
+  });
+  rows
+    .filter((r) => r.eligible && isNum(r.selection_score))
+    .sort((x, y) => (y.selection_score as number) - (x.selection_score as number))
+    .forEach((r, i) => {
+      r.rank = i + 1;
+    });
+  const official = temporal && metric === "roc_auc";
+  return {
+    basis,
+    metric,
+    official,
+    official_reason: official
+      ? null
+      : temporal
+        ? `설정 지표 ${label} 로 골랐다 — 정식 기준은 시간 순서 검증 ROC-AUC(DR-303)`
+        : "앞 기준일 데이터가 없어 무작위 교차검증 평균으로 골랐다 — 개발 실행용",
+    basis_label: temporal
+      ? `시간 순서 검증 ${label}${official ? "" : " — 설정 지표, 정식 기준(ROC-AUC) 아님"}`
+      : `무작위 교차검증 ${label} 평균 — 앞 기준일 데이터 없음(개발 실행용)`,
+    reference_label: temporal ? `무작위 교차검증 ${label} 평균 — 참고, 선택에 쓰지 않음` : null,
+    chosen: a.best_proposed ?? null,
+    chosen_score: rows.find((r) => r.chosen)?.selection_score ?? null,
+    candidates: rows,
+  };
+}
+
+/**
+ * What the selection section and the CV table say depends on what the file says the model was
+ * chosen by and with which metric (#320 review): with no earlier-origin data the random-CV mean of
+ * that metric *is* the selection score. Files from before #303 carry no secondary metrics.
+ */
+function selectionNotes(sel: ChurnSelection | null, legacy: boolean): { selection: string; cv: string } {
+  const metric = sel?.metric ? ` ${METRIC_LABELS[sel.metric] ?? sel.metric}` : "";
+  const secondary = legacy
+    ? ""
+    : " 보조 지표(상위 20% 리프트 · ECE)는 같은 데이터에서 함께 보고 선택을 바꾸지 않습니다.";
+  const source = legacy
+    ? "#303 이전 실행의 결과 파일이라 선택 기록이 따로 없어, 파일에 적힌 선택 기준 · 지표와 모델별 점수로 다시 적었습니다. "
+    : "";
+  if (sel?.basis === "random_cv") {
+    return {
+      selection: `${source}이 실행은 앞 기준일 데이터가 없어 무작위 교차검증${metric} 평균으로 골랐습니다 — 아래 '선택 점수'가 곧 무작위 교차검증 점수입니다. 개발 실행용이라 정식 선택(GATE 3)에 쓰지 않습니다(DR-303).${secondary}`,
+      cv: `이 실행은 이 교차검증 표의${metric} 평균으로 모델을 골랐습니다(앞 기준일 데이터 없음 · 개발 실행용). 같은 데이터로 튜닝 · 비교한 점수라 낙관적입니다.`,
+    };
+  }
+  if (sel?.basis === "temporal_validation") {
+    return {
+      selection: `${source}확정 모델은 아래 '선택 점수'(시간 순서 검증${metric})로 골랐습니다. 무작위 교차검증 점수는 참고이며 선택에 쓰지 않았습니다(DR-303).${secondary}`,
+      cv: `참고 지표입니다. 같은 데이터로 튜닝 · 비교한 점수라 낙관적이고, 모델 선택에는 위 '모델 선택'의 점수(시간 순서 검증${metric})를 썼습니다.`,
+    };
+  }
+  return {
+    selection: legacy
+      ? "#303 이전 실행의 결과 파일이고, 어떤 점수로 골랐는지 적혀 있지 않습니다."
+      : "이 결과 파일에는 어떤 점수로 골랐는지 적혀 있지 않습니다.",
+    cv: "같은 데이터로 튜닝 · 비교한 점수라 낙관적입니다. 이 결과 파일에는 선택 기준이 적혀 있지 않습니다.",
+  };
+}
+
 export default async function ChurnPage() {
   const source = sprintSource();
   const churn = await loadSprint("churn_eval");
   const clv = await loadSprint("clv_eval");
+  const legacy = churn.kind === "ok" && !churn.artifact.selection;
+  const selection = churn.kind === "ok" ? (churn.artifact.selection ?? legacySelection(churn.artifact)) : null;
+  const notes = selectionNotes(selection, legacy);
 
   return (
     <div className="flex flex-col gap-lg">
@@ -64,7 +155,101 @@ export default async function ChurnPage() {
             </dl>
           </Section>
 
-          <Section title="모델 비교 — 교차검증 (평균 ± 표준편차)">
+          <Section title="모델 선택" note={notes.selection}>
+            {selection ? (
+              <>
+                <dl className="grid grid-cols-1 gap-sm md:grid-cols-3">
+                  <div>
+                    <dt className="text-caption text-text-secondary">선택 기준</dt>
+                    <dd className="text-body-md text-text">
+                      <Txt text={selection.basis_label} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-caption text-text-secondary">확정 모델</dt>
+                    <dd className="text-headline-sm text-text">
+                      <Txt text={selection.chosen} />
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-caption text-text-secondary">선택 점수</dt>
+                    <dd className="text-headline-sm text-text">
+                      <Val text={fmtDec(selection.chosen_score)} />
+                    </dd>
+                  </div>
+                </dl>
+                {selection.official === false ? (
+                  <p className="text-body-sm text-text-secondary">
+                    정식 선택이 아닙니다 —{" "}
+                    {selection.official_reason ?? "정식 기준(시간 순서 검증 ROC-AUC)으로 고른 실행이 아닙니다"}
+                  </p>
+                ) : null}
+                <TableWrap label="후보별 선택 점수 표">
+                  <thead>
+                    <tr>
+                      <th className={TH}>모델</th>
+                      <th className={TH}>구분</th>
+                      <th className={THR}>순위</th>
+                      <th className={THR}>선택 점수</th>
+                      {legacy ? null : (
+                        <>
+                          <th className={THR}>상위 20% 리프트</th>
+                          <th className={THR}>ECE</th>
+                        </>
+                      )}
+                      {selection.reference_label ? <th className={THR}>참고 · 무작위 CV</th> : null}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(selection.candidates ?? []).map((c) => (
+                      <tr key={c.name}>
+                        <td className={TD}>
+                          {c.name}
+                          {c.chosen ? " (확정)" : ""}
+                        </td>
+                        <td className={TD}>
+                          <KindTag kind={c.kind} />
+                        </td>
+                        <td className={TDR}>
+                          {c.eligible === false ? (
+                            <span className="text-text-secondary">선택 대상 아님</span>
+                          ) : (
+                            <Val text={fmtInt(c.rank)} />
+                          )}
+                        </td>
+                        <td className={TDR}>
+                          <Val text={fmtDec(c.selection_score)} />
+                        </td>
+                        {legacy ? null : (
+                          <>
+                            <td className={TDR}>
+                              <Val text={fmtDec(c.lift_at_20, 2)} />
+                            </td>
+                            <td className={TDR}>
+                              <Val text={fmtDec(c.ece)} />
+                            </td>
+                          </>
+                        )}
+                        {selection.reference_label ? (
+                          <td className={TDR}>
+                            <Val text={fmtDec(c.random_cv_score)} />
+                          </td>
+                        ) : null}
+                      </tr>
+                    ))}
+                  </tbody>
+                </TableWrap>
+              </>
+            ) : (
+              <p className="text-body-sm text-text">
+                선택 기준 <Txt text={churn.artifact.selection_basis} /> · 지표{" "}
+                <Txt text={churn.artifact.selection_metric} /> · 확정 <Txt text={churn.artifact.best_proposed} /> —
+                선택 기준 · 지표가 적혀 있지 않아 아래 교차검증 표가 선택 점수인지 알 수 없습니다.
+              </p>
+            )}
+          </Section>
+
+          <Section title="모델 비교 — 무작위 교차검증 (평균 ± 표준편차)" note={notes.cv}>
             <TableWrap label="이탈 모델 교차검증 지표 표">
               <thead>
                 <tr>

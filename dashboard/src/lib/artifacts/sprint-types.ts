@@ -36,6 +36,38 @@ export interface ChurnModel {
   kind: ModelKind;
   cv?: Record<string, MeanStd> | null;
   temporal_holdout?: Record<string, MeanStd> | null;
+  /** Earlier-origin validation scores (#215) — what files written before #303 were chosen by. */
+  temporal_validation?: Record<string, unknown> | null;
+}
+
+/** One candidate in `churn_eval.selection` (#303 ML-011): the score it was chosen by, kept apart from random CV. */
+export interface SelectionCandidate {
+  name: string;
+  kind: ModelKind;
+  eligible?: boolean | null;
+  selection_score?: number | null;
+  random_cv_score?: number | null;
+  lift_at_20?: number | null;
+  ece?: number | null;
+  brier?: number | null;
+  chosen?: boolean | null;
+  rank?: number | null;
+}
+
+/** `churn_eval.selection` — how the model was chosen (#303 · DR-303-model-selection). */
+export interface ChurnSelection {
+  basis?: string | null;
+  metric?: string | null;
+  /** True only for temporal validation scored by ROC-AUC (DR-303); otherwise `official_reason` says why not. */
+  official?: boolean | null;
+  official_reason?: string | null;
+  official_criterion?: string | null;
+  basis_label?: string | null;
+  reference_label?: string | null;
+  chosen?: string | null;
+  chosen_score?: number | null;
+  candidates?: SelectionCandidate[];
+  rule?: Record<string, string> | null;
 }
 
 export interface ChurnEval extends SprintHeader {
@@ -45,6 +77,11 @@ export interface ChurnEval extends SprintHeader {
   models?: ChurnModel[];
   shap_top?: { feature: string; mean_abs?: number | null }[];
   importance_method?: string | null;
+  best_proposed?: string | null;
+  selection_basis?: string | null;
+  selection_metric?: string | null;
+  /** Absent in result files written before #303 — the screen then says so instead of guessing. */
+  selection?: ChurnSelection | null;
 }
 
 export interface ClvEval extends SprintHeader {
@@ -65,6 +102,32 @@ export interface UpliftEval extends SprintHeader {
   /** Label window of that outcome in days (#299). */
   outcome_window_days?: number | null;
   n?: number | null;
+  /** Method actually fitted and why (#303 ML-011). */
+  fitted_method?: string | null;
+  fitted_method_source?: string | null;
+  /** Chosen by Validation Qini — Test Qini in `models` is reported after the choice, not used for it. */
+  best_method_selection?: {
+    /** Null when no candidate had a usable Validation Qini — the run then fits the default method. */
+    best_method?: string | null;
+    basis?: string | null;
+    reason?: string | null;
+    /** Per meta-learner at the chosen regularization only; the full grid is `tuning.grid`. */
+    validation_qini?: Record<string, number | null> | null;
+    base_learner?: Record<string, unknown> | null;
+    base_learner_is_current?: boolean | null;
+    /** Absent in files written before #294 — the meta-learner was then chosen without a regularization grid. */
+    tuning?: {
+      /** False when there was a single regularization candidate, so only the meta-learner was chosen. */
+      enabled?: boolean | null;
+      grid?: { config_id?: number | null; method?: string | null; qini?: number | null }[] | null;
+    } | null;
+    n_validation?: number | null;
+  } | null;
+  tuning_report?: { selection_ok?: boolean | null; selection_reason?: string | null } | null;
+  /** Present when the model was loaded instead of fitted in this run (`--load-models`). */
+  model_source?: string | null;
+  loaded_from?: string | null;
+  trained_run?: string | null;
   arms?: Record<string, number | null>;
   ate?: Record<string, { value?: number | null; ci95?: [number | null, number | null] | null } | null>;
   models?: {

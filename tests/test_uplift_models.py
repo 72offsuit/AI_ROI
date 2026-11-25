@@ -269,6 +269,7 @@ class TestRegularizationTuning(unittest.TestCase):
         sel = self.res["best_method_selection"]
         configs = sel["tuning"]["configs"]
         self.assertEqual(uplift.regularization_candidates(), configs)
+        self.assertEqual(uplift.selection_basis(self.res["primary_arm"], joint=len(configs) > 1), sel["basis"])
         self.assertEqual(len(configs) * 2, len(sel["tuning"]["grid"]))       # 제안 메타러너 2 × 규제 후보
         self.assertEqual(["t_learner", "x_learner"] * len(configs), [r["method"] for r in sel["tuning"]["grid"]])
         best = max((r for r in sel["tuning"]["grid"] if r["qini"] is not None), key=lambda r: r["qini"])
@@ -319,6 +320,9 @@ class TestRegularizationTuning(unittest.TestCase):
         sel = r["best_method_selection"]
         self.assertEqual(1, len(sel["tuning"]["configs"]))
         self.assertIs(False, sel["tuning"]["enabled"])
+        # PR #320 재리뷰 — 규제를 고르지 않았으므로 기준 문구도 메타러너만
+        self.assertEqual(uplift.selection_basis(r["primary_arm"], joint=False), sel["basis"])
+        self.assertNotIn("규제를 함께", sel["basis"])
         self.assertEqual(dict(uplift.BASE_LEARNER), r["base_learner"])
 
     def test_grid_values_are_sorted_whatever_the_config_order(self) -> None:

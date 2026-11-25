@@ -31,3 +31,17 @@ Validation 선택 증거의 재계산·1e-12 수치 동점·완성 후 원자적
 수정 전 합성 산출과 최초 검수는 보존했다. 수정 후 같은 합성 입력의 학습·저장/복원·비교를
 새 출력 위치에서 다시 확인했다. 단일 run_id 강제는 도입하지 않았으며 공개 parent/child
 계보와의 인수 계약, MPS RNG 가설은 미결정·미확인으로 남긴다.
+
+## 모델 선택 근거 — Churn · Uplift (#303, SRS ML-009 · ML-011)
+
+선택 기준은 [DR-303](decisions/DR-303-model-selection.md)에 고정했다(1차 기준은 DR-215 그대로).
+
+| | 선택 점수 | 함께 싣는 것 | 쓰지 않는 것 |
+|---|---|---|---|
+| Churn | 시간 순서 검증 ROC-AUC(t_prior 학습 → t1 평가), 제안 모델 중 최댓값 · 동점은 후보 순서 | 상위 20% 리프트 · ECE · Brier(같은 데이터, 선택을 바꾸지 않음) · 무작위 CV(참고) | 시간 홀드아웃(t2) · 과제 Test · Final Holdout |
+| Uplift | train 안 Validation Qini(DR-217-uplift-tuning) | Test Qini · AUUC · uplift@k(고른 뒤 보고만) | 과제 Test · Final Holdout |
+
+- 결과 파일: `churn_eval.selection`(기준 · 후보별 선택 점수 · 순위 · 참고 무작위 CV · `official`) · `churn_eval.selection_report`(고른 모델의 ML-009 지표). 앞 기준일 데이터가 없어 무작위 CV 로 고른 실행과, 설정 지표가 ROC-AUC 가 아닌(PR-AUC) 실행은 `official = false` — 이유는 `official_reason`, 정식 선택(GATE 3)에 쓰지 않는다. Uplift 는 Validation Qini 로 고르지 못했거나(기본 학습 방법) 불러온 모델이면 "골랐다"고 쓰지 않는다.
+- ML-009: 운영 임계의 혼동행렬 · 상위 10/20/30% 리프트 · 포착률 · 확률 분포(10구간 고객 수). 후보별 시간 순서 검증 · 시간 홀드아웃에도 싣는다.
+- CLI 요약과 대시보드(이탈 · Uplift 화면 "모델 선택" 절)는 선택 점수와 참고 점수를 다른 줄 · 열로 보인다.
+- 실제 고객 성능 수치는 정식 실행 뒤에 이 절에 덧붙인다. 고객군별 성능(ML-010)은 다음 PR 이다.
