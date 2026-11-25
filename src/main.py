@@ -227,13 +227,19 @@ def _scores(capture: Mapping[str, Any], keys: tuple[str, ...]) -> Mapping[str, A
     return scores
 
 
-def uplift_table(scores: Mapping[str, Any]) -> Any:
+def _segments(scores: Mapping[str, Any], is_new: Any = None) -> Any:
+    """run() 의 segments 단계와 같은 호출 — NEW 입력(#219, 명부 가입 시기)이 있으면 같은 값을 넘긴다."""
+    assign_segments = _decision_attr("src.decision.segments", "assign_segments")
+    extra = {"is_new": is_new} if is_new is not None else {}
+    return assign_segments(scores["churn_p"], scores["cate"], scores["clv"], **extra)
+
+
+def uplift_table(scores: Mapping[str, Any], is_new: Any = None) -> Any:
     """고객별 점수 표 — 값은 전부 의사결정 함수의 결과다. 세그먼트는 run() 의 segments 단계와 같은 호출이다."""
     import pandas as pd
 
     uplift_score = _decision_attr("src.decision.segments", "uplift_score")
     assign_quadrants = _decision_attr("src.decision.segments", "assign_quadrants")
-    assign_segments = _decision_attr("src.decision.segments", "assign_segments")
     prd_ids = _decision_attr("src.decision.segments", "SEGMENT_PRD_ID")
     churn_p, cate, clv = scores["churn_p"], scores["cate"], scores["clv"]
     uplift = uplift_score(cate)
@@ -248,7 +254,7 @@ def uplift_table(scores: Mapping[str, Any]) -> Any:
     table["uplift_score"] = uplift.reindex(table.index)
     table["uplift_arm"] = arm.reindex(table.index)
     table["quadrant"] = assign_quadrants(uplift, churn_p).reindex(table.index)
-    table["segment"] = assign_segments(churn_p, cate, clv).reindex(table.index)
+    table["segment"] = _segments(scores, is_new).reindex(table.index)
     table["segment_prd_id"] = table["segment"].map(prd_ids)
     table.index.name = "customer_id"
     return table
@@ -262,7 +268,7 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 
 def write_uplift_scores(run_dir: Path, capture: Mapping[str, Any]) -> dict[str, Any]:
-    table = uplift_table(_scores(capture, ("churn_p", "cate", "clv")))
+    table = uplift_table(_scores(capture, ("churn_p", "cate", "clv")), capture.get("is_new_t2"))
     path = run_dir / UPLIFT_SCORES
     table.to_csv(path, encoding="utf-8")  # 결손은 빈 칸 — 0 으로 채우지 않는다
     counts = {str(k): int(v) for k, v in table["segment"].value_counts().sort_index().items()}
@@ -296,8 +302,7 @@ def write_budget_allocation(run_dir: Path, capture: Mapping[str, Any]) -> dict[s
         if type(error).__name__ == "NotComputable":
             raise Unavailable(f"strategies.plan('S5') NotComputable: {error}") from error
         raise
-    segments = _decision_attr("src.decision.segments", "assign_segments")(
-        scores["churn_p"], scores["cate"], scores["clv"])
+    segments = _segments(scores, capture.get("is_new_t2"))
     prd_ids = _decision_attr("src.decision.segments", "SEGMENT_PRD_ID")
     frame = pd.DataFrame({"segment": segments})
     frame["treatment"] = pd.Series(assignment, dtype="object").reindex(frame.index)
@@ -594,6 +599,23 @@ def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
     return lines
 
 
+def segment_lines(segments: Mapping[str, Any]) -> list[str]:
+    """#219 — 세그먼트 인원(NEW 포함) · NEW 입력 상태 · 결과 전 등록한 가설 평가(DR-219-segments)."""
+    rows = [r for r in segments.get("segments") or [] if isinstance(r, Mapping)]
+    counts = " · ".join(f"{r.get('name')} {r.get('n')}" for r in rows)
+    lines = [f"  segments   {counts or '—'}"]
+    new_input = segments.get("new_input") or {}
+    if new_input.get("status") not in (None, "ok"):
+        lines.append(f"             ! NEW 판정 안 함 — {new_input.get('reason')}")
+    results = {"supported": "지지", "not_supported": "지지되지 않음", "undetermined": "판정 불가",
+               "not_evaluated": "평가 전(2부)"}
+    hypotheses = [h for h in (segments.get("new_segment") or {}).get("hypotheses") or [] if isinstance(h, Mapping)]
+    if hypotheses:
+        lines.append("             가설(결과 전 등록, DR-219-segments) " + " · ".join(
+            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}" for h in hypotheses))
+    return lines
+
+
 def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> list[str]:
     """사람이 읽는 요약 — 결과 JSON 에서 옮긴다. 없는 값은 '—' 로 적는다(0 으로 적지 않는다)."""
     def fmt(value: Any, digits: int = 3) -> str:
@@ -616,6 +638,9 @@ def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> lis
     uplift = _read_json(run_dir / "uplift_eval.json")
     if uplift.get("status") == "ok":
         lines.extend(uplift_selection_lines(uplift, fmt))
+    segments = _read_json(run_dir / "segments.json")
+    if segments.get("status") == "ok":
+        lines.extend(segment_lines(segments))
     clv = _read_json(run_dir / "clv_eval.json")
     if clv.get("status") == "ok":
         models = " · ".join(f"{m.get('name')} {fmt(m.get('spearman'))}" for m in clv.get("models") or [])

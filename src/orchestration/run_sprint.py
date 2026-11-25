@@ -168,6 +168,12 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "s1_eligibility": ("src.decision.strategies", "s1_eligibility"),
     "within_eligible": ("src.decision.strategies", "within_eligible"),
     "segment_stats": ("src.decision.segments", "segment_stats"),
+    # #219 — NEW 연결(DR-221 가입 시기) · 4분면 분포 · 쏠림 기록 · SEG-005 표(DR-219-segments)
+    "uplift_score": ("src.decision.segments", "uplift_score"),
+    "is_new_from_signup_tier": ("src.decision.segments", "is_new_from_signup_tier"),
+    "quadrant_summary": ("src.decision.segments", "quadrant_summary"),
+    "new_segment_shift": ("src.decision.segments", "new_segment_shift"),
+    "segment_table": ("src.decision.segments", "segment_table"),
     "what_if": ("src.decision.optimize", "what_if"),
     "what_if_budgets": ("src.decision.optimize", "what_if_budgets"),
     # #274 · DR-170 E1~E4 · E6 — 구속 예산 S4 대 S5 · 혼합 전략 S6(D-1) · 예산 근거 표시
@@ -1392,6 +1398,87 @@ def dashboard_ab(result: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def new_customer_flags(ctx: Mapping[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
+    """#219 — AI 세그먼트 NEW 의 입력: #218 명부 t2 행의 가입 시기 등급(DR-221). 다시 계산하지 않는다.
+
+    반환 (NEW 여부 · 가입 시기 등급 · 기록). 명부가 없으면 NEW 를 판정하지 않는다 — 다른 기준으로 메우지 않는다.
+    """
+    roster = ctx.get("split_roster")
+    if roster is None or not len(roster):
+        return None, None, {"status": "not_run",
+                            "reason": "명부가 없다 — 가입 시기 등급을 읽을 곳이 없어 NEW 를 판정하지 않았다(run_meta.split_roster)"}
+    rows = roster[roster["origin"] == "t2"]
+    if not len(rows):
+        return None, None, {"status": "not_run", "reason": "명부에 t2 행이 없다 — NEW 를 판정하지 않았다"}
+    signup = rows.set_index(rows["customer_id"].map(str))["signup_tier"]
+    flags = decision_fn("is_new_from_signup_tier")(signup)
+    return flags, signup, {"status": "ok", "source": "#218 명부 t2 행의 signup_tier(DR-221 — 가입 180일 미만 = NEW)",
+                           "n_rows": int(len(rows))}
+
+
+def segments_with_new(scores: Mapping[str, Any], ctx: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
+    """#219 — 세그먼트 배정(NEW 포함)과 4분면 분포 · NEW 쏠림 기록(DR-219-segments).
+
+    배정은 ``assign_segments`` 그대로이고 NEW 입력만 더한다. 4분면 · 쏠림 기록은 실패해도 배정은 그대로 쓴다(사유를 남긴다).
+    배정 결과 · NEW 여부 · 가입 시기는 ``ctx`` 에 둔다 — ``segments_6plus.csv`` 와 CLI 산출물이 같은 값을 쓴다.
+    """
+    assign = decision_fn("assign_segments")
+    try:
+        flags, signup, new_input = new_customer_flags(ctx)
+    except NotRun as reason:
+        flags, signup, new_input = None, None, {"status": "not_run", "reason": str(reason)}
+    churn_p, cate, clv = scores["churn_p"], scores["cate"], scores["clv"]
+    aligned = None
+    if flags is not None:
+        if "is_new" in inspect.signature(assign).parameters:
+            aligned = flags.reindex(churn_p.index.map(str))
+            aligned.index = churn_p.index
+        else:
+            new_input = {"status": "not_run", "reason": "assign_segments 가 is_new 를 받지 않는다 — NEW 를 판정하지 않았다"}
+    seg = assign(churn_p, cate, clv, **({"is_new": aligned} if aligned is not None else {}))
+    ctx["segments_t2"], ctx["is_new_t2"], ctx["signup_tier_t2"] = seg, aligned, signup
+    record: dict[str, Any] = {"new_input": new_input}
+    steps = {
+        "quadrants": lambda: decision_fn("quadrant_summary")(decision_fn("uplift_score")(cate), churn_p),
+        "new_segment": lambda: decision_fn("new_segment_shift")(churn_p, cate, clv, aligned),
+    }
+    for key, step in steps.items():
+        if key == "new_segment" and aligned is None:
+            record[key] = {"status": "not_run", "reason": new_input.get("reason") or "NEW 입력이 없다"}
+            continue
+        try:
+            record[key] = {"status": "ok", **step()}
+        except NotRun as reason:
+            record[key] = {"status": "not_run", "reason": str(reason)}
+        except Exception as error:  # 삼키지 않는다 — failed 와 사유
+            record[key] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    return seg, record
+
+
+SEGMENTS_FILE = "segments_6plus.csv"
+
+
+def segments_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Path]) -> dict[str, Any]:
+    """#219 — ``segments_6plus.csv``(SRS SEG-005): t2 점수 고객의 세그먼트 · 4분면 · 점수 · 우선순위 · 가입 시기."""
+    seg = ctx.get("segments_t2")
+    scores = ctx.get("scores") or {}
+    if seg is None:
+        return {"status": "not_run", "reason": "세그먼트를 배정하지 않았다(segments 단계 미실행 · 실패)"}
+    try:
+        table = decision_fn("segment_table")(scores["churn_p"], scores["cate"], scores.get("clv"), seg,
+                                             ctx.get("signup_tier_t2"))
+        path = Path(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        table.to_csv(path, index=False)
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    extra_files[SEGMENTS_FILE] = path
+    return {"status": "ok", "file": SEGMENTS_FILE, "rows": int(len(table)), "columns": list(table.columns),
+            "note": "priority_score = uplift × CLV(SEG-004 과제 기본). 빈 칸 = 계산 불가(결손) — 0 으로 채우지 않았다"}
+
+
 def _segment_summary(segments: Any, scores: Mapping[str, Any]) -> dict[str, Any]:
     pd = _pd()
     frame = pd.DataFrame({"segment": segments})
@@ -2409,8 +2496,8 @@ def run(config: SprintConfig) -> Path:
             missing = [k for k in ("churn_p", "cate", "clv") if k not in scores]
             if missing:
                 raise NotRun(f"점수가 없다: {missing}")
-            seg = decision_fn("assign_segments")(scores["churn_p"], scores["cate"], scores["clv"])
-            segments_out.update({"index_time": ctx["t2"], "n": int(len(seg))})
+            seg, extras = segments_with_new(scores, ctx)
+            segments_out.update({"index_time": ctx["t2"], "n": int(len(seg)), **extras})
             try:
                 rows = decision_fn("segment_stats")(seg, scores["churn_p"], scores["cate"], scores["clv"])
                 segments_out["segments"] = dashboard_segments(rows)  # 대시보드 Segments
@@ -2712,6 +2799,8 @@ def run(config: SprintConfig) -> Path:
         # #217 2부 — clv_predictions.csv (CLV-005). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 clv_eval 에 남긴다.
         clv_eval["clv_predictions_file"] = clv_predictions_file(out / "artifacts" / CLV_FILE, ctx, extra_outputs, run_id,
                                                                 loaded_models)
+        # #219 — segments_6plus.csv(SEG-005). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 segments 에 남긴다.
+        segments_out["segments_file"] = segments_file(out / "artifacts" / SEGMENTS_FILE, ctx, extra_outputs)
         # #217 — 고객별 τ̂ (S8 채점 입력). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 uplift_eval 에 남긴다.
         uplift_eval["cate_file"] = cate_file(out / "artifacts" / CATE_FILE, ctx, extra_outputs,
                                              loaded=config.load_models is not None)
