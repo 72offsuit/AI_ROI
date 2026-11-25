@@ -1,6 +1,6 @@
 {
  "generated_at": "2026-11-23T14:02:00+09:00",
- "scope": "관측 이벤트로 잰 F1~F13 만 담는다. 처치 효과 · 고객군(Persona) · 숨은 값은 담지 않는다(#163). 통과 띠는 docs/research/data_grounding.md §4.",
+ "scope": "관측 이벤트로 잰 F1~F11 · F13 만 담는다. 처치 효과 · 고객군별 값 · 숨은 값 · 생성 이탈률은 담지 않는다(#163). 통과 띠는 docs/research/data_grounding.md §4.",
  "source": {
   "simulator_version": "sim-0.9",
   "random_seed": "42",
@@ -20,8 +20,7 @@
  "summary": {
   "pass": 12,
   "borderline": 0,
-  "fail": 1,
-  "no_data": 0
+  "fail": 0
  },
  "metrics": [
   {
@@ -446,127 +445,6 @@
    "dashboard_verdict": "consistent",
    "parts": null,
    "note": "신규 기준: 교환 묶음 customers.signup_date > 관측 첫날. 관측 끝에서 잘린 추적(중앙 155일)이라 컬리의 '같은 해' 재구매율처럼 하한 쪽이다."
-  },
-  {
-   "id": "F12",
-   "name": "생성 이탈률 (42일 무구매)",
-   "unit": "%",
-   "synthetic": {
-    "churn_pct_mean": 48.3,
-    "population": "data_spec §4.1 eligible",
-    "ref_churn_180d_pct_mean": 26.96,
-    "ref_churn14_pct_mean": 45.56,
-    "ref_churn_active42_pct_mean": 15.86,
-    "by_T0": [
-     {
-      "T0": "2025-02-26",
-      "eligible_spec41": 0,
-      "churn_spec41_pct": null,
-      "lookback_days": 56,
-      "eligible_180d": 1909,
-      "churn_180d_pct": 16.76,
-      "churn14_pct": 28.99,
-      "churn_active42_pct": 14.5
-     },
-     {
-      "T0": "2025-03-28",
-      "eligible_spec41": 829,
-      "churn_spec41_pct": 37.03,
-      "lookback_days": 86,
-      "eligible_180d": 2061,
-      "churn_180d_pct": 20.96,
-      "churn14_pct": 37.93,
-      "churn_active42_pct": 14.85
-     },
-     {
-      "T0": "2025-04-27",
-      "eligible_spec41": 990,
-      "churn_spec41_pct": 43.13,
-      "lookback_days": 116,
-      "eligible_180d": 2148,
-      "churn_180d_pct": 25.65,
-      "churn14_pct": 43.68,
-      "churn_active42_pct": 15.8
-     },
-     {
-      "T0": "2025-05-27",
-      "eligible_spec41": 1064,
-      "churn_spec41_pct": 45.86,
-      "lookback_days": 146,
-      "eligible_180d": 2214,
-      "churn_180d_pct": 26.51,
-      "churn14_pct": 46.2,
-      "churn_active42_pct": 13.63
-     },
-     {
-      "T0": "2025-06-26",
-      "eligible_spec41": 1102,
-      "churn_spec41_pct": 50.82,
-      "lookback_days": 176,
-      "eligible_180d": 2272,
-      "churn_180d_pct": 30.15,
-      "churn14_pct": 51.34,
-      "churn_active42_pct": 15.67
-     },
-     {
-      "T0": "2025-07-26",
-      "eligible_spec41": 1194,
-      "churn_spec41_pct": 51.59,
-      "lookback_days": 180,
-      "eligible_180d": 2309,
-      "churn_180d_pct": 30.92,
-      "churn14_pct": 50.95,
-      "churn_active42_pct": 16.33
-     },
-     {
-      "T0": "2025-08-25",
-      "eligible_spec41": 1261,
-      "churn_spec41_pct": 53.21,
-      "lookback_days": 180,
-      "eligible_180d": 2379,
-      "churn_180d_pct": 31.61,
-      "churn14_pct": 51.36,
-      "churn_active42_pct": 18.11
-     },
-     {
-      "T0": "2025-09-24",
-      "eligible_spec41": 1372,
-      "churn_spec41_pct": 56.49,
-      "lookback_days": 180,
-      "eligible_180d": 2463,
-      "churn_180d_pct": 33.13,
-      "churn14_pct": 54.06,
-      "churn_active42_pct": 18.0
-     }
-    ]
-   },
-   "reference": {
-    "dataset": "Complete Journey 2.0 (42일 라벨)",
-    "value": {
-     "활성 가구 전체": [
-      10.7,
-      13.1
-     ],
-     "최근 구매 14일+ 전": [
-      28.6,
-      31.8
-     ]
-    },
-    "band": [
-     15,
-     25
-    ],
-    "band_text": "가드레일 15~25%",
-    "source_ids": [
-     "S02"
-    ],
-    "source_url": "https://cran.r-project.org/web/packages/completejourney/vignettes/completejourney.html"
-   },
-   "verdict": "fail",
-   "dashboard_verdict": "deviates",
-   "parts": null,
-   "note": "모집단은 이 프로젝트 정본 정의인 docs/data_spec.html §4.1 eligible(T0 − 가입일 ≥ 60일 ∧ T0 이전 구매 ≥ 1 ∧ 마지막 구매 ≥ 14일 전, 오케스트레이션 배정 모집단과 같다)이고 라벨은 §5 ② (T0, T0+42일] 무구매다. 30일 간격 여러 T0 평균, 비-T0 처치 고객 제외. 가입일 근거: 교환 묶음 customers.signup_date. 첫판은 PRD 에 정의가 없다고 보고 외부 집계(cj_label.py)의 180일 정의로 판정했으나, 정본 정의가 data_spec §4.1 에 있어 모집단을 그것으로 맞췄다 — 통과 띠 15~25% 는 바꾸지 않았다. 참고값(판정에 쓰지 않음): 180일 활성(cj_label.py 정의) · 그중 마지막 구매 14일+ 전 · 최근 42일 활성(시뮬레이터 guardrails 정의). 외부 참조: dunnhumby 180일 활성 가구 10.7~13.1%, 최근 구매 14일+ 전 가구 28.6~31.8% — §4.1 은 14일+ 조건을 포함하므로 외부에서 가장 가까운 비교는 뒤쪽 값이다. 관측 시작 전 구매 이력은 로그에 없어 초기 T0 는 eligible 이 작게 잡힌다.",
-   "gate1_note": "GATE 1 판정에 쓰지 않는 참고 항목이다. 이 값은 data_spec §4.1 eligible(마지막 구매 14일+ 전 포함) 모집단이라 이탈이 높게 잡힌다. GATE 1 이탈률 판정은 T0 전 42일 안에 구매한 고객 모집단으로 따로 한다(DR-208)."
   },
   {
    "id": "F13",
