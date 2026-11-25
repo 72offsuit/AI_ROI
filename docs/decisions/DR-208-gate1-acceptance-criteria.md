@@ -63,7 +63,7 @@ GATE 1 봉인 실측(#208)을 **몇 개 seed · 몇 명 규모로**, **어느 �
 
 | 대상 | 출처 · 조건 |
 |---|---|
-| 가드레일(필수) | `python3.12 -m src.simulator guardrails --seed {seed} --customers 13000 --profile small --warmup-days 180 --output-root {새 디렉터리}` |
+| 가드레일(필수) | `python3.12 -m src.simulator guardrails --seed {seed} --customers 13000 --profile small --warmup-days 180 --output-root {새 디렉터리}/out --hidden-root {새 디렉터리}/hidden` (명령 정본은 기준 파일 `sources` · 2026-11-16 `--hidden-root` 추가, DR-163-gate1-churn-discount-criteria) |
 | F1~F11 · F13 · F17(기록) | `run_world.py --seed {seed} --customers 13000 --profile reference --days 315 --assign-day 180` → `realism_check.py` |
 
 가드레일 리포트의 실측 조건(profile `small` · warmup 180일 · `--sample` 없이 전원 평가)은 기준 파일 `sample` 블록에 구조화된 키로도 적는다 — 판정 스크립트가 리포트 값과 대조해, 다른 조건으로 만든 리포트를 판정하지 않는다.
@@ -123,4 +123,4 @@ GATE 1 봉인 실측(#208)을 **몇 개 seed · 몇 명 규모로**, **어느 �
 - 판정을 기계로 집계하는 코드는 아직 없다. 기준 파일을 읽어 5 seed 를 판정하는 스크립트와 「범위 밖이면 실패하는 가드레일 테스트」는 #208 잔여 PR 에서 만든다 — 그 PR 도 실측 전에 병합한다.
 - 47~51 은 DR-196 확인 단계에서 한 번 본 seed 다. 이 기준은 "처음 보는 seed" 를 주장하지 않는다.
 - `data_grounding.md` §4 「판정 방식」에 이 DR 참조를 넣었다(리드 결정 ③, 2026-11-13). 기록 검사 항목의 처리는 이 DR 이 우선한다.
-- `data_spec` §5.1 ①~③(구매 간격 P75 / P90 대조)의 출처 · 통과 규칙은 이 DR 이 정하지 않았다. #210 서명(`ChurnThresholdEvidence(met=True)`) 전에 따로 정하고 확인해야 한다.
+- `data_spec` §5.1 ①~③(구매 간격 P75 / P90 대조)의 출처 · 통과 규칙은 이 DR 이 정하지 않았다. #210 서명(`ChurnThresholdEvidence(met=True)`) 전에 따로 정하고 확인해야 한다. → 2026-11-16 `DR-163-gate1-churn-discount-criteria.md` 가 확인 seed 실측 전에 정했다(기준 파일 `churn_threshold` 블록).
