@@ -61,6 +61,23 @@ function selectionNote(a: UpliftEval, state: SelectionState): string {
   return `학습 데이터 안에서 다시 떼어 낸 Validation 의 Qini 로 메타러너 × 규제를 함께 골랐습니다. 아래 표는 ${shown}에서의 메타러너별 점수이고, 메타러너 × 규제 ${grid.length}개 조합 전체는 결과 파일의 tuning.grid 에 있습니다. ${test}`;
 }
 
+/** Same wording as the decision module's `selection_basis(arm, joint=False)` (#320 review). */
+const SINGLE_BASIS_TAIL = "메타러너만(규제 후보 1개로 고정), 동점은 앞선 메타러너 · DR-217-uplift-tuning";
+
+/**
+ * The basis caption. With a single regularization candidate (`tuning.enabled === false`) only the
+ * meta-learner was chosen, but files written before the #320 fix still say "메타러너 × 규제를 함께" —
+ * keep the head (validation share · arm) and replace the rest. Other records show the file's text.
+ */
+function basisText(a: UpliftEval): string | null | undefined {
+  const sel = a.best_method_selection;
+  const basis = sel?.basis;
+  if (typeof basis !== "string" || !Array.isArray(sel?.tuning?.grid) || sel?.tuning?.enabled !== false) {
+    return basis;
+  }
+  return `${basis.split(" — ")[0]} — ${SINGLE_BASIS_TAIL}`;
+}
+
 export default async function UpliftPage() {
   const source = sprintSource();
   const up = await loadSprint("uplift_eval");
@@ -193,7 +210,7 @@ export default async function UpliftPage() {
         ) : null}
         {state === "selected" ? (
           <p className="text-caption text-text-secondary">
-            기준 · <Txt text={a.best_method_selection?.basis} />
+            기준 · <Txt text={basisText(a)} />
           </p>
         ) : null}
       </Section>

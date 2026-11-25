@@ -292,11 +292,39 @@ class TestCliSelectionLines(unittest.TestCase):
         self.assertNotIn("tuning.grid", "\n".join(lines))
         self.assertIn("참고 Test Qini(선택에 쓰지 않음)", lines[3])
 
+    def test_uplift_single_candidate_basis_names_the_fixed_regularization(self) -> None:
+        """PR #320 재리뷰 — 규제 후보가 하나면 선택 기준 줄도 메타러너만 골랐다고 적는다. 결정 모듈이 실제로 남긴 기록으로 본다."""
+        from src import main as cli
+        from src.decision import uplift
+        from tests.test_uplift_models import synthetic
+
+        X, t, y, _ = synthetic(n=1200)
+        with mock.patch.object(uplift, "TUNING", {**dict(uplift.TUNING), "enabled": False}):
+            r = uplift.evaluate_uplift_models(X, t, y, seed=0, methods=("t_learner", "x_learner"))
+        new = r["best_method_selection"]
+        arm = r["primary_arm"]
+        self.assertIs(False, new["tuning"]["enabled"])
+        fixed = uplift.selection_basis(arm, joint=False)
+        self.assertEqual(fixed, new["basis"])
+        saved = {**new, "basis": uplift.selection_basis(arm, joint=True)}   # 수정 전 결정 모듈이 남긴 결과
+        for selection in (new, saved):
+            lines = cli.uplift_selection_lines({**r, "best_method_selection": selection}, fmt)
+            self.assertIn(f"선택 기준 {fixed} — ", lines[1])
+            self.assertNotIn("규제를 함께", "\n".join(lines))
+            self.assertIn("현행 규제에서의 메타러너별 점수", lines[2])
+            for name, value in selection["validation_qini"].items():         # Validation Qini · 후보별 점수는 그대로
+                self.assertIn(f"{name}{'*' if name == selection['best_method'] else ''} {fmt(value, 4)}", lines[1])
+        # 규제를 함께 고른 기록은 결정 모듈 문구 그대로
+        joint = {**saved, "tuning": {**new["tuning"], "enabled": True}}
+        self.assertEqual(uplift.selection_basis(arm, joint=True), cli.uplift_basis(joint))
+
     def test_uplift_states_are_told_apart(self) -> None:
         """#320 리뷰 — 선택 성공 · 선택 불가(기본 학습 방법) · 불러온 모델을 기존 메타데이터로 구분한다."""
         from src import main as cli
+        from src.decision import uplift
 
-        selected = {"best_method_selection": {"best_method": "x_learner", "basis": "validation Qini",
+        joint_basis = uplift.selection_basis("T1", joint=True)        # 결정 모듈이 실제로 남기는 문구
+        selected = {"best_method_selection": {"best_method": "x_learner", "basis": joint_basis,
                                               "validation_qini": {"t_learner": 0.01, "x_learner": 0.02},
                                               "base_learner": {"max_depth": 3}, "base_learner_is_current": False,
                                               "tuning": {"grid": [{}] * 6}},
@@ -313,12 +341,17 @@ class TestCliSelectionLines(unittest.TestCase):
         self.assertIn("규제 max_depth=3에서의 메타러너별 점수 — 메타러너 × 규제 6개 조합 전체는 tuning.grid",
                       "\n".join(cli.uplift_selection_lines(selected, fmt)))
         self.assertEqual("Validation Qini 로 메타러너 × 규제를 함께 골랐다", cli.uplift_selection_state(selected)[1])
+        self.assertIn(f"선택 기준 {joint_basis} — t_learner 0.0100 · x_learner* 0.0200",
+                      "\n".join(cli.uplift_selection_lines(selected, fmt)))
+        # PR #320 재리뷰 — 규제 후보 하나. 수정 전 결정 모듈은 이때도 '함께' 문구를 남겼다(저장된 결과)
         single = {"best_method_selection": {**selected["best_method_selection"], "base_learner_is_current": True,
                                             "tuning": {"enabled": False, "grid": [{}] * 2}},
                   "tuning_report": {"selection_ok": True}}
         self.assertEqual(("selected", "Validation Qini 로 메타러너를 골랐다 — 규제 후보가 하나라 규제는 고르지 않았다"),
                          cli.uplift_selection_state(single))
         text = "\n".join(cli.uplift_selection_lines(single, fmt))
+        self.assertIn(f"선택 기준 {uplift.selection_basis('T1', joint=False)} — t_learner 0.0100 · x_learner* 0.0200", text)
+        self.assertNotIn("규제를 함께", text)
         self.assertIn("현행 규제에서의 메타러너별 점수", text)
         self.assertNotIn("tuning.grid", text)
         text = "\n".join(cli.uplift_selection_lines(failed, fmt))

@@ -532,6 +532,23 @@ def uplift_regularization_record(selection: Mapping[str, Any]) -> str:
     return "single" if tuning.get("enabled") is False else "joint"
 
 
+#: 규제 후보가 하나일 때 선택 기준 뒷부분 — 결정 모듈 ``uplift.selection_basis(arm, joint=False)`` 와 같은 문구다
+#: (CLI 는 결정 모듈을 import 하지 않는다, 대조는 테스트).
+UPLIFT_SINGLE_BASIS_TAIL = "메타러너만(규제 후보 1개로 고정), 동점은 앞선 메타러너 · DR-217-uplift-tuning"
+
+
+def uplift_basis(selection: Mapping[str, Any]) -> Any:
+    """Uplift 선택 기준 줄 — 규제 후보가 하나(``tuning.enabled = false``)면 메타러너만 골랐다고 적는다(PR #320 재리뷰).
+
+    그 전 결정 모듈은 후보 수와 무관하게 "메타러너 × 규제를 함께"를 남겼다. 저장된 결과도 바르게 읽히도록 앞부분
+    (Validation 비율 · arm)만 살리고 뒷부분을 고정 규제 문구로 바꾼다. 그 밖의 기록은 결과 파일 문구 그대로다.
+    """
+    basis = selection.get("basis")
+    if uplift_regularization_record(selection) != "single" or not isinstance(basis, str):
+        return basis
+    return f"{basis.split(' — ', 1)[0]} — {UPLIFT_SINGLE_BASIS_TAIL}"
+
+
 def uplift_regularization_note(selection: Mapping[str, Any]) -> str | None:
     """Validation Qini 표가 어느 규제의 메타러너별 점수인지 — 격자 전체는 ``tuning.grid``(#320 리뷰).
 
@@ -565,7 +582,7 @@ def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
         chosen = selection.get("best_method")
         scores = " · ".join(f"{name}{'*' if name == chosen else ''} {fmt(value, 4)}"
                             for name, value in selection["validation_qini"].items())
-        lines.append(f"             선택 기준 {selection.get('basis')} — {scores}")
+        lines.append(f"             선택 기준 {uplift_basis(selection) or '—'} — {scores}")
         regularization = uplift_regularization_note(selection)
         lines.append(f"             {regularization if regularization else note}")
     elif state != "selected":
