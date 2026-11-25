@@ -1,4 +1,4 @@
-"""전략 S0~S5 — 고객별 처치 배정 계획 (이슈 #145 · D7).
+"""전략 S0~S6 — 고객별 처치 배정 계획 (이슈 #145 · D7, S6 = #274 · DR-170 E3).
 
 이 모듈은 **순수 함수**만 둔다. 입력은 고객 ID 를 키로 하는 점수 묶음이고 출력은
 ``{customer_id: "T1".."T4"}`` 다. 미배정(T0) 고객은 결과에 **넣지 않는다.**
@@ -170,6 +170,7 @@ STRATEGY_NAMES: dict[str, str] = {
     "S3": "Churn + Uplift",
     "S4": "Churn + Uplift + CLV",
     "S5": "Full AI + 예산 최적화",
+    "S6": "Rule + AI (규칙 대상 · AI 처치)",
 }
 
 #: S2 의 기본 처치 — S1 과 같은 T3 로 두어 S1 대비 차이가 **타깃 선정**에서만 나오게 한다.
@@ -300,7 +301,96 @@ def plan_S5(scores, budget_krw, costs) -> dict[str, str]:
     return optimize_budget(gain, costs, budget_krw)
 
 
-_PLANNERS = {"S0": plan_S0, "S1": plan_S1, "S2": plan_S2, "S3": plan_S3, "S4": plan_S4, "S5": plan_S5}
+def _s6_choices(scores, costs, sid: str = "S6") -> tuple[list[tuple[str, str]], dict[str, Any], set[str]]:
+    """S6(D-1) 의 고객 순서와 처치 — 대상 = S1 규칙 대상 전원(상한 없음, 같은 순서), 처치 = 고객별
+    ``CATE_t × 가치 − cost_t`` 최대 t. 모든 선택지가 음수여도 고른다(보낼지는 규칙이 정한다).
+    점수 결손 고객은 규칙 처치(T3)를 받고 ``n_rule_fallback`` 으로 센다 — 0 으로 채우지 않는다.
+    ``scores`` 는 이미 Eligible 로 거른 것이다(``plan`` 이 거른다)."""
+    import pandas as pd
+
+    targets = list(plan_S1(scores, None))            # S1 우선순위 순서 그대로
+    gain = _expected_gain(scores, sid)
+    net = gain - pd.Series({t: float(costs[t]) for t in gain.columns})
+    net.index = [str(c) for c in net.index]
+    net = net.reindex(targets)
+    scored = net.notna().any(axis=1)
+    best = net[scored].idxmax(axis=1, skipna=True) if scored.any() else pd.Series(dtype=object)
+    rule_t = S1_RULE["action"]
+    order = [(cid, str(best[cid]) if scored[cid] else rule_t) for cid in targets]
+    detail = {
+        "n_rule_targets": len(targets),
+        "n_rule_fallback": int((~scored).sum()),
+        "n_changed_from_rule": sum(1 for _, t in order if t != rule_t),
+        "rule_treatment": rule_t,
+    }
+    return order, detail, {cid for cid in targets if not scored[cid]}
+
+
+def _fill_in_order(order: list[tuple[str, str]], budget_krw: float, costs: Mapping[str, Any]) -> dict[str, str]:
+    """``plan_S1`` 과 같은 예산 규칙 — 순서대로 누적해 **넘기기 직전에 멈춘다**(뒤의 싼 고객을 건너뛰어 채우지 않는다)."""
+    out: dict[str, str] = {}
+    spent = 0.0
+    for cid, t in order:
+        unit = float(costs[t])
+        if spent + unit > budget_krw:
+            break
+        out[cid] = t
+        spent += unit
+    return out
+
+
+def plan_S6(scores, budget_krw, costs) -> dict[str, str]:
+    """S6 Rule + AI (#274 D-1 · DR-170 E3 · PRD §61.1 · SRS STR-004) — 규칙(S1)이 대상을 정하고 AI 가 처치를 고른다.
+
+    예산 상한은 C_rule 이다. T3 가 가장 비싼 처치라 C_rule 에서는 아무도 잘리지 않는다. 더 작은 예산이면
+    S1 순서대로 넘기기 직전까지(``plan_S1`` 과 같다)."""
+    _need_budget(budget_krw, costs, "S6")
+    order, _, _ = _s6_choices(scores, costs)
+    return _fill_in_order(order, budget_krw, costs)
+
+
+#: s6_breakdown 필드가 가리키는 대상(PR #313 리뷰) — 예산으로 자르기 전 후보인지, 자른 뒤 배정인지.
+S6_COUNT_BASIS = {
+    "candidates": ("n_rule_targets · n_rule_fallback · n_changed_from_rule — 예산으로 자르기 전, "
+                   "S1 규칙 대상 전원(후보) 기준"),
+    "assigned": ("n_assigned · n_dropped_by_budget · n_rule_fallback_assigned · n_changed_from_rule_assigned · "
+                 "planned_cost_krw · treatment_mix — 예산으로 자른 뒤 배정 기준"),
+}
+
+
+def s6_breakdown(scores: Mapping[str, Any], budget_krw: float, costs: Mapping[str, Any]) -> dict[str, Any]:
+    """S6 배정의 구성 — 규칙 대상 수 · 규칙 처치(T3)에서 바뀐 수 · 결손으로 규칙 처치를 받은 수 · 예산으로 잘린 수.
+
+    후보(예산 자르기 전) 기준 수와 배정(자른 뒤) 기준 수를 따로 싣는다 — ``count_basis`` 가 어느 쪽인지 적는다.
+    C_rule 에서는 아무도 잘리지 않아 두 기준이 같다. ``plan`` 과 같은 검사(필수 점수 · Eligible 거르기)를 거친다."""
+    _need_budget(budget_krw, costs, "S6")
+    pool = _prepared("S6", scores)
+    order, detail, fallback = _s6_choices(pool, costs)
+    assigned = _fill_in_order(order, budget_krw, costs)
+    rule_t = detail["rule_treatment"]
+    detail["n_assigned"] = len(assigned)
+    detail["n_dropped_by_budget"] = len(order) - len(assigned)
+    detail["n_rule_fallback_assigned"] = sum(1 for cid in assigned if cid in fallback)
+    detail["n_changed_from_rule_assigned"] = sum(1 for t in assigned.values() if t != rule_t)
+    detail["planned_cost_krw"] = sum(float(costs[t]) for t in assigned.values())
+    detail["treatment_mix"] = plan_summary(assigned)["treatment_mix"]
+    detail["count_basis"] = dict(S6_COUNT_BASIS)
+    return detail
+
+
+def expected_gain_table(scores: Mapping[str, Any]):
+    """What-if 용 처치별 기대 증분가치(원, 비용 차감 전) = CATE × CLV × margin_rate — S4 · S5 · S6 과 같은 정의.
+
+    Eligible 안의 고객만, 인덱스는 문자열 customer_id. 필요한 점수가 없으면 ``NotComputable``."""
+    for key in ("cate", "clv", "margin_rate", "eligible"):
+        _need(scores, key, "What-if")
+    gain = _expected_gain(within_eligible(scores), "What-if")
+    gain.index = [str(c) for c in gain.index]
+    return gain
+
+
+_PLANNERS = {"S0": plan_S0, "S1": plan_S1, "S2": plan_S2, "S3": plan_S3, "S4": plan_S4, "S5": plan_S5,
+             "S6": plan_S6}
 
 
 def plan(strategy_id: str, scores: Mapping[str, Any], budget_krw: int | None,
@@ -308,23 +398,29 @@ def plan(strategy_id: str, scores: Mapping[str, Any], budget_krw: int | None,
     """전략 ID → ``{customer_id: "T1".."T4"}``. 미배정(T0) 고객은 넣지 않는다.
 
     scores 키: ``churn_p``(Series) · ``cate``(DataFrame T1~T4) · ``clv``(Series|None) ·
-    ``days_since_last_purchase``(Series) · ``eligible``(Series, S1~S5 필수) · 선택
-    ``lifetime_order_count`` · ``margin_rate``(S4 · S5 필수, #217). 필요한 점수(``REQUIRED_SCORES``)가 없으면 ``NotComputable`` — 빈 배정으로
+    ``days_since_last_purchase``(Series) · ``eligible``(Series, S1~S6 필수) · 선택
+    ``lifetime_order_count`` · ``margin_rate``(S4 · S5 · S6 필수, #217). 필요한 점수(``REQUIRED_SCORES``)가 없으면 ``NotComputable`` — 빈 배정으로
     대신하지 않는다. ``costs`` 는 처치별 고객당 단가 dict(``T0`` 키가 있어도 된다).
-    S2~S5 는 ``budget_krw`` 가 None 이면 ValueError(호출 오류 — 모든 AI 전략 ≤ C_rule).
+    S2~S6 은 ``budget_krw`` 가 None 이면 ValueError(호출 오류 — 모든 AI 전략 ≤ C_rule).
 
-    ★ S1~S5 는 **``eligible`` 이 참인 고객 안에서만** 고른다(data_spec §4.1 · #194 · DR-234). 전략마다
+    ★ S1~S6 은 **``eligible`` 이 참인 고객 안에서만** 고른다(data_spec §4.1 · #194 · DR-234). 전략마다
       고를 수 있는 고객이 다르면 S1 대비 증분이 "더 잘 골랐다" 가 아니라 "더 넓은 곳에서 골랐다" 가
       된다. 거르기는 플래너보다 **먼저** 한다 — 고른 뒤에 빼면 예산을 부적격 고객에게 쓰고 남긴다.
     """
+    pool = _prepared(strategy_id, scores)
+    return _PLANNERS[strategy_id](pool, budget_krw, costs)
+
+
+def _prepared(strategy_id: str, scores: Mapping[str, Any]) -> Mapping[str, Any]:
+    """``plan`` 의 공통 검사 — 알 수 없는 전략 · 필수 점수 결손을 막고, Eligible 로 먼저 거른다."""
     if strategy_id not in _PLANNERS:
-        raise KeyError(f"알 수 없는 전략: {strategy_id!r} (S0~S5)")
+        raise KeyError(f"알 수 없는 전략: {strategy_id!r} (S0~S6)")
     missing = [k for k in REQUIRED_SCORES[strategy_id] if scores.get(k) is None]
     if missing:
         raise NotComputable(f"{strategy_id} 에 필요한 점수가 없다: {missing}")
     if "eligible" in REQUIRED_SCORES[strategy_id]:
         scores = within_eligible(scores)
-    return _PLANNERS[strategy_id](scores, budget_krw, costs)
+    return scores
 
 
 def within_eligible(scores: Mapping[str, Any]) -> dict[str, Any]:
@@ -346,7 +442,7 @@ def within_eligible(scores: Mapping[str, Any]) -> dict[str, Any]:
 
 
 #: 전략별 필수 점수. 없으면 ``plan`` 이 ``NotComputable`` 을 던진다(빈 배정으로 대신하지 않는다).
-#: S1~S5 는 ``eligible`` 이 필수다 — 그 안에서만 고른다(DR-234). 없으면 전략이 not_run 이다.
+#: S1~S6 은 ``eligible`` 이 필수다 — 그 안에서만 고른다(DR-234). 없으면 전략이 not_run 이다.
 #: S1 의 ``lifetime_order_count`` 는 선택 — 없으면 그 조건이 not_run(``s1_eligibility``).
 REQUIRED_SCORES: dict[str, tuple[str, ...]] = {
     "S0": (),
@@ -355,6 +451,9 @@ REQUIRED_SCORES: dict[str, tuple[str, ...]] = {
     "S3": ("churn_p", "cate", "eligible"),
     "S4": ("cate", "clv", "margin_rate", "eligible"),  # #217 — 가치 = CLV × margin_rate, 기본 1.0 없음
     "S5": ("cate", "clv", "margin_rate", "eligible"),
+    # #274 D-1 — 대상은 S1 규칙(days_since_last_purchase · 선택 lifetime_order_count), 처치는 S4 와 같은 가치.
+    # AI 점수가 통째로 없으면 S6 은 S1 과 같아질 뿐 '규칙 + AI' 가 아니므로 돌리지 않는다.
+    "S6": ("days_since_last_purchase", "cate", "clv", "margin_rate", "eligible"),
 }
 
 
