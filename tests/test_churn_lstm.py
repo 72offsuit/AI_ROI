@@ -23,11 +23,12 @@ def small_config(**changes):
     return replace(cfg, **changes)
 
 
-def fixture(ids, *, status='complete', source='simulator', config=None, records=None):
+def fixture(ids, *, status='complete', source='simulator', config=None, records=None,
+            index_time='2026-10-22T00:00:00+09:00'):
     import pandas as pd
     from src.decision.churn_sequence import SequenceCoverage, build_event_sequences
     config = small_config() if config is None else config
-    t0 = pd.Timestamp('2026-10-22T00:00:00+09:00')
+    t0 = pd.Timestamp(index_time)
     if records is None:
         records = [{'customer_id': cid, 'event_id': f'{cid}-{j}',
                     'timestamp': t0 - pd.Timedelta(hours=4-j),

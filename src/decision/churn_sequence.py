@@ -221,6 +221,23 @@ class SequenceBatch:
         return SequenceBatch(ids, self.tokens[positions], self.lengths[positions], self.ready[positions],
                              tuple(self.reasons[i] for i in positions), metadata)
 
+    def model_input_sha256(self):
+        """시점·관측 근거·고객별 토큰을 묶는다. 고객 순서와 시간대 표기는 무관하다."""
+        self.validate(for_model=True)
+        order = sorted(range(len(self.ids)), key=self.ids.__getitem__)
+        fields = ('index_time', 'window_start', 'window_end_exclusive')
+        window = [event_time(self.metadata[name]).isoformat() for name in fields]
+        claims = []
+        for i in order:
+            claim = self.metadata['coverage'][i]
+            claims.append([self.ids[i], claim['source'], claim['status'], claim['run_id'], claim['ref'],
+                           event_time(claim['start']).isoformat(), event_time(claim['end']).isoformat()])
+        header = ['lstm-input-v1', window, claims, list(self.tokens.shape)]
+        digest = hashlib.sha256(json.dumps(header, ensure_ascii=False, separators=(',', ':')).encode())
+        for array in (self.tokens, self.lengths):
+            digest.update(np.asarray(array[order], dtype='<i8').tobytes())
+        return digest.hexdigest()
+
     def validate(self, *, for_model=False):
         validate_ids(self.ids)
         n = len(self.ids)
