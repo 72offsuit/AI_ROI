@@ -123,7 +123,9 @@ class TestGroupPerformance(unittest.TestCase):
         self.assertLess(low["tests"]["vs_baseline"]["ci95"][1], 0)
         self.assertLess(low["tests"]["vs_rest"]["ci95"][1], 0)
         self.assertEqual(197, low["n"])                         # 200명 중 등급 없음 2명 · 정의 밖 코드 1명
-        self.assertEqual(len(self.ids) - 197, low["tests"]["vs_rest"]["n_rest"])
+        # 나머지 = 같은 축에서 등급이 있는 다른 고객 — 등급 없는 2명은 비교군에 넣지 않는다(#325 리뷰)
+        self.assertEqual(len(self.ids) - 2 - 197, low["tests"]["vs_rest"]["n_rest"])
+        self.assertEqual(low["tests"]["n_rest"], low["tests"]["vs_rest"]["n_rest"])
         self.assertEqual((False, []), (self.rows["V2_MID"]["weak"], self.rows["V2_MID"]["weak_reasons"]))
         small = self.rows["V3_HIGH"]                                # 고른 모델이 거꾸로여도 표본 부족이면 판정하지 않는다
         self.assertEqual((True, None, "고객 50명 < 100명"), (small["small_group"], small["weak"], small["small_group_reason"]))
@@ -239,6 +241,61 @@ class TestTierHypotheses(unittest.TestCase):
                 "signup_tier": [self.row("NEW", below_base=False, below_rest=False)]}
         got = {h["id"]: h["result"] for h in evaluate_tier_hypotheses(flat)}
         self.assertEqual(("supported", "not_supported"), (got["H-ML010-1"], got["H-ML010-2"]))
+
+
+@unittest.skipUnless(HAVE_ML, SKIP_REASON)
+class TestRestGroup(unittest.TestCase):
+    """#325 리뷰 — '나머지 고객'은 같은 축에서 등급이 있는 고객만이고, 비교군에도 표본 부족 기준을 적용한다."""
+
+    @staticmethod
+    def run_case(n_new: int, n_existing: int, n_no_roster: int, n_other_role: int, seed: int = 1):
+        import numpy as np
+        import pandas as pd
+
+        from src.decision import churn
+
+        rng = np.random.default_rng(seed)
+        n = n_new + n_existing + n_no_roster + n_other_role
+        ids = [f"c{i:04d}" for i in range(n)]
+        y = np.r_[(np.arange(n_new) % 2), (np.arange(n_existing) % 2), rng.integers(0, 2, n_no_roster + n_other_role)]
+        chosen = np.r_[rng.random(n_new), 0.1 + 0.8 * y[n_new:] + rng.random(n - n_new) * 0.05]
+        validation = _validation(y, chosen, rng.random(n), ids)
+        roles = ["validation"] * (n_new + n_existing + n_no_roster) + ["excluded"] * n_other_role
+        roster = pd.DataFrame({"customer_id": ids, "origin": "t1", "role": roles, "value_tier": "V1_LOW",
+                               "frequency_tier": "F2_RARE", "category_tier": "NONE",
+                               "signup_tier": ["NEW"] * n_new + ["EXISTING"] * (n - n_new)})
+        roster = roster.drop(index=range(n_new + n_existing, n_new + n_existing + n_no_roster))   # 명부에 없음
+        res = churn.tier_performance(validation, roster)
+        row = next(r for r in res["axes"]["signup_tier"] if r["group"] == "NEW")
+        hyp = next(h for h in res["hypotheses"] if h["id"] == "H-ML010-2")
+        return res, row, hyp
+
+    def test_customers_without_a_tier_are_not_the_rest(self) -> None:
+        # 리뷰 반례: NEW 120 · 명부 결손 60 · 역할 불일치 60 — 같은 축의 다른 등급 고객이 0명이다
+        res, row, hyp = self.run_case(120, 0, 60, 60)
+        self.assertEqual((240, 120), (res["n"], res["n_without_group"]))           # 전체 지표에는 240명 그대로
+        self.assertEqual(0, row["tests"]["n_rest"])
+        self.assertIsNone(row["tests"]["vs_rest"])
+        self.assertNotIn("below_rest", row["weak_reasons"])
+        self.assertIn("나머지 고객 표본 부족", row["tests"]["vs_rest_reason"])
+        self.assertEqual("undetermined", hyp["result"])
+        self.assertIn("나머지 고객 표본 부족", hyp["evidence"]["reason"])
+
+    def test_small_rest_is_not_tested(self) -> None:
+        # 리뷰 반례: NEW 120 을 기존 고객 4명(이탈 2명)과 비교하면 구간 [−1, −1] 로 below_rest 가 나왔다
+        _, row, hyp = self.run_case(120, 4, 0, 0)
+        self.assertEqual((4, None), (row["tests"]["n_rest"], row["tests"]["vs_rest"]))
+        self.assertIn("고객 4명 < 100명", row["tests"]["vs_rest_reason"])
+        self.assertEqual(("undetermined", 4), (hyp["result"], hyp["evidence"]["n_rest"]))
+
+    def test_large_enough_rest_is_tested_and_readings_are_attached(self) -> None:
+        res, row, hyp = self.run_case(150, 300, 30, 0)
+        self.assertEqual(300, row["tests"]["vs_rest"]["n_rest"])                   # 명부 밖 30명은 빠진다
+        self.assertIsNone(row["tests"]["vs_rest_reason"])
+        self.assertEqual("supported", hyp["result"])                               # NEW 쪽 점수가 무작위
+        self.assertIn("유의하게 낮다", hyp["reading"])
+        self.assertIn("selection_effect", res["rule"])
+        self.assertIn("rest", res["rule"])
 
 
 @unittest.skipUnless(HAVE_ML, SKIP_REASON)

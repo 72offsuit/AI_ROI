@@ -908,18 +908,33 @@ def group_performance(validation: Mapping[str, Any], groups: pd.DataFrame, axes:
         return {name: _group_metrics(yv[idx], scores[name][idx], predicted[name][idx], m["probability"])
                 for name, m in models.items()}
 
-    def tests(idx: np.ndarray) -> dict[str, Any]:
-        out: dict[str, Any] = {"vs_baseline": None, "vs_rest": None}
+    def small_reason(n: int, positives: int) -> str | None:
+        if n < MIN_GROUP_CUSTOMERS:
+            return f"고객 {n}명 < {MIN_GROUP_CUSTOMERS}명"
+        if small_group(n, positives):
+            return f"적은 쪽 클래스 {min(positives, n - positives)}명 < {MIN_GROUP_MINORITY}명"
+        return None
+
+    def tests(idx: np.ndarray, rest_mask: np.ndarray) -> dict[str, Any]:
+        """``rest_mask`` = 같은 축에서 고객군이 정해진 다른 고객(#325 리뷰) — 고객군이 없는 고객은 비교군에 넣지 않는다."""
+        n_rest, rest_positives = int(rest_mask.sum()), int(yv[rest_mask].sum())
+        out: dict[str, Any] = {"vs_baseline": None, "vs_rest": None, "n_rest": n_rest, "vs_rest_reason": None}
         if baseline is not None:
             paired = delong(yv[idx], [scores[chosen][idx], scores[baseline][idx]])
             if paired is not None:
                 aucs, cov = paired
                 out["vs_baseline"] = _diff_test(aucs[0] - aucs[1], cov[0, 0] + cov[1, 1] - 2 * cov[0, 1],
                                                 GROUP_TEST_ALPHA)
-        inside, rest = delong(yv[idx], [scores[chosen][idx]]), delong(yv[~idx], [scores[chosen][~idx]])
-        if inside is not None and rest is not None:
-            out["vs_rest"] = {**_diff_test(inside[0][0] - rest[0][0], inside[1][0, 0] + rest[1][0, 0], GROUP_TEST_ALPHA),
-                              "n_rest": int((~idx).sum())}
+        rest_small = small_reason(n_rest, rest_positives)
+        if rest_small is not None:  # 비교군도 표본 부족 기준을 지킨다(DR-221) — 검정하지 않고 사유를 남긴다
+            out["vs_rest_reason"] = f"나머지 고객 표본 부족 — {rest_small}"
+            return out
+        inside, rest = delong(yv[idx], [scores[chosen][idx]]), delong(yv[rest_mask], [scores[chosen][rest_mask]])
+        if inside is None or rest is None:
+            out["vs_rest_reason"] = "검정 불가 — 한 클래스뿐인 쪽이 있다"
+            return out
+        out["vs_rest"] = {**_diff_test(inside[0][0] - rest[0][0], inside[1][0, 0] + rest[1][0, 0], GROUP_TEST_ALPHA),
+                          "n_rest": n_rest}
         return out
 
     overall = measure(np.ones(len(yv), dtype=bool))
@@ -927,21 +942,18 @@ def group_performance(validation: Mapping[str, Any], groups: pd.DataFrame, axes:
     for axis, labels in axes.items():
         values = frame[axis] if axis in frame.columns else pd.Series(None, index=y.index, dtype=object)
         codes = list(labels) + sorted({str(v) for v in values.dropna()} - set(labels))
+        in_axis = values.notna().to_numpy()
         rows = []
         for code in codes:
             idx = values.astype(object).eq(code).fillna(False).astype(bool).to_numpy()
             n, positives = int(idx.sum()), int(yv[idx].sum())
             small = small_group(n, positives)
-            reason = None
-            if n < MIN_GROUP_CUSTOMERS:
-                reason = f"고객 {n}명 < {MIN_GROUP_CUSTOMERS}명"
-            elif small:
-                reason = f"적은 쪽 클래스 {min(positives, n - positives)}명 < {MIN_GROUP_MINORITY}명"
+            reason = small_reason(n, positives)
             weak: bool | None = None
             weak_reasons: list[str] = []
             checks = None
             if not small:
-                checks = tests(idx)
+                checks = tests(idx, in_axis & ~idx)
                 done = [key for key in ("vs_baseline", "vs_rest") if checks[key] is not None]
                 weak_reasons = [{"vs_baseline": "below_baseline", "vs_rest": "below_rest"}[key]
                                 for key in done if checks[key]["below"]]
@@ -962,6 +974,11 @@ def group_performance(validation: Mapping[str, Any], groups: pd.DataFrame, axes:
                            "(below_baseline, 짝지은 DeLong) 또는 나머지 고객보다(below_rest, 독립 DeLong) 유의하게 낮다 — "
                            f"차이의 {1 - GROUP_TEST_ALPHA:.0%} 구간 상한 < 0. 다중 비교 보정 없음 — 표시만 하고 적용 범위는 "
                            "정하지 않는다"),
+            "rest": ("나머지 고객 = 같은 축에서 고객군이 정해진 다른 고객(고객군이 없는 고객 — 명부 밖 · 역할 불일치 · 그 축 결손 — "
+                     "은 전체 지표에만 넣고 비교군에 넣지 않는다). 나머지에도 표본 부족 기준을 적용하고, 부족하면 검정하지 않고 "
+                     "vs_rest_reason 에 사유를 남긴다"),
+            "selection_effect": ("고른 모델은 같은 t1 Validation 의 ROC-AUC 로 골랐다 — 같은 데이터에서 평가한 성능은 낙관적으로 "
+                                 "치우칠 수 있다(Cawley & Talbot 2010). 기준선과의 비교(below_baseline)는 모델에 유리한 쪽으로 기운다"),
             "alpha": GROUP_TEST_ALPHA, "test": "DeLong(1988) ROC-AUC 분산 · 공분산",
             "threshold": "전체 Validation 과 같은 임계(앞 기준일 학습 데이터 안에서 정함)",
             "decision": "docs/decisions/DR-303-model-selection.md",
@@ -989,6 +1006,27 @@ TIER_HYPOTHESES: tuple[dict[str, str], ...] = (
 )
 
 
+#: 결과를 읽는 문구(#325 리뷰) — "지지"가 같음 · 우월의 증거로 읽히지 않게 한다. 규칙은 바꾸지 않는다.
+TIER_READINGS: dict[str, dict[str, str]] = {
+    "H-ML010-1": {
+        "supported": ("검정 가능한 등급에서 기준선 대비 유의한 열세가 관측되지 않음 — 같다는 증거는 아니고, 같은 Validation 에서 "
+                      "모델을 골라 모델에 유리한 쪽으로 치우칠 수 있다"),
+        "not_supported": "기준선보다 유의하게 낮은 등급이 있다(evidence.below_baseline)",
+        "undetermined": "검정 가능한 등급이 없다 — 표본 부족 · 검정 불가",
+    },
+    "H-ML010-2": {
+        "supported": "신규 가입 고객의 ROC-AUC 가 같은 축의 나머지 고객보다 유의하게 낮다",
+        "not_supported": "유의하게 낮다는 근거가 부족하다 — 같다는 증거는 아니다",
+        "undetermined": "판정 불가 — 고객군 또는 나머지 고객의 표본 부족 · 검정 불가(evidence.reason)",
+    },
+    "H-ML010-3": {
+        "supported": "구매 1회 고객의 ROC-AUC 가 같은 축의 나머지 고객보다 유의하게 낮다",
+        "not_supported": "유의하게 낮다는 근거가 부족하다 — 같다는 증거는 아니다",
+        "undetermined": "판정 불가 — 고객군 또는 나머지 고객의 표본 부족 · 검정 불가(evidence.reason)",
+    },
+}
+
+
 def evaluate_tier_hypotheses(axes: Mapping[str, list[Mapping[str, Any]]]) -> list[dict[str, Any]]:
     """``TIER_HYPOTHESES`` 를 이 실행의 등급별 결과로 평가한다 — 규칙은 결과 전에 고정했다(DR-303)."""
     rows = {(axis, row["group"]): row for axis, items in axes.items() for row in items}
@@ -1002,16 +1040,18 @@ def evaluate_tier_hypotheses(axes: Mapping[str, list[Mapping[str, Any]]]) -> lis
         else:
             key = ("signup_tier", "NEW") if hyp["id"] == "H-ML010-2" else ("frequency_tier", "F1_ONCE")
             row = rows.get(key) or {}
-            test = (row.get("tests") or {}).get("vs_rest")
+            checks = row.get("tests") or {}
+            test = checks.get("vs_rest")
             if row.get("small_group", True) or test is None:
                 result = "undetermined"
-                evidence = {"group": f"{key[0]}={key[1]}", "n": row.get("n"),
-                            "reason": row.get("small_group_reason") or "검정 불가(한 클래스뿐인 쪽이 있다)"}
+                evidence = {"group": f"{key[0]}={key[1]}", "n": row.get("n"), "n_rest": checks.get("n_rest"),
+                            "reason": (row.get("small_group_reason") or checks.get("vs_rest_reason")
+                                       or "검정 불가(한 클래스뿐인 쪽이 있다)")}
             else:
                 result = "supported" if test["below"] else "not_supported"
-                evidence = {"group": f"{key[0]}={key[1]}", "n": row["n"], "diff_vs_rest": test["diff"],
-                            "ci95": test["ci95"]}
-        out.append({**hyp, "result": result, "evidence": evidence})
+                evidence = {"group": f"{key[0]}={key[1]}", "n": row["n"], "n_rest": test.get("n_rest"),
+                            "diff_vs_rest": test["diff"], "ci95": test["ci95"]}
+        out.append({**hyp, "result": result, "reading": TIER_READINGS[hyp["id"]][result], "evidence": evidence})
     return out
 
 
