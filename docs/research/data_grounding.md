@@ -6,10 +6,10 @@
 | 작성 | 데이터 근거 리서처 · 2026-10-22 |
 | 범위 규칙 | `results/`·`src/decision/`·모델 성능 문서는 읽지 않았다. **어떤 권고도 AI 성능을 근거로 하지 않는다**(SRS FREEZE-002). 근거는 외부 자료와 가드레일뿐이다 |
 | 결정권 | 이 문서는 대조와 권고만 한다. 값을 바꿀지는 사람이 정한다 |
-| 직접 계산 | Instacart 2017 원자료와 dunnhumby/84.51° Complete Journey 2.0 원자료를 내려받아 직접 집계했다. 우리 config 의 혼합 모집단 모멘트도 n=26,000 몬테카를로로 다시 계산했다. 스크립트는 `scripts/research/`, 출력은 `docs/research/computed/` 에 있다 |
+| 직접 계산 | Instacart 2017 원자료와 dunnhumby/84.51° Complete Journey 2.0 원자료를 내려받아 직접 집계했다. 우리 config 의 혼합 모집단 모멘트도 n=26,000 몬테카를로로 다시 계산했다(`our_mix.py` 와 그 출력은 시뮬 팀 내부 — 시스템 팀은 열지 않는다, #163 리드 요청 6). 스크립트는 `scripts/research/`, 출력은 `docs/research/computed/` 에 있다 |
 | 원자료 묶음 | `research/raw_korea.md`(한국 통계 조사 원본) · `research/raw_uplift.md`(업리프트·리텐션 문헌 조사 원본) · `research/sources.json`(출처 기계가독판) |
 
-**읽는 법.** "우리 값"의 모집단 평균은 config 의 생성 모수만으로 계산한 값이다. S4 행동식(감쇠·계절성·cycle_factor)이 들어간 **실현값은 다르다.** 그래서 §2 는 "생성 모수가 외부 자릿수와 맞는가"를 보고, §4 는 "실현 데이터가 외부 stylized fact 를 재현하는가"를 볼 계획을 적는다.
+**읽는 법.** 생성 모수 대조("우리 값")는 config 의 생성 모수만으로 계산한 값이고, 시뮬 팀 내부 문서에 있다. S4 행동식(감쇠·계절성·cycle_factor)이 들어간 **실현값은 다르다.** 그래서 생성 모수 대조는 "생성 모수가 외부 자릿수와 맞는가"를 보고, §4 는 "실현 데이터가 외부 stylized fact 를 재현하는가"를 볼 계획을 적는다.
 
 **판정 기준.** 정합 = 외부 값·범위 안이거나 정의 차이를 감안해 같은 자릿수. 조정 권고 = 정의를 맞춰도 어긋남. 근거 없음 = 정량 근거를 찾지 못함(방향 근거만 있으면 그렇게 적음). 신뢰도 = 근거 자체의 품질 × 우리 맥락과의 비교 가능성.
 
@@ -22,7 +22,7 @@
 1. **핵심 행동 모수는 외부와 같은 자릿수다.** 구매 빈도 · 객단가는 국내 설문의 컬리 이용자 값(월 2.5~2.66회 · 44,800원)과, 구매 주기는 Instacart 340만 주문에서 직접 계산한 고객별 중앙값(15.0일)과, 구매율 이질성은 dunnhumby 실데이터(gamma shape 0.82)와 대조해 맞았다.
 2. **경제 규칙과 이탈 정의도 실제와 맞는다.** 배송비 3,000원·무료배송 4만원은 컬리 공식 조건과 같다. 42일 이탈 정의는 실데이터 개인 구매 간격의 p95~p99 다. 생성 이탈률 가드레일 15~25%는 dunnhumby 42일 라벨 비율(10.7~31.8%) 범위 안에 있다.
 3. **처치 가드레일 두 개는 공개 실험으로 받쳐진다.** ATE 3~6%p 는 기저율이 높은 리텐션 실험(X5 +3.3%p, 통신사 +5%p)과 맞는다. Sleeping Dog 8~15%는 문헌의 세그먼트 추정(10~20%, ≤25%)과 질적으로 맞는다. 단, 공개 실험 원자료(Hillstrom·Lenta·X5)를 단일·2변수 세그먼트로 직접 집계했을 때 **95% CI 상한이 0 미만인 음수 세그먼트는 0개**였다(`reference_stats.md`) — Sleeping Dog 비율은 실데이터로 확인된 값이 아니라 **문헌 기반 가정**으로 표기한다. 업리프트 원자료 4종은 직접 집계했다.
-4. **어긋나는 곳이 세 군데 있다.** ① 쿠폰 사용률 25~40%는 외부 값(0.6~16.6%, dunnhumby 표적 쿠폰 12%)보다 높다. ② Persuadable 20~30%는 ATE·Sleeping Dog 가드레일과 항등식(P − D = ATE)상 거의 양립하지 않는다. ③ 생성 모수만으로는 Sleeping Dog 가 가드레일 하한에 못 미친다(2026-10-22 기준).
+4. **가드레일에서 어긋나는 곳이 두 군데 있다.** ① 쿠폰 사용률 25~40%는 외부 값(0.6~16.6%, dunnhumby 표적 쿠폰 12%)보다 높다. ② Persuadable 20~30%는 ATE·Sleeping Dog 가드레일과 항등식(P − D = ATE)상 거의 양립하지 않는다. 생성 쪽 대조는 시뮬 팀 내부 문서에 둔다.
 5. **근거가 없는 곳은 숨기지 않는다.** 대조 35개 항목 가운데 정량 근거가 있는 것은 23개(정합 16, 조정 권고 7)다. 방향 근거만 있는 것이 5개, 근거가 없는 것이 7개다. 근거 없음에는 페르소나 구성비와 가격·쿠폰·피로·리뷰 Trait 분포가 들어간다(#149 보강으로 세그먼트 구성비·리뷰는 방향 근거, 푸시 반응률은 벤더 근거로 일부 채움 — §4-1). 그래서 "유의미성"은 모수가 아니라 **실현 데이터가 외부 stylized fact 17개를 재현하는지**로 증명한다(§4).
 
 ---
@@ -78,7 +78,7 @@ Hidden Trait 16종만 보면 정량 근거 7 · 방향 근거 5 · 근거 없음
   - (a) Persuadable 목표를 **11~21%** 로 내린다.
   - (b) 4분면을 잠재결과 유형이 아니라 **연속 CATE 임계값**으로 정의하고 그 임계값을 문서에 고정한다. 그러면 항등식이 그대로 적용되지 않는다. 어느 정의인지가 먼저 정해져야 한다.
 
-### 3-3. Sleeping Dog — 가드레일은 외부와 맞는데, 생성 모수가 하한에 못 미친다 【우선 3】
+### 3-3. Sleeping Dog — 가드레일은 외부와 질적으로 맞는다 【우선 3】
 
 > **원자료 교차 확인 (reference_stats, 2026-10-22).** Hillstrom·Lenta·X5 를 단일 변수 세그먼트(23~32개)·2변수 교차(202~375개)로 집계한 결과, 95% CI 상한이 0 미만인 음수 ATE 세그먼트는 **0개**(BH 보정 전 기준으로도 0개). 점추정만 음수인 셀은 있다(Lenta 29 · X5 13 · Hillstrom 여성 메일 전환 44). 따라서 아래 "외부 정합"은 **문헌 서술·모형 기반 추정과의 질적 정합**이며, 원자료의 단순 세그먼트로는 재현되지 않았다. 모델 기반 음수 세그먼트 탐지는 하지 않았다.
 
@@ -116,7 +116,7 @@ Hidden Trait 16종만 보면 정량 근거 7 · 방향 근거 5 · 근거 없음
 ## §4 "생성 데이터 유의미성" 검증 계획
 
 **원칙.** "유의미하다"를 "모수가 그럴듯하다"로 증명하지 않는다. **실현 이벤트 로그에서 집계한 값이 외부 실데이터의 stylized fact 를 재현하는지**로 증명한다.
-- 비교는 S4·S5·S6 실현 데이터로 한다. 생성 모수(§2)는 출발점일 뿐이다.
+- 비교는 S4·S5·S6 실현 데이터로 한다. 생성 모수 대조(시뮬 팀 내부)는 출발점일 뿐이다.
 - 비교 기준값은 GATE 1 **전에** 이 표로 고정한다. 결과를 본 뒤 기준값을 바꾸지 않는다.
 - AI 성능 지표(AUC·Qini 등)는 이 검증에 들어가지 않는다.
 - 같은 집계 코드를 외부 데이터(Instacart·Complete Journey)와 우리 로그에 **똑같이** 돌린다. 집계 정의 차이로 생기는 거짓 불일치를 막는다. `scripts/research/*.py` 가 외부 쪽 구현이다.
@@ -222,5 +222,5 @@ Hidden Trait 16종만 보면 정량 근거 7 · 방향 근거 5 · 근거 없음
 - **[S55]** Klaviyo Email Marketing Benchmarks. 2026. industry_benchmark(원문) — https://www.klaviyo.com/products/email-marketing/benchmarks
 - **[S56]** 통계청 「2024년 12월 및 연간 온라인쇼핑동향」 최초 발표(PDF 원문). 2025. korea_official(원문) — https://mods.go.kr/boardDownload.es?bid=241&list_no=434934&seq=1
 
-**재현.** `scripts/research/` 의 `instacart_stats.py`·`cj_stats.py`·`cj_label.py`·`our_mix.py` 와 출력 `docs/research/computed/research_*_out.txt`. Criteo·X5 집계와 Hillstrom·Lenta 의 1차 집계는 조사 보조자가 했고, Hillstrom·Lenta 는 이 리서처가 독립으로 다시 집계해 같은 값을 얻었다(`research_hillstrom_out.txt`·`research_lenta_out.txt`). `research_cj_out.txt` 의 "[폐기-집계 결함]" 줄은 근거로 쓰지 않는다.
+**재현.** `scripts/research/` 의 `instacart_stats.py`·`cj_stats.py`·`cj_label.py` 와 출력 `docs/research/computed/research_*_out.txt`. `our_mix.py` · `research_ourmix_out.txt` 는 시뮬 팀 내부다(시스템 팀은 열지 않는다, #163 리드 요청 6). Criteo·X5 집계와 Hillstrom·Lenta 의 1차 집계는 조사 보조자가 했고, Hillstrom·Lenta 는 이 리서처가 독립으로 다시 집계해 같은 값을 얻었다(`research_hillstrom_out.txt`·`research_lenta_out.txt`). `research_cj_out.txt` 의 "[폐기-집계 결함]" 줄은 근거로 쓰지 않는다.
 
