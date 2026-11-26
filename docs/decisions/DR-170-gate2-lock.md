@@ -4,7 +4,7 @@
 |---|---|
 | 태스크 | 이슈 #170 (GATE 2 정식 봉인 — Rule Baseline 경로 · 예산 상한) |
 | 작성 | 인성(시스템 팀 리드, 에이전트 구현) · 2026-11-26 |
-| 상태 | 제안 — 광진 리뷰 뒤 확정. 봉인(서명)은 GATE 1 완전 봉인(#163) 뒤 Baseline 실행에서 광진이 한다 |
+| 상태 | 제안 — 광진 리뷰(PR #327, 11/26) 반영(아래 「리뷰 반영」). 재리뷰 뒤 확정. 봉인(서명)은 GATE 1 완전 봉인(#163) 뒤 Baseline 실행에서 광진이 한다 |
 | 관련 | DR-170-c-rule-budget(C_rule) · DR-145-strategy-sprint(S1 규칙) · DR-234-population-experiment-scale(Eligible · P3) · DR-211-experiment-scale-config(FR-05) |
 
 ## 무엇을 정하는가
@@ -78,8 +78,9 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
      사실로만 적는다. 같아야 한다는 조건은 두지 않는다 — 10/22 기록이 고정했다고 쓴 범위가 규칙 코드뿐이기 때문이다.
      2026-11-26 대조: `S1_RULE` · `plan_S0` · `s1_eligibility` · `plan_S1` · `_missing` · `_as_mapping` 이 태그와 같다. 나머지는
      태그에 없다(뒤에 추가된 입력 계산 · 상수).
-2. **예산 상한.** `strategies.py` 의 `planning_costs`, `run_sprint.py` 의 `C_RULE_DEFINITION` · `plan_costs` · `resolve_budget`
-   지문 + Baseline 실행의 C_rule 값(`budget.c_rule_planned_krw`) ·
+2. **예산 상한.** `strategies.py` 의 `planning_costs`, `run_sprint.py` 의 `C_RULE_DEFINITION` · `plan_costs` ·
+   `assignment_planned_cost`(처치별 배정 수 × 고객당 계획 비용 합 — S1 이면 C_rule) · `resolve_budget` 지문(모두 20개 이름)
+   + Baseline 실행의 C_rule 값(`budget.c_rule_planned_krw`) ·
    처치 단가(`planning_costs_krw`) · 그 출처. 처치 단가 자체는 GATE 1 경제 파라미터 Lock 대상이라 값만 적는다.
 3. **Baseline 결과.** S0 · S1 의 배정 수 · 처치 수 · 계획 비용 · 측정 계층 경제 지표(분기 창), 결과 파일(`run_meta.json` ·
    `strategy_comparison.json`) sha256, 실행 정보(run_id · repo_commit · simulator_commit · seed · 고객 수).
@@ -88,25 +89,26 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
 
 **G3 = A.** 기록은 `config/gate2_lock.yaml`, `src/orchestration/gate2_lock.py` 의 `record()` 만 쓴다.
 
-- CLI(RUN_DIR = Baseline 실행의 결과 폴더, TAG = 그 실행의 태그 · 커밋): `python -m src.orchestration.gate2_lock check RUN_DIR --expected-commit TAG` — 조건 · 기록 미리 보기(쓰지 않음).
+- CLI(RUN_DIR = Baseline 실행의 결과 폴더, TAG = 그 실행의 태그 · 커밋): `python -m src.orchestration.gate2_lock check RUN_DIR --expected-commit TAG` — 조건 · 기록 미리 보기(쓰지 않음). 조건이 하나라도 충족이 아니면 종료 코드 1.
   `record ... --locked-by NAME` — 기록을 쓴다. `verify` — 지금 저장소의 지문을 기록과 대조한다.
 - `locked_by` 는 사람 이름이다(GATE 1 과 같은 거부 목록). **에이전트는 `record` 를 실행하지 않는다** — 서명은 광진이 한다(#170).
 - `config/gate2_lock.yaml` 을 `team_boundaries.json` `lead_only` 에 넣는다(GATE 1 기록과 같은 이유).
-- `verify` 상태: `not_started`(기록 없음) · `match` · `mismatch` · `unreadable`. GATE 3 동결 · GATE 4 실행 전에 돌린다.
+- `verify` 상태: `not_started`(기록 없음) · `match` · `mismatch` · `unreadable`. 지금 잠그는 이름이 기록에 없으면(`not_in_record`)
+  대조하지 않은 것이라 `mismatch` 다. GATE 3 동결 · GATE 4 실행 전에 돌린다.
 
 **G4 — 봉인 조건. 모두 충족이어야 기록한다. 확인하지 못한 것(None)도 미충족이다(GATE 1 `can_lock` 과 같다).**
 
 | ID | 조건 | 근거 |
 |---|---|---|
-| B-1 | 실행 커밋의 `config/gate1_lock.yaml` 이 `FULL_FREEZE` | PRD 순서 "GATE 1 봉인 → GATE 2", #170 11/13 "GATE 1 봉인 커밋에서" |
+| B-1 | 실행 환경 = GATE 1 봉인: 실행 커밋의 `config/gate1_lock.yaml` 이 `FULL_FREEZE`, 기록의 `simulator_commit` = 실행 `provenance.simulator_commit`(어느 쪽이든 없으면 미충족), 기록의 정본 파일(`canonical_files`) 해시 = **실행 커밋**의 그 파일 해시(`freeze.file_sha256`) | PRD 순서 "GATE 1 봉인 → GATE 2", #170 11/13 "GATE 1 봉인 커밋에서", #213 "S0 · S1 Baseline 결과가 GATE 1 봉인 환경(`simulator_commit`)에서 나왔는지" |
 | B-2 | `provenance.repo_commit` = 지정한 커밋(태그) | #170 11/05 표 |
 | B-3 | `require_clean = true` · `repo_worktree_dirty = false` | #170 11/05 표 · DR-262 |
 | B-4 | `repo_changed_during_run = false` | #170 11/05 표 |
 | B-5 | `provenance.null_reason` 없음 | #170 11/05 표 |
 | B-6 | `rct.arm_counts` T0 ≥ 10,000 · T1~T4 합 ≥ 10,000 | DR-211 FR-05 |
-| B-7 | `strategy_S0` · `strategy_S1` 단계 `ok` | PRD §83 |
-| B-8 | `budget.status = ok`, 출처가 C_rule(`--budget-krw` 아님), C_rule 이 수 | DR-170 D2 · D3 |
-| B-9 | 분기 간 대조(G5) = 같다 | DR-234 반증 조건 — 다르면 S0 · S1 경제 지표의 모집단이 바뀐다 |
+| B-7 | `strategy_S0` · `strategy_S1` 단계 `ok`, 같은 실행(`run_id`)의 `strategy_comparison.json` 이 있고 S0 · S1 상세에 배정 수 · 계획 비용이 있다 | PRD §83 "S0 · S1 을 실행하고 결과를 저장" |
+| B-8 | `budget.status = ok`, 출처가 C_rule(`--budget-krw` 아님), C_rule = 결과 파일의 S1 계획 비용 = S1 처치별 배정 수 × 처치 단가(`planning_costs_krw`) 합 | DR-170 D2 · D3 — 기록할 C_rule 이 실제 S1 배정에서 나왔는지 원천끼리 대조한다 |
+| B-9 | 같은 실행의 분기 간 대조(G5)가 봉인 대상 분기 S0~S5 를 **모두** 대조했고(`complete`) 결과가 같다 | DR-234 반증 조건(6분기) — 다르면 S0 · S1 경제 지표의 모집단이 바뀐다. 빠진 분기가 있으면 판정할 수 없다 |
 | B-10 | 기록할 지문 = 실행 커밋의 지문(지금 저장소가 실행 커밋과 다르면 거부) | 잠그는 것은 Baseline 을 낸 코드다 |
 
 **G5 = A.** `src/orchestration/branch_invariance.py`(`python -m src.orchestration.branch_invariance RUN_DIR`).
@@ -116,8 +118,10 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
 - 고객별 [t2, end) 이벤트 수 · 유형별 수 · purchase 수 · purchase `order_amount` 합을 기준 분기 S0 과 다른 분기 모두에 대조한다.
   모든 분기 · 모든 고객이 같으면 `same`, 하나라도 다르면 `differs` — 그때 B-9 미충족이고 DR-234 P3 를 다시 본다(측정 계층 수치를
   Eligible 로 좁힌다).
-- 결과 파일(`branch_invariance.json`)에는 고객 ID 를 넣지 않는다 — 수와 합계만. 명부 · 배정 파일 · 분기 원본 중 하나라도 없으면
-  `not_run`(근사하지 않는다).
+- 대조할 분기 = 실행 루프가 만드는 분기 전부(`run_sprint.STRATEGIES` = S0~S5, 시험이 대조). S6 은 분기를 만들지 않는다(분기 실측은
+  #305). 하나라도 단계가 `ok` 가 아니거나 배정 파일 · 원본이 없으면 `incomplete` 와 빠진 분기 · 사유 — 있는 분기만으로 `same` 을 내지
+  않는다. 명부가 없으면 `not_run`. 결과에 `run_id` 를 싣는다(B-9 가 같은 실행인지 대조).
+- 결과 파일(`branch_invariance.json`)에는 고객 ID 를 넣지 않는다 — 수와 합계만. 근사하지 않는다.
 
 ## 기각한 안과 기각 사유
 
@@ -155,6 +159,18 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
 - **G2 지문 방식:** 잠근 함수의 문서 문자열이나 주석만 고쳐도 `mismatch` 다. 봉인 뒤 그 이름을 손대지 않는 것이 규칙이라 엄격한
   쪽을 택했다.
 - **B-6 10,000:** FR-05 고정값이다.
+
+## 리뷰 반영(2026-11-26, PR #327 광진 리뷰 — `166e71e` 에서 찾은 반례)
+
+| 리뷰 | 반례 | 바꾼 것 |
+|---|---|---|
+| B-9 는 봉인 대상 분기가 모두 확인된 경우에만 | 6분기 중 다른 S2 의 원본을 빼면 `differs` 가 `same` 이 됐다. 미실행 분기는 건너뛴 목록에도 없었다 | G5 · B-9 — 필수 분기(S0~S5) · 단계 `ok` · `complete` · 같은 `run_id` |
+| B-1 은 실제 실행 환경이 GATE 1 봉인과 일치하는지 | GATE 1 기록을 둔 채 기록에 든 경제 설정만 바꾼 커밋에서 B-1 이 통과했다 | B-1 — `simulator_commit` 대조 · 정본 해시를 실행 커밋 기준으로 |
+| Baseline 결과 파일과 C_rule 원천 | `strategy_comparison.json` 이 없어도 `check` 가 0 이었고, 결과 파일의 S1 계획 비용만 바꿔도 B-8 이 통과했다 | B-7 · B-8 — 결과 파일 · S0 · S1 상세 · C_rule 원천 대조, 기록 시 결과 파일 해시가 없으면 거부 |
+| 지문이 실제 합산식과 필수 이름 전체를 | `run()` 안 합산식만 바꿔 C_rule 이 21,090원에서 31,090원이 돼도 B-10 · `verify` 가 통과했다. 기록에서 이름 하나를 빼도 `verify` 가 `match` 였다 | 합산식을 `assignment_planned_cost` 로 떼어 잠근다(S2~S6 범위는 그대로). 필수 이름이 기록에 없으면 `mismatch` |
+
+결과(실측)를 보고 바꾼 것이 아니다 — 합성 반례로 드러난 검사의 빈틈이다. 각 반례는 시험(`tests/test_strategy_gate2_lock.py` ·
+`tests/test_strategy_branch_invariance.py`)으로 남겼다.
 
 ## 남은 불확실성
 

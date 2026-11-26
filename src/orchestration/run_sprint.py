@@ -387,6 +387,14 @@ def plan_costs(basis: CostBasis | None) -> tuple[dict[str, float] | None, str]:
     return costs, "strategies.planning_costs — 처치 단가 + 메시지 비용(쿠폰 전량 사용 가정의 상한)"
 
 
+def assignment_planned_cost(counts: Mapping[str, int], costs: Mapping[str, float]) -> float:
+    """처치별 배정 수 × 고객당 계획 비용의 합. S1(상한 없음) 배정이면 이 값이 C_rule 이다(``C_RULE_DEFINITION``).
+
+    GATE 2 가 지문으로 잠근다(DR-170-gate2-lock G2 — 리뷰 반영 2026-11-26). 비용표에 없는 처치는 0 원으로 센다.
+    """
+    return sum(costs.get(t, 0) * n for t, n in counts.items())
+
+
 def resolve_budget(explicit_krw: int | None, s1_entry: Mapping[str, Any] | None,
                    basis: CostBasis | None) -> dict[str, Any]:
     """S2~S5 의 `plan` 예산. 기본은 **C_rule**(``C_RULE_DEFINITION`` — #170 · DR-170)이다.
@@ -2481,7 +2489,7 @@ def run(config: SprintConfig) -> Path:
                 entry["n_targeted"] = sum(v for t, v in counts.items() if t != "T0")
                 entry["treatment_counts"] = dict(sorted(counts.items()))
                 if costs is not None:
-                    entry["planned_cost_krw"] = sum(costs.get(t, 0) * n for t, n in counts.items())
+                    entry["planned_cost_krw"] = assignment_planned_cost(counts, costs)
                     entry["planned_cost_note"] = (
                         "고객당 계획 비용 × 배정 수 — 쿠폰 전량 사용 가정의 상한, 캠페인 고정비 제외. 실집행 비용이 아니다"
                     )

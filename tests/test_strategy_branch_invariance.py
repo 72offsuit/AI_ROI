@@ -48,12 +48,18 @@ class BranchInvarianceTests(unittest.TestCase):
         self.run_dir = self.tmp / "results" / "run"
         self.run_dir.mkdir(parents=True)
 
+    @staticmethod
+    def six(**changed: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        """봉인 대상 분기 전부(S0~S5) — 바꾼 분기만 다른 이벤트."""
+        return {branch: changed.get(branch, BASE_EVENTS) for branch in bi.REQUIRED_BRANCHES}
+
     def write(self, events_by_branch: dict[str, list[dict[str, Any]]], assignments: dict[str, dict[str, str]],
-              roster_t2: list[str] = ("E1", "E2"), with_roster: bool = True) -> None:
+              roster_t2: list[str] = ("E1", "E2"), with_roster: bool = True,
+              stage_status: dict[str, str] | None = None) -> None:
         raw_roots, files = {}, {}
         for branch, events in events_by_branch.items():
             root = self.tmp / "out" / "branches" / branch / "raw"
-            (root / "events").mkdir(parents=True)
+            (root / "events").mkdir(parents=True, exist_ok=True)
             (root / "events" / "part-00000.jsonl").write_text(
                 "".join(json.dumps(e) + "\n" for e in events), encoding="utf-8")
             raw_roots[branch] = str(root)
@@ -62,8 +68,10 @@ class BranchInvarianceTests(unittest.TestCase):
             path.write_text(json.dumps({"assigned_at": T2, "assignments": assignments.get(branch, {})}),
                             encoding="utf-8")
             files[branch] = str(path)
-        meta = {"timeline": {"t2": T2, "end": END}, "raw_roots": {"main": "x", **raw_roots},
-                "assignment_files": {"strategies": files}, "split_roster": {"file": bi.ROSTER_FILE}}
+        stages = [{"name": f"strategy_{b}", "status": (stage_status or {}).get(b, "ok")} for b in events_by_branch]
+        meta = {"run_id": "SP-test", "timeline": {"t2": T2, "end": END}, "raw_roots": {"main": "x", **raw_roots},
+                "assignment_files": {"strategies": files}, "split_roster": {"file": bi.ROSTER_FILE},
+                "stages": stages}
         (self.run_dir / "run_meta.json").write_text(json.dumps(meta), encoding="utf-8")
         if with_roster:
             with (self.run_dir / bi.ROSTER_FILE).open("w", encoding="utf-8", newline="") as handle:
@@ -75,11 +83,11 @@ class BranchInvarianceTests(unittest.TestCase):
 
     def test_same_when_only_treated_customers_change(self) -> None:
         treated_extra = _event("E2", "2026-03-07T12:00:00+09:00", "purchase", 30_000)
-        self.write({"S0": BASE_EVENTS, "S1": [*BASE_EVENTS, treated_extra], "S2": BASE_EVENTS},
-                   {"S1": {"E2": "T3"}})
+        self.write(self.six(S1=[*BASE_EVENTS, treated_extra]), {"S1": {"E2": "T3"}})
         result = bi.branch_invariance(self.run_dir)
-        self.assertEqual(("ok", "same"), (result["status"], result["result"]), result)
-        self.assertEqual(["S0", "S1", "S2"], result["branches"])
+        self.assertEqual(("ok", "same", True), (result["status"], result["result"], result["complete"]), result)
+        self.assertEqual(list(bi.REQUIRED_BRANCHES), result["branches"])
+        self.assertEqual(("SP-test", {}), (result["run_id"], result["missing_branches"]))
         self.assertEqual(1, result["groups"]["non_eligible"]["n_customers"])        # N1
         self.assertEqual(1, result["groups"]["untreated_eligible"]["n_customers"])  # E1 (E2 는 S1 이 처치)
         s0 = result["groups"]["non_eligible"]["by_branch"]["S0"]
@@ -88,14 +96,14 @@ class BranchInvarianceTests(unittest.TestCase):
 
     def test_differs_when_an_untreated_customer_changes(self) -> None:
         changed = [*BASE_EVENTS[:1], _event("N1", "2026-03-02T10:05:00+09:00", "purchase", 12_500), *BASE_EVENTS[2:]]
-        self.write({"S0": BASE_EVENTS, "S1": BASE_EVENTS, "S2": changed}, {})
+        self.write(self.six(S2=changed), {})
         result = bi.branch_invariance(self.run_dir)
         self.assertEqual("differs", result["result"])
         by_branch = result["groups"]["non_eligible"]["by_branch"]
         self.assertEqual((0, 1), (by_branch["S1"]["n_differing_vs_reference"], by_branch["S2"]["n_differing_vs_reference"]))
 
     def test_a_missing_event_counts_as_a_difference(self) -> None:
-        self.write({"S0": BASE_EVENTS, "S1": [e for e in BASE_EVENTS if e["customer_id"] != "E1"]}, {})
+        self.write(self.six(S1=[e for e in BASE_EVENTS if e["customer_id"] != "E1"]), {})
         result = bi.branch_invariance(self.run_dir)
         self.assertEqual("differs", result["result"])
         self.assertEqual(1, result["groups"]["untreated_eligible"]["by_branch"]["S1"]["n_differing_vs_reference"])
@@ -103,29 +111,52 @@ class BranchInvarianceTests(unittest.TestCase):
     def test_event_type_mix_is_compared_not_only_totals(self) -> None:
         swapped = [_event("E1", "2026-03-05T09:00:00+09:00", "search") if e["customer_id"] == "E1" else e
                    for e in BASE_EVENTS]
-        self.write({"S0": BASE_EVENTS, "S1": swapped}, {})
+        self.write(self.six(S1=swapped), {})
         self.assertEqual("differs", bi.branch_invariance(self.run_dir)["result"])
 
     def test_not_run_without_the_roster(self) -> None:
-        self.write({"S0": BASE_EVENTS, "S1": BASE_EVENTS}, {}, with_roster=False)
+        self.write(self.six(), {}, with_roster=False)
         result = bi.branch_invariance(self.run_dir)
         self.assertEqual(("not_run", None), (result["status"], result["result"]))
         self.assertIn("명부", result["reason"])
 
-    def test_not_run_without_the_reference_branch(self) -> None:
-        self.write({"S1": BASE_EVENTS, "S2": BASE_EVENTS}, {})
+    def test_missing_reference_branch_is_incomplete(self) -> None:
+        events = self.six()
+        del events["S0"]
+        self.write(events, {})
         result = bi.branch_invariance(self.run_dir)
-        self.assertEqual("not_run", result["status"])
-        self.assertIn("S0", result["reason"])
+        self.assertEqual(("incomplete", None, False), (result["status"], result["result"], result["complete"]))
+        self.assertEqual(["S0"], list(result["missing_branches"]))
+
+    def test_removing_a_differing_branch_is_incomplete_not_same(self) -> None:
+        """PR #327 리뷰 반례 — 비Eligible 고객이 다른 S2 의 원본을 빼면 예전에는 same 이 됐다."""
+        changed = [*BASE_EVENTS[:1], _event("N1", "2026-03-02T10:05:00+09:00", "purchase", 12_500), *BASE_EVENTS[2:]]
+        self.write(self.six(S2=changed), {})
+        self.assertEqual("differs", bi.branch_invariance(self.run_dir)["result"])
+        shutil.rmtree(self.tmp / "out" / "branches" / "S2" / "raw")
+        result = bi.branch_invariance(self.run_dir)
+        self.assertEqual(("incomplete", None), (result["status"], result["result"]))
+        self.assertIn("분기 원본이 없다", result["missing_branches"]["S2"])
+
+    def test_branch_stage_not_ok_or_absent_is_incomplete(self) -> None:
+        self.write(self.six(), {}, stage_status={"S3": "failed"})
+        result = bi.branch_invariance(self.run_dir)
+        self.assertEqual("incomplete", result["status"])
+        self.assertIn("strategy_S3 = 'failed'", result["missing_branches"]["S3"])
+        events = self.six()
+        del events["S5"]                                  # 단계가 미실행이라 배정 목록에서도 빠진 분기
+        self.write(events, {})
+        result = bi.branch_invariance(self.run_dir)
+        self.assertIn("배정 파일 경로가 없다", result["missing_branches"]["S5"])
 
     def test_output_has_no_customer_ids(self) -> None:
-        self.write({"S0": BASE_EVENTS, "S1": BASE_EVENTS}, {"S1": {"E2": "T3"}})
+        self.write(self.six(), {"S1": {"E2": "T3"}})
         text = json.dumps(bi.branch_invariance(self.run_dir))
         for cid in ("N1", "E1", "E2"):
             self.assertNotIn(f'"{cid}"', text)
 
     def test_cli_writes_the_result_and_exit_code(self) -> None:
-        self.write({"S0": BASE_EVENTS, "S1": BASE_EVENTS}, {})
+        self.write(self.six(), {})
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(0, bi.main([str(self.run_dir)]))
         saved = json.loads((self.run_dir / bi.RESULT_FILE).read_text(encoding="utf-8"))
@@ -133,6 +164,13 @@ class BranchInvarianceTests(unittest.TestCase):
         (self.run_dir / bi.ROSTER_FILE).unlink()
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(2, bi.main([str(self.run_dir)]))
+
+    def test_required_branches_are_run_sprint_strategies(self) -> None:
+        """봉인 대상 분기 = 실행 루프가 만드는 분기(``run_sprint.STRATEGIES``). S6 은 분기가 없다(#305)."""
+        tree = ast.parse(RUN_SPRINT.read_text(encoding="utf-8"))
+        values = [ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.AnnAssign)
+                  and isinstance(node.target, ast.Name) and node.target.id == "STRATEGIES"]
+        self.assertEqual([bi.REQUIRED_BRANCHES], values)
 
     def test_roster_file_name_matches_run_sprint(self) -> None:
         tree = ast.parse(RUN_SPRINT.read_text(encoding="utf-8"))

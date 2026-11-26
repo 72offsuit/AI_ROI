@@ -87,7 +87,7 @@ LOCKED_NAMES: tuple[LockedName, ...] = (
     *_names("baseline_rule", RUN_SPRINT_PY, "ELIGIBLE_MIN_TENURE_DAYS", "ELIGIBLE_MIN_ORDERS",
             "ELIGIBLE_MIN_DAYS_SINCE_PURCHASE", "_timestamps", "_kst_dates", "eligibility", "s1_inputs"),
     *_names("budget_cap", STRATEGIES_PY, "planning_costs"),
-    *_names("budget_cap", RUN_SPRINT_PY, "C_RULE_DEFINITION", "plan_costs", "resolve_budget"),
+    *_names("budget_cap", RUN_SPRINT_PY, "C_RULE_DEFINITION", "plan_costs", "assignment_planned_cost", "resolve_budget"),
 )
 
 
@@ -167,6 +167,39 @@ def _git(root: Path, *args: str) -> str | None:
     return done.stdout if done.returncode == 0 else None
 
 
+def _git_bytes(root: Path, *args: str) -> bytes | None:
+    """``git show`` 원본 바이트 — 해시는 디코딩 전 바이트로 낸다(GATE 1 ``freeze.file_sha256`` 과 같은 값)."""
+    try:
+        done = subprocess.run(["git", "-C", str(root), *args], capture_output=True, check=False)
+    except OSError:
+        return None
+    return done.stdout if done.returncode == 0 else None
+
+
+def gate1_canonical_at(root: Path, commit: str, gate1: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """GATE 1 기록의 ``canonical_files`` 를 **실행 커밋**의 파일과 대조한다 — 해시는 ``freeze.file_sha256`` 그대로.
+
+    파일 내용은 출력하지 않는다(경로 · 해시만). 기록에 정본이 없으면 빈 목록이다(그때 B-1 은 미충족).
+    """
+    from src.measurement.freeze import file_sha256
+
+    recorded = gate1.get("canonical_files")
+    if not isinstance(recorded, Mapping):
+        return []
+    rows = []
+    with tempfile.TemporaryDirectory() as folder:
+        scratch = Path(folder) / "canonical"
+        for relative, expected in recorded.items():
+            data = _git_bytes(root, "show", f"{commit}:{relative}")
+            actual = None
+            if data is not None:
+                scratch.write_bytes(data)
+                actual = file_sha256(scratch)
+            rows.append({"path": str(relative), "recorded": None if expected is None else str(expected),
+                         "at_run_commit": actual})
+    return rows
+
+
 def worktree_reader(root: Path) -> Callable[[str], str | None]:
     def read(relative: str) -> str | None:
         path = Path(root) / relative
@@ -239,17 +272,118 @@ def _number(value: Any) -> float | None:
         and math.isfinite(float(value)) else None
 
 
+def _gate1_check(gate1: Mapping[str, Any] | None, canonical: list[dict[str, Any]] | None,
+                 run_commit: str | None, run_simulator: Any) -> Check:
+    """B-1 — 실행 환경이 GATE 1 봉인과 같다: FULL_FREEZE 선언 · 기록의 simulator_commit = 실행의 simulator_commit ·
+    기록의 정본 파일 해시 = 실행 커밋의 파일 해시(#213 · PR #327 리뷰)."""
+    title = "실행 환경 = GATE 1 봉인(FULL_FREEZE · simulator_commit · 정본 해시, 실행 커밋 기준)"
+    if gate1 is None:
+        return Check("B-1", title, None, f"실행 커밋 {str(run_commit)[:12]} 의 {GATE1_RECORD.as_posix()} 를 읽지 못했다")
+    declaration = gate1.get("declaration")
+    sealed_sim = gate1.get("simulator_commit")
+    rows = canonical or []
+    broken = [r["path"] for r in rows if r["recorded"] is None or r["at_run_commit"] != r["recorded"]]
+    problems = []
+    if declaration != GATE1_FULL:
+        problems.append(f"declaration={declaration!r}")
+    if not sealed_sim or not run_simulator:
+        problems.append(f"simulator_commit 없음(기록 {sealed_sim!r} · 실행 {run_simulator!r})")
+    elif sealed_sim != run_simulator:
+        problems.append(f"simulator_commit 다름(기록 {str(sealed_sim)[:12]} · 실행 {str(run_simulator)[:12]})")
+    if not rows:
+        problems.append("기록에 정본 파일(canonical_files)이 없다")
+    if broken:
+        problems.append(f"실행 커밋에서 해시가 다른 정본 {broken}")
+    evidence = (f"실행 커밋 {str(run_commit)[:12]} · declaration={declaration!r} · simulator_commit "
+                f"{str(sealed_sim)[:12]}={str(run_simulator)[:12]} · 정본 {len(rows) - len(broken)}/{len(rows)} 일치")
+    return Check("B-1", title, not problems, evidence if not problems else f"{evidence} — {' · '.join(problems)}")
+
+
+def _baseline_check(meta: Mapping[str, Any], comparison: Mapping[str, Any] | None) -> Check:
+    """B-7 — S0 · S1 분기 ok, 같은 실행의 ``strategy_comparison.json`` 에 S0 · S1 상세(배정 수 · 계획 비용)가 있다."""
+    title = "S0 · S1 분기 ok · 같은 실행의 결과 파일에 S0 · S1 상세"
+    statuses = {s: _stage_status(meta, f"strategy_{s}") for s in BASELINE_STRATEGIES}
+    stage_text = " · ".join(f"strategy_{s}={v!r}" for s, v in statuses.items())
+    if comparison is None:
+        return Check("B-7", title, False, f"{stage_text} · strategy_comparison.json 이 없다")
+    details = comparison.get("strategy_details") or {}
+    lacking = [s for s in BASELINE_STRATEGIES
+               if not isinstance(details.get(s), Mapping) or not isinstance(details[s].get("n_assigned"), int)
+               or _number(details[s].get("planned_cost_krw")) is None]
+    same_run = comparison.get("run_id") is not None and comparison.get("run_id") == meta.get("run_id")
+    problems = []
+    if any(v is None for v in statuses.values()):
+        met: bool | None = None
+    else:
+        met = all(v == "ok" for v in statuses.values())
+    if lacking:
+        problems.append(f"배정 수 · 계획 비용이 없는 상세 {lacking}")
+    if not same_run:
+        problems.append(f"run_id 다름(결과 파일 {comparison.get('run_id')!r} · run_meta {meta.get('run_id')!r})")
+    if problems:
+        met = False
+    return Check("B-7", title, met, stage_text + (f" — {' · '.join(problems)}" if problems else ""))
+
+
+def _c_rule_check(meta: Mapping[str, Any], comparison: Mapping[str, Any] | None) -> Check:
+    """B-8 — C_rule 이 S1 계획 비용에서 왔고(``--budget-krw`` 아님), 기록할 값 = 결과 파일의 S1 계획 비용
+    = S1 처치별 배정 수 × 처치 단가(``planning_costs_krw``) 합(PR #327 리뷰 — run_meta 예산 필드끼리만 대조하지 않는다)."""
+    title = "C_rule = S1 계획 비용(결과 파일 · 배정 수 × 단가와 일치, --budget-krw 아님)"
+    budget = meta.get("budget") or {}
+    if not budget:
+        return Check("B-8", title, None, "run_meta.budget 이 없다")
+    c_rule, planning = _number(budget.get("c_rule_planned_krw")), _number(budget.get("planning_budget_krw"))
+    from_c_rule = str(budget.get("source") or "").startswith("C_rule")
+    s1 = ((comparison or {}).get("strategy_details") or {}).get(BASELINE_STRATEGIES[1]) or {}
+    s1_planned = _number(s1.get("planned_cost_krw"))
+    unit = meta.get("planning_costs_krw") if isinstance(meta.get("planning_costs_krw"), Mapping) else {}
+    counts = s1.get("treatment_counts") if isinstance(s1.get("treatment_counts"), Mapping) else None
+    recomputed = None
+    if counts is not None and all(_number(unit.get(t)) is not None for t, n in counts.items() if n):
+        recomputed = float(sum(_number(unit.get(t)) * int(n) for t, n in counts.items() if n))
+    problems = []
+    if budget.get("status") != "ok" or not from_c_rule:
+        problems.append(f"status={budget.get('status')!r} · 출처 C_rule={from_c_rule}")
+    if c_rule is None or planning is None or abs(planning - max(c_rule, 0.0)) > 1e-6:
+        problems.append(f"c_rule_planned_krw={budget.get('c_rule_planned_krw')!r} · planning_budget_krw={planning!r}")
+    if s1_planned is None or c_rule is None or abs(s1_planned - c_rule) > 1e-6:
+        problems.append(f"결과 파일 S1 계획 비용 {s1_planned!r} ≠ C_rule {c_rule!r}")
+    if recomputed is None or c_rule is None or abs(recomputed - c_rule) > 1e-6:
+        problems.append(f"S1 배정 수 × 처치 단가 합 {recomputed!r} ≠ C_rule {c_rule!r}")
+    evidence = (f"C_rule={c_rule!r} · 결과 파일 S1={s1_planned!r} · 배정 수 × 단가={recomputed!r} · "
+                f"출처 C_rule={from_c_rule}")
+    return Check("B-8", title, not problems, evidence if not problems else f"{evidence} — {' · '.join(problems)}")
+
+
+def _invariance_check(meta: Mapping[str, Any], invariance: Mapping[str, Any] | None) -> Check:
+    """B-9 — 같은 실행의 분기 간 대조가 봉인 대상 분기 전부(``REQUIRED_BRANCHES``)를 대조했고 ``same``."""
+    from src.orchestration.branch_invariance import REQUIRED_BRANCHES
+
+    title = f"분기 간 대조 = same, 분기 {'·'.join(REQUIRED_BRANCHES)} 전부(DR-234 반증 조건)"
+    if invariance is None:
+        return Check("B-9", title, None, "branch_invariance.json 없음")
+    result, status = invariance.get("result"), invariance.get("status")
+    compared = set(invariance.get("branches") or []) if status == "ok" else set()
+    missing = sorted(set(REQUIRED_BRANCHES) - compared)
+    same_run = invariance.get("run_id") is not None and invariance.get("run_id") == meta.get("run_id")
+    evidence = (f"status={status!r} · result={result!r} · complete={invariance.get('complete')!r} · "
+                f"빠진 분기={invariance.get('missing_branches') or missing} · run_id={invariance.get('run_id')!r}")
+    if status == "not_run":
+        return Check("B-9", title, None, f"{evidence} · {invariance.get('reason') or ''}")
+    met = (status == "ok" and result == "same" and invariance.get("complete") is True and not missing and same_run)
+    if not same_run:
+        evidence += f" — run_meta run_id {meta.get('run_id')!r} 와 다르다"
+    return Check("B-9", title, met, evidence)
+
+
 def _checks(meta: Mapping[str, Any] | None, invariance: Mapping[str, Any] | None, gate1: Mapping[str, Any] | None,
             run_commit: str | None, expected_sha: str | None, expected: str,
-            at_run: list[dict[str, Any]] | None, current: list[dict[str, Any]]) -> list[Check]:
+            at_run: list[dict[str, Any]] | None, current: list[dict[str, Any]],
+            comparison: Mapping[str, Any] | None = None,
+            gate1_canonical: list[dict[str, Any]] | None = None) -> list[Check]:
     meta = meta or {}
     prov = meta.get("provenance") or {}
-    checks = []
-
-    declaration = None if gate1 is None else gate1.get("declaration")
-    checks.append(Check("B-1", "실행 커밋의 GATE 1 기록이 FULL_FREEZE",
-                        None if gate1 is None else declaration == GATE1_FULL,
-                        f"{GATE1_RECORD.as_posix()} declaration={declaration!r} (실행 커밋 {str(run_commit)[:12]})"))
+    checks = [_gate1_check(gate1, gate1_canonical, run_commit, prov.get("simulator_commit"))]
 
     checks.append(Check("B-2", "실행 커밋 = 지정한 커밋",
                         None if run_commit is None or expected_sha is None else run_commit == expected_sha,
@@ -280,25 +414,9 @@ def _checks(meta: Mapping[str, Any] | None, invariance: Mapping[str, Any] | None
                       "rct.arm_counts 가 없다")
     checks.append(scale)
 
-    statuses = {s: _stage_status(meta, f"strategy_{s}") for s in BASELINE_STRATEGIES}
-    checks.append(Check("B-7", "S0 · S1 분기 ok",
-                        None if any(v is None for v in statuses.values()) else all(v == "ok" for v in statuses.values()),
-                        " · ".join(f"strategy_{s}={v!r}" for s, v in statuses.items())))
-
-    budget = meta.get("budget") or {}
-    c_rule, planning = _number(budget.get("c_rule_planned_krw")), _number(budget.get("planning_budget_krw"))
-    from_c_rule = str(budget.get("source") or "").startswith("C_rule")
-    checks.append(Check("B-8", "C_rule 확정(--budget-krw 가 아니라 S1 계획 비용)",
-                        None if not budget else (budget.get("status") == "ok" and c_rule is not None and from_c_rule
-                                                 and planning is not None and abs(planning - max(c_rule, 0.0)) < 1e-6),
-                        f"status={budget.get('status')!r} · c_rule_planned_krw={budget.get('c_rule_planned_krw')!r} · "
-                        f"출처 C_rule={from_c_rule}"))
-
-    result = None if invariance is None else invariance.get("result")
-    checks.append(Check("B-9", "분기 간 대조 = same(DR-234 반증 조건)",
-                        None if result not in ("same", "differs") else result == "same",
-                        "branch_invariance.json 없음" if invariance is None
-                        else f"status={invariance.get('status')!r} · result={result!r} · {invariance.get('reason') or ''}"))
+    checks.append(_baseline_check(meta, comparison))
+    checks.append(_c_rule_check(meta, comparison))
+    checks.append(_invariance_check(meta, invariance))
 
     if at_run is None:
         names = Check("B-10", "기록할 지문 = 실행 커밋의 지문 = 지금 저장소", None, "실행 커밋을 모른다")
@@ -326,11 +444,14 @@ def collect(run_dir: Path, expected: str, root: Path | None = None) -> dict[str,
     current = fingerprints(worktree_reader(root))
     gate1_text = _git(root, "show", f"{run_commit}:{GATE1_RECORD.as_posix()}") if run_commit else None
     gate1 = _load_yaml_text(gate1_text) if gate1_text else None
+    canonical = gate1_canonical_at(root, run_commit, gate1) if gate1 is not None and run_commit else None
     return {
         "run_dir": run_dir, "expected": expected, "expected_sha": expected_sha, "root": Path(root),
         "meta": meta, "comparison": comparison, "invariance": invariance, "run_commit": run_commit,
         "at_run": at_run, "current": current, "gate1": gate1, "gate1_text": gate1_text,
-        "checks": _checks(meta, invariance, gate1, run_commit, expected_sha, expected, at_run, current),
+        "gate1_canonical": canonical,
+        "checks": _checks(meta, invariance, gate1, run_commit, expected_sha, expected, at_run, current,
+                          comparison, canonical),
     }
 
 
@@ -384,8 +505,9 @@ def build_record(collected: Mapping[str, Any], *, locked_by: str | None, now: da
         },
         "gate1_lock": {
             "declaration": gate1.get("declaration"), "locked_at": gate1.get("locked_at"),
-            "locked_by": gate1.get("locked_by"),
+            "locked_by": gate1.get("locked_by"), "simulator_commit": gate1.get("simulator_commit"),
             "sha256": None if not collected["gate1_text"] else _sha256(collected["gate1_text"]),
+            "canonical_files_at_run_commit": collected.get("gate1_canonical"),
         },
         "baseline_rule": {
             "names": [r for r in rows if r["group"] == "baseline_rule"],
@@ -404,7 +526,8 @@ def build_record(collected: Mapping[str, Any], *, locked_by: str | None, now: da
         },
         "branch_invariance": {
             "status": invariance.get("status"), "result": invariance.get("result"),
-            "branches": invariance.get("branches"),
+            "complete": invariance.get("complete"), "run_id": invariance.get("run_id"),
+            "branches": invariance.get("branches"), "missing_branches": invariance.get("missing_branches"),
             "groups": {g: {"n_customers": v.get("n_customers"),
                            "n_differing": {b: x.get("n_differing_vs_reference")
                                            for b, x in (v.get("by_branch") or {}).items()}}
@@ -440,6 +563,9 @@ def record(run_dir: Path, *, expected: str, locked_by: str, now: datetime | None
             + "\n".join(f"  {c.id} ({'미충족' if c.met is False else '확인하지 못했다'}) {c.title} — {c.evidence}"
                         for c in unmet))
     payload = build_record(collected, locked_by=name, now=now or datetime.now(KST))
+    absent = [n for n, digest in payload["baseline_results"]["files"].items() if digest is None]
+    if absent:
+        raise Gate2LockViolation(f"결과 파일 해시를 낼 수 없다 {absent} — 기록하지 않는다")
     dump_yaml(root / path, payload, header=(
         "# GATE 2 Lock 기록. **사람이 손으로 쓰지 않는다** — src/orchestration/gate2_lock.record() 가 쓴다.\n"
         "# 손으로 고치면 verify 가 mismatch 를 낸다. 해제 절차는 release_procedure(DR-170-gate2-lock)."))
@@ -467,12 +593,14 @@ def verify(root: Path | None = None, path: Path = LOCK_RECORD) -> dict[str, Any]
         rows.append({"file": row["file"], "name": row["name"], "state": "match" if same else "mismatch",
                      "recorded": row.get("sha256"), "current": now.get("sha256"), "reason": now.get("reason")})
     recorded_keys = {(r["file"], r["name"]) for r in recorded}
+    absent = sorted(n for (f, n) in current if (f, n) not in recorded_keys)
+    # 필수 이름이 기록에 없으면 대조하지 않은 것이다 — match 로 내지 않는다(PR #327 리뷰).
     return {
-        "status": "match" if rows and all(r["state"] == "match" for r in rows) else "mismatch",
+        "status": "match" if rows and not absent and all(r["state"] == "match" for r in rows) else "mismatch",
         "locked_at": loaded.get("locked_at"), "locked_by": loaded.get("locked_by"),
         "run_commit": (loaded.get("run") or {}).get("repo_commit"),
         "names": rows, "mismatched": [r["name"] for r in rows if r["state"] != "match"],
-        "not_in_record": sorted(n for (f, n) in current if (f, n) not in recorded_keys),
+        "not_in_record": absent,
     }
 
 

@@ -8,6 +8,9 @@
 from __future__ import annotations
 
 import ast
+import contextlib
+import hashlib
+import io
 import json
 import math
 import shutil
@@ -17,7 +20,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Mapping
+from unittest import mock
 
+from src.orchestration import branch_invariance as bi
 from src.orchestration import gate2_lock as g
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -156,6 +161,18 @@ class LockedNameTests(unittest.TestCase):
         data = json.loads((REPO_ROOT / "docs" / "team_boundaries.json").read_text(encoding="utf-8"))
         self.assertIn(g.LOCK_RECORD.as_posix(), data["lead_only"]["paths"])
 
+    def test_run_uses_the_locked_planned_cost_function(self) -> None:
+        """C_rule 합산식이 지문 밖 run() 본문에 남지 않는다 — 잠근 함수를 부른다."""
+        rs = _run_sprint_parts("assignment_planned_cost")
+        self.assertEqual(7_030.0 * 2 + 500.0, rs["assignment_planned_cost"]({"T3": 2, "T1": 1, "T9": 4},
+                                                                           {"T3": 7_030.0, "T1": 500.0}))
+        tree = ast.parse(RUN_SPRINT.read_text(encoding="utf-8"))
+        run = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == "run")
+        calls = [ast.unparse(n) for n in ast.walk(run) if isinstance(n, ast.Call)]
+        self.assertIn("assignment_planned_cost(counts, costs)", calls)
+        self.assertNotIn("costs.get(t, 0) * n", ast.unparse(run))
+        self.assertIn("assignment_planned_cost", {item.name for item in g.LOCKED_NAMES if item.group == "budget_cap"})
+
     def test_c_rule_source_marker_matches_resolve_budget(self) -> None:
         """B-8 은 ``budget.source`` 가 'C_rule' 로 시작하는지로 명시 예산과 가른다 — 두 모듈의 계약."""
         rs = _run_sprint_parts("C_RULE_DEFINITION", "resolve_budget")
@@ -181,7 +198,16 @@ def _git(root: Path, *args: str) -> str:
     return done.stdout.strip()
 
 
-GATE1_FULL_TEXT = "declaration: FULL_FREEZE\nlocked_at: '2026-11-26T10:00:00.000+09:00'\nlocked_by: tester\n"
+SIMULATOR_COMMIT = "f" * 40
+ECONOMIC_TEXT = "cost_accounting:\n  message_cost_krw: 30\n"
+
+
+def gate1_text(declaration: str = "FULL_FREEZE", simulator_commit: str | None = SIMULATOR_COMMIT) -> str:
+    """합성 GATE 1 기록 — 정본 하나(경제 설정 자리)의 해시와 simulator_commit 을 담는다."""
+    digest = hashlib.sha256(ECONOMIC_TEXT.encode("utf-8")).hexdigest()
+    sim = "null" if simulator_commit is None else simulator_commit
+    return (f"declaration: {declaration}\nlocked_at: '2026-11-26T10:00:00.000+09:00'\nlocked_by: tester\n"
+            f"simulator_commit: {sim}\ncanonical_files:\n  config/economic_config.yaml: {digest}\n")
 
 
 @unittest.skipUnless(HAVE_GIT and HAVE_YAML, "git 또는 PyYAML 없음")
@@ -196,7 +222,8 @@ class RecordTests(unittest.TestCase):
             (self.root / target).parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source, self.root / target)
         (self.root / "config").mkdir()
-        (self.root / "config" / "gate1_lock.yaml").write_text(GATE1_FULL_TEXT, encoding="utf-8")
+        (self.root / "config" / "gate1_lock.yaml").write_text(gate1_text(), encoding="utf-8")
+        (self.root / "config" / "economic_config.yaml").write_text(ECONOMIC_TEXT, encoding="utf-8")
         _git(self.root, "init", "-q")
         _git(self.root, "add", ".")
         _git(self.root, "commit", "-q", "-m", "base")
@@ -208,13 +235,16 @@ class RecordTests(unittest.TestCase):
 
     def write_run(self, *, arms: Mapping[str, int] | None = None, provenance: Mapping[str, Any] | None = None,
                   s1_status: str = "ok", budget: Mapping[str, Any] | None = None,
-                  invariance: str | None = "same") -> None:
+                  invariance: str | None = "same", comparison_run_id: str = "gate2-test",
+                  invariance_extra: Mapping[str, Any] | None = None, with_comparison: bool = True,
+                  s1_detail: Mapping[str, Any] | None = None) -> None:
         meta = {
             "run_id": "gate2-test", "num_customers": 50_000, "profile": "reference",
             "versions": {"customer_seed": 42},
             "timeline": {"t2": "2026-03-01T00:00:00+09:00", "end": "2026-04-12T00:00:00+09:00"},
             "provenance": {"repo_commit": self.commit, "repo_worktree_dirty": False, "require_clean": True,
-                           "repo_changed_during_run": False, "simulator_commit": "f" * 40, **(provenance or {})},
+                           "repo_changed_during_run": False, "simulator_commit": SIMULATOR_COMMIT,
+                           **(provenance or {})},
             "rct": {"arm_counts": dict(arms or {"T0": 12_000, "T1": 3_000, "T2": 3_000, "T3": 3_000, "T4": 3_000})},
             "stages": [{"name": "strategy_S0", "status": "ok"}, {"name": "strategy_S1", "status": "failed"},
                        {"name": "strategy_S1", "status": s1_status}],
@@ -223,25 +253,32 @@ class RecordTests(unittest.TestCase):
                                       "source": "C_rule = S1(상한 없음) 배정의 계획 비용 합"}),
             "planning_costs_krw": {"T0": 0.0, "T3": 7_030.0},
         }
-        comparison = {"strategy_details": {
+        comparison = {"run_id": comparison_run_id, "strategy_details": {
             "S0": {"n_assigned": 0, "n_targeted": 0, "treatment_counts": {}, "planned_cost_krw": 0.0},
             "S1": {"n_assigned": 4_100, "n_targeted": 4_100, "treatment_counts": {"T3": 4_100},
                    "planned_cost_krw": 28_823_000.0,
                    "measured_economics": {"status": "ok", "metrics": {
                        "revenue": {"status": "ok", "value": 1_000.0},
-                       "contribution_profit": {"status": "not_computable", "value": None}}}},
+                       "contribution_profit": {"status": "not_computable", "value": None}}},
+                   **(s1_detail or {})},
         }}
         (self.run_dir / "run_meta.json").write_text(json.dumps(meta), encoding="utf-8")
-        (self.run_dir / "strategy_comparison.json").write_text(json.dumps(comparison), encoding="utf-8")
+        target_comparison = self.run_dir / "strategy_comparison.json"
+        if with_comparison:
+            target_comparison.write_text(json.dumps(comparison), encoding="utf-8")
+        else:
+            target_comparison.unlink(missing_ok=True)
         target = self.run_dir / "branch_invariance.json"
         if invariance is None:
             target.unlink(missing_ok=True)
         else:
-            target.write_text(json.dumps({"status": "ok", "result": invariance, "branches": ["S0", "S1"],
-                                          "groups": {"non_eligible": {"n_customers": 10, "by_branch": {
-                                              "S0": {"n_differing_vs_reference": 0},
-                                              "S1": {"n_differing_vs_reference": 0 if invariance == "same" else 1}}}}}),
-                              encoding="utf-8")
+            target.write_text(json.dumps({
+                "status": "ok", "result": invariance, "complete": True, "run_id": "gate2-test",
+                "branches": list(bi.REQUIRED_BRANCHES), "missing_branches": {},
+                "groups": {"non_eligible": {"n_customers": 10, "by_branch": {
+                    "S0": {"n_differing_vs_reference": 0},
+                    "S1": {"n_differing_vs_reference": 0 if invariance == "same" else 1}}}},
+                **(invariance_extra or {})}), encoding="utf-8")
 
     def unmet(self) -> dict[str, bool | None]:
         return {c.id: c.met for c in g.collect(self.run_dir, self.commit, self.root)["checks"] if c.met is not True}
@@ -292,13 +329,35 @@ class RecordTests(unittest.TestCase):
             self.record()
         self.assertFalse((self.root / g.LOCK_RECORD).exists())
 
-    def test_b1_partial_gate1_is_refused(self) -> None:
-        (self.root / "config" / "gate1_lock.yaml").write_text(
-            GATE1_FULL_TEXT.replace("FULL_FREEZE", "PARTIAL_FREEZE"), encoding="utf-8")
-        _git(self.root, "commit", "-q", "-am", "partial")
+    def _commit(self, message: str) -> None:
+        _git(self.root, "commit", "-q", "-am", message)
         self.commit = _git(self.root, "rev-parse", "HEAD")
         self.write_run()
+
+    def test_b1_partial_gate1_is_refused(self) -> None:
+        (self.root / "config" / "gate1_lock.yaml").write_text(gate1_text("PARTIAL_FREEZE"), encoding="utf-8")
+        self._commit("partial")
         self._refused("B-1", False)
+
+    def test_b1_simulator_commit_must_be_the_sealed_one(self) -> None:
+        """#213 — Baseline 이 GATE 1 봉인 환경(simulator_commit)에서 나왔는가."""
+        self.write_run(provenance={"simulator_commit": "e" * 40})
+        self._refused("B-1", False)
+        self.write_run(provenance={"simulator_commit": None})
+        self._refused("B-1", False)
+
+    def test_b1_gate1_record_without_simulator_commit(self) -> None:
+        (self.root / "config" / "gate1_lock.yaml").write_text(gate1_text(simulator_commit=None), encoding="utf-8")
+        self._commit("no simulator commit")
+        self._refused("B-1", False)
+
+    def test_b1_canonical_file_changed_after_the_gate1_record(self) -> None:
+        """PR #327 리뷰 반례 — GATE 1 기록은 두고 기록에 든 경제 설정만 바꾼 커밋에서 실행하면 B-1 이 통과했다."""
+        (self.root / "config" / "economic_config.yaml").write_text(ECONOMIC_TEXT.replace("30", "40"), encoding="utf-8")
+        self._commit("economic change")
+        self._refused("B-1", False)
+        evidence = next(c.evidence for c in g.collect(self.run_dir, self.commit, self.root)["checks"] if c.id == "B-1")
+        self.assertIn("config/economic_config.yaml", evidence)
 
     def test_b2_other_commit_is_refused(self) -> None:
         (self.root / "README.md").write_text("x\n", encoding="utf-8")
@@ -324,9 +383,30 @@ class RecordTests(unittest.TestCase):
         self.write_run(s1_status="not_run")
         self._refused("B-7", False)
 
+    def test_b7_missing_result_file_fails_check_command(self) -> None:
+        """PR #327 리뷰 반례 — strategy_comparison.json 이 없어도 check 가 0 을 냈다."""
+        out = io.StringIO()
+        with mock.patch.object(g, "REPO_ROOT", self.root), contextlib.redirect_stdout(out):
+            self.assertEqual(0, g.main(["check", str(self.run_dir), "--expected-commit", self.commit]))
+        self.write_run(with_comparison=False)
+        self._refused("B-7", False)
+        with mock.patch.object(g, "REPO_ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(1, g.main(["check", str(self.run_dir), "--expected-commit", self.commit]))
+
+    def test_b7_result_file_from_another_run(self) -> None:
+        self.write_run(comparison_run_id="SP-other")
+        self._refused("B-7", False)
+
     def test_b8_explicit_budget_is_not_c_rule(self) -> None:
         self.write_run(budget={"status": "ok", "c_rule_planned_krw": None, "planning_budget_krw": 5_000.0,
                                "source": "--budget-krw 인자 — 탐색용"})
+        self._refused("B-8", False)
+
+    def test_b8_s1_cost_in_the_result_file_must_equal_c_rule(self) -> None:
+        """PR #327 리뷰 반례 — 결과 파일의 S1 계획 비용만 바꿔도 B-8 이 통과했다."""
+        self.write_run(s1_detail={"planned_cost_krw": 28_823_001.0})
+        self._refused("B-8", False)
+        self.write_run(s1_detail={"treatment_counts": {"T3": 4_101}})      # 배정 수 × 단가가 C_rule 과 다르다
         self._refused("B-8", False)
 
     def test_b9_missing_or_differing_invariance(self) -> None:
@@ -335,11 +415,45 @@ class RecordTests(unittest.TestCase):
         self.write_run(invariance="differs")
         self._refused("B-9", False)
 
+    def test_b9_requires_every_branch_and_the_same_run(self) -> None:
+        """PR #327 리뷰 반례 — 분기 원본이 빠지면 있는 분기만으로 same 이 됐다."""
+        self.write_run(invariance_extra={"status": "incomplete", "result": None, "complete": False,
+                                         "missing_branches": {"S2": "분기 원본이 없다"}})
+        self._refused("B-9", False)
+        self.write_run(invariance_extra={"branches": ["S0", "S1", "S3", "S4", "S5"]})
+        self._refused("B-9", False)
+        self.write_run(invariance_extra={"run_id": "SP-other"})
+        self._refused("B-9", False)
+
     def test_b10_worktree_differs_from_the_run_commit(self) -> None:
         path = self.root / "src" / "orchestration" / "run_sprint.py"
         path.write_text(path.read_text(encoding="utf-8").replace("ELIGIBLE_MIN_TENURE_DAYS = 60",
                                                                   "ELIGIBLE_MIN_TENURE_DAYS = 30"), encoding="utf-8")
         self._refused("B-10", False)
+
+    def test_planned_cost_summation_is_locked(self) -> None:
+        """PR #327 리뷰 반례 — run() 안 합산식만 바꿔 C_rule 이 달라져도 verify 가 match 였다."""
+        self.record()
+        path = self.root / "src" / "orchestration" / "run_sprint.py"
+        text = path.read_text(encoding="utf-8")
+        old = "return sum(costs.get(t, 0) * n for t, n in counts.items())"
+        self.assertEqual(1, text.count(old))
+        path.write_text(text.replace(old, "return sum(costs.get(t, 0) * n for t, n in counts.items()) + 10_000"),
+                        encoding="utf-8")
+        result = g.verify(self.root)
+        self.assertEqual(("mismatch", ["assignment_planned_cost"]), (result["status"], result["mismatched"]))
+
+    def test_verify_record_missing_a_required_name_is_mismatch(self) -> None:
+        from src.measurement.config_loader import dump_yaml, load_yaml
+
+        self.record()
+        target = self.root / g.LOCK_RECORD
+        loaded = dict(load_yaml(target))
+        loaded["budget_cap"] = {**loaded["budget_cap"],
+                                "names": [r for r in loaded["budget_cap"]["names"] if r["name"] != "resolve_budget"]}
+        dump_yaml(target, loaded)
+        result = g.verify(self.root)
+        self.assertEqual(("mismatch", ["resolve_budget"]), (result["status"], result["not_in_record"]))
 
     def test_check_command_does_not_write(self) -> None:
         collected = g.collect(self.run_dir, self.commit, self.root)

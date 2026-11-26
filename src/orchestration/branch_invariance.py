@@ -7,8 +7,10 @@
 - (가) ``non_eligible`` — 분기 창 이벤트가 있는 고객 중 Eligible(t2)(명부의 t2 행) 밖.
 - (나) ``untreated_eligible`` — Eligible(t2) 중 어느 분기에서도 처치 대상이 아닌 고객.
 
-모든 분기 · 모든 고객이 같으면 ``same``, 하나라도 다르면 ``differs``(그때 DR-234 P3 기각을 다시 본다). 명부 · 배정 파일 ·
-분기 원본 중 하나라도 없으면 ``not_run`` — 다른 값으로 근사하지 않는다. 결과에는 고객 ID 를 넣지 않는다(수와 합계만).
+모든 분기 · 모든 고객이 같으면 ``same``, 하나라도 다르면 ``differs``(그때 DR-234 P3 기각을 다시 본다). 명부가 없으면
+``not_run``. **봉인 대상 분기(``REQUIRED_BRANCHES`` = 실행 루프의 S0~S5) 중 하나라도** 배정 파일 · 원본이 없거나 그 분기 단계가
+``ok`` 가 아니면 ``incomplete`` 와 빠진 분기 · 사유다 — 있는 분기만으로 ``same`` 을 내지 않는다(PR #327 리뷰, DR-170-gate2-lock G5).
+다른 값으로 근사하지 않는다. 결과에는 고객 ID 를 넣지 않는다(수와 합계만).
 
     python -m src.orchestration.branch_invariance <결과 폴더> [--out 경로]
 """
@@ -27,6 +29,8 @@ from typing import Any, Iterable, Mapping, Sequence
 
 KST = timezone(timedelta(hours=9), "KST")
 REFERENCE_BRANCH = "S0"
+#: 대조해야 하는 분기 — ``run_sprint.STRATEGIES`` 와 같다(시험이 AST 로 대조한다). S6 은 분기를 만들지 않는다(실측은 #305).
+REQUIRED_BRANCHES: tuple[str, ...] = ("S0", "S1", "S2", "S3", "S4", "S5")
 RESULT_FILE = "branch_invariance.json"
 #: ``run_sprint.ROSTER_FILE`` 과 같은 이름(시험이 대조한다) — 무거운 실행 루프를 import 하지 않는다.
 ROSTER_FILE = "split_roster.csv"
@@ -40,6 +44,14 @@ DEFINITION = (
 
 class NotRun(Exception):
     """대조에 필요한 입력이 없다."""
+
+
+class Incomplete(Exception):
+    """봉인 대상 분기 중 대조할 수 없는 분기가 있다 — ``missing`` = {분기: 사유}."""
+
+    def __init__(self, missing: Mapping[str, str]) -> None:
+        super().__init__("; ".join(f"{b}: {r}" for b, r in missing.items()))
+        self.missing = dict(missing)
 
 
 def _when(value: Any) -> datetime:
@@ -117,19 +129,41 @@ def _inputs(run_dir: Path) -> dict[str, Any]:
         raise NotRun("run_meta.timeline 에 t2 · end 가 없다 — 분기 창을 알 수 없다")
     raw_roots = meta.get("raw_roots") or {}
     strategy_files = (meta.get("assignment_files") or {}).get("strategies") or {}
-    branches = [s for s in sorted(strategy_files) if s in raw_roots and Path(str(raw_roots[s])).exists()]
-    if REFERENCE_BRANCH not in branches:
-        raise NotRun(f"기준 분기 {REFERENCE_BRANCH} 의 배정 파일 또는 원본이 없다")
-    if len(branches) < 2:
-        raise NotRun("대조할 분기가 둘 이상 없다")
+    statuses = branch_stage_statuses(meta)
+    missing: dict[str, str] = {}
+    for branch in REQUIRED_BRANCHES:
+        reasons = []
+        if statuses.get(branch) != "ok":
+            reasons.append(f"단계 strategy_{branch} = {statuses.get(branch)!r}(ok 아님)")
+        if branch not in strategy_files:
+            reasons.append("run_meta 에 배정 파일 경로가 없다")
+        elif not Path(str(strategy_files[branch])).exists():
+            reasons.append("배정 파일이 없다")
+        if branch not in raw_roots:
+            reasons.append("run_meta 에 원본 경로가 없다")
+        elif not Path(str(raw_roots[branch])).exists():
+            reasons.append("분기 원본이 없다")
+        if reasons:
+            missing[branch] = " · ".join(reasons)
     roster_name = (meta.get("split_roster") or {}).get("file") or ROSTER_FILE
     return {
-        "start": _when(timeline["t2"]), "end": _when(timeline["end"]), "branches": branches,
-        "raw_roots": {s: Path(str(raw_roots[s])) for s in branches},
-        "assignments": {s: Path(str(strategy_files[s])) for s in branches},
+        "run_id": meta.get("run_id"), "start": _when(timeline["t2"]), "end": _when(timeline["end"]),
+        "branches": list(REQUIRED_BRANCHES), "missing": missing,
+        "raw_roots": {s: Path(str(raw_roots[s])) for s in REQUIRED_BRANCHES if s not in missing},
+        "assignments": {s: Path(str(strategy_files[s])) for s in REQUIRED_BRANCHES if s not in missing},
         "roster": run_dir / str(roster_name),
-        "skipped_branches": sorted(set(strategy_files) - set(branches)),
+        "extra_branches": sorted(set(strategy_files) - set(REQUIRED_BRANCHES)),
     }
+
+
+def branch_stage_statuses(meta: Mapping[str, Any]) -> dict[str, Any]:
+    """``run_meta.stages`` 의 분기 단계(``strategy_<S>``) 마지막 상태. 기록이 없는 분기는 빠진다."""
+    out: dict[str, Any] = {}
+    for stage in meta.get("stages") or []:
+        name = stage.get("name") if isinstance(stage, Mapping) else None
+        if isinstance(name, str) and name.startswith("strategy_"):
+            out[name[len("strategy_"):]] = stage.get("status")
+    return out
 
 
 def compare(signatures: Mapping[str, Mapping[str, tuple]], groups: Mapping[str, Sequence[str]],
@@ -161,18 +195,24 @@ def branch_invariance(run_dir: Path) -> dict[str, Any]:
     """결과 폴더 하나의 분기 간 대조. 입력이 없으면 ``status: not_run`` 과 사유."""
     from src.measurement import sink
 
-    record: dict[str, Any] = {"status": "not_run", "result": None, "reference": REFERENCE_BRANCH,
+    record: dict[str, Any] = {"status": "not_run", "result": None, "complete": False, "run_id": None,
+                              "reference": REFERENCE_BRANCH, "required_branches": list(REQUIRED_BRANCHES),
                               "definition": DEFINITION, "source": "DR-234 반증 조건 · DR-170-gate2-lock G5"}
     try:
         inputs = _inputs(Path(run_dir))
+        record["run_id"] = inputs["run_id"]
         eligible = eligible_t2(inputs["roster"])
+        if inputs["missing"]:
+            raise Incomplete(inputs["missing"])
         treated: set[str] = set()
-        for branch, path in inputs["assignments"].items():
-            if not path.exists():
-                raise NotRun(f"{branch} 배정 파일이 없다")
+        for path in inputs["assignments"].values():
             treated |= {str(c) for c in (_read_json(path).get("assignments") or {})}
     except NotRun as reason:
         return {**record, "reason": str(reason)}
+    except Incomplete as gap:
+        return {**record, "status": "incomplete", "complete": False, "branches": list(REQUIRED_BRANCHES),
+                "missing_branches": gap.missing,
+                "reason": f"봉인 대상 분기 {len(gap.missing)}개를 대조할 수 없다 — 있는 분기만으로 판정하지 않는다"}
     signatures: dict[str, dict[str, tuple]] = {}
     window_stats: dict[str, dict[str, int]] = {}
     for branch in inputs["branches"]:
@@ -182,9 +222,9 @@ def branch_invariance(run_dir: Path) -> dict[str, Any]:
     groups = {"non_eligible": sorted(seen - eligible), "untreated_eligible": sorted(eligible - treated)}
     compared = compare(signatures, groups)
     return {
-        **record, "status": "ok", "reason": None, **compared,
+        **record, "status": "ok", "reason": None, **compared, "complete": True,
         "window": {"start": inputs["start"].isoformat(), "end": inputs["end"].isoformat()},
-        "branches": inputs["branches"], "skipped_branches": inputs["skipped_branches"],
+        "branches": inputs["branches"], "missing_branches": {}, "extra_branches": inputs["extra_branches"],
         "n_eligible_t2": len(eligible), "n_treated_any_branch": len(treated & eligible),
         "n_treated_outside_eligible": len(treated - eligible),
         "events_by_branch": window_stats,
@@ -200,7 +240,9 @@ def main(argv: list[str] | None = None) -> int:
     out = args.out or args.run_dir / RESULT_FILE
     out.write_text(json.dumps(result, ensure_ascii=False, indent=1) + "\n", encoding="utf-8")
     if result["status"] != "ok":
-        print(f"not_run — {result['reason']}")
+        print(f"{result['status']} — {result['reason']}")
+        for branch, why in (result.get("missing_branches") or {}).items():
+            print(f"  {branch}: {why}")
         return 2
     lines = [f"{result['result']} — 기준 {REFERENCE_BRANCH}, 분기 {', '.join(result['branches'])}"]
     for group in GROUPS:
