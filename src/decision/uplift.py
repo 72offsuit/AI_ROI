@@ -503,8 +503,12 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
                            churn_p: pd.Series | None = None, test_size: float = 0.3,
                            methods: tuple[str, ...] = METHODS,
                            primary_arm: str | None = None, *,
-                           risk_model_factory: Callable[[], object] | None = None) -> dict[str, Any]:
+                           risk_model_factory: Callable[[], object] | None = None,
+                           keep_predictions: bool = False) -> dict[str, Any]:
     """train/test 분할 → 메타러너 학습 → test 에서 Qini·AUUC·uplift@k 비교.
+
+    #219 2부 — ``keep_predictions`` 면 test 분할의 메타러너별 CATE · 처치 · 결과를 ``_test`` 에 담는다(십분위표 · 4분면 검증
+    입력, DR-219-segments). JSON 이 아니다 — 호출자가 결과 파일에 싣기 전에 떼어 낸다.
 
     Baseline 정책:
       * ``random`` — 무작위 타깃팅의 **해석적 기대값**(Qini 0, AUUC = ATE/2, uplift@k = 전체 차).
@@ -597,7 +601,10 @@ def evaluate_uplift_models(X: pd.DataFrame, treatment: pd.Series, y: pd.Series, 
         sel_n = int(t_te.isin([CONTROL, a]).sum())
         by_arm[a] = {"n_test": sel_n,
                      "models": [{k: v for k, v in r.items() if k != "qini_curve"} for r in rows_for(a, False)]}
+    kept = ({"_test": {"treatment": t_te.copy(), "y": y_te.copy(), "cate": {m: cates[m] for m in methods},
+                       "primary_arm": primary_arm, "best_method": best_m}} if keep_predictions else {})
     return {
+        **kept,
         "best_method": selection["best_method"],
         "best_method_selection": selection,
         "base_learner": chosen,

@@ -77,8 +77,7 @@ class TestNewSegment(unittest.TestCase):
         self.assertEqual(base[tier == "EXISTING"].value_counts().to_dict(), shift["existing"])
         self.assertEqual((int((tier == "NEW").sum()), int((tier == "EXISTING").sum()), int((tier == "UNKNOWN").sum())),
                          (shift["n_new"], shift["n_existing"], shift["n_signup_unknown"]))
-        self.assertEqual(["H-SEG-1", "H-SEG-2"], [h["id"] for h in shift["hypotheses"]])
-        self.assertEqual("not_evaluated", shift["hypotheses"][1]["result"])   # 2부에서 평가
+        self.assertEqual(["H-SEG-1"], [h["id"] for h in shift["hypotheses"]])  # H-SEG-2 는 test 분할(uplift_report)
 
     def test_h_seg_1_rule(self) -> None:
         from src.decision import ab_test
@@ -137,6 +136,7 @@ class TestNewSegment(unittest.TestCase):
         self.assertEqual(cate.loc[cid].astype(float).idxmax(), row.loc[cid, "uplift_arm"])
         self.assertTrue(row.loc[churn.index[:5], "priority_score"].isna().all())   # CLV 결손 → 비움(0 아님)
         self.assertEqual(seg.map(sg.SEGMENT_PRD_ID)[cid], row.loc[cid, "segment_prd_id"])
+        self.assertTrue(table["expected_net_value_krw"].isna().all())   # margin_rate · 비용이 없으면 확장 열은 비운다
 
 
 @unittest.skipUnless(DEPS, REASON)
@@ -147,7 +147,7 @@ class TestRunSprintSegments(unittest.TestCase):
         from tests.test_feature_split_roster import _run_sprint_parts
 
         parts = _run_sprint_parts("DECISION_API", "NotRun", "decision_fn", "_pd", "new_customer_flags",
-                                  "segments_with_new", "SEGMENTS_FILE", "segments_file")
+                                  "segments_with_new", "segment_hypotheses", "SEGMENTS_FILE", "segments_file")
         parts.update(inspect=inspect, Path=Path)
         return parts
 
@@ -180,6 +180,9 @@ class TestRunSprintSegments(unittest.TestCase):
         self.assertEqual(("ok", "ok", "ok"), (record["new_input"]["status"], record["quadrants"]["status"],
                                               record["new_segment"]["status"]))
         self.assertIs(ctx["segments_t2"], seg)
+        self.assertEqual(["H-SEG-1", "H-SEG-2"], [h["id"] for h in record["hypotheses"]])
+        self.assertEqual("undetermined", record["hypotheses"][1]["result"])   # Uplift test 분할 보고가 없는 ctx
+        self.assertEqual("not_run", record["persuadables_profile"]["status"])  # t2 Feature 표가 없는 ctx
         with tempfile.TemporaryDirectory() as tmp:
             extra: dict = {}
             out = parts["segments_file"](Path(tmp) / "artifacts" / "segments_6plus.csv", ctx, extra)
@@ -231,11 +234,12 @@ class TestCliSegmentLines(unittest.TestCase):
 
         segments = {"segments": [{"name": "HV_PERSUADABLE", "n": 10}, {"name": "NEW", "n": 4}],
                     "new_input": {"status": "ok"},
-                    "new_segment": {"hypotheses": [{"id": "H-SEG-1", "result": "supported"},
-                                                   {"id": "H-SEG-2", "result": "not_evaluated"}]}}
+                    "hypotheses": [{"id": "H-SEG-1", "result": "supported"}, {"id": "H-SEG-2", "result": "undetermined"}]}
         self.assertEqual(["  segments   HV_PERSUADABLE 10 · NEW 4",
-                          "             가설(결과 전 등록, DR-219-segments) H-SEG-1 지지 · H-SEG-2 평가 전(2부)"],
+                          "             가설(결과 전 등록, DR-219-segments) H-SEG-1 지지 · H-SEG-2 판정 불가"],
                          cli.segment_lines(segments))
+        old_result = {"segments": [], "new_segment": {"hypotheses": [{"id": "H-SEG-1", "result": "not_supported"}]}}
+        self.assertIn("H-SEG-1 지지되지 않음", cli.segment_lines(old_result)[1])   # 1부 결과 파일도 읽는다
         lines = cli.segment_lines({"segments": [], "new_input": {"status": "not_run", "reason": "명부가 없다"}})
         self.assertEqual(["  segments   —", "             ! NEW 판정 안 함 — 명부가 없다"], lines)
 
