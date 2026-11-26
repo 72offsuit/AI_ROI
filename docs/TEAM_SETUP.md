@@ -68,7 +68,7 @@ src/diagnostics/    ⬜ 비어 있음 — 시뮬 팀 (두 GATE 이후)
 | | `docs/decisions/DR-196-sleeping-dog-path` · `DR-208-gate1-acceptance-criteria` · `DR-282-t3-recalibration` · `DR-163-gate1-churn-discount-criteria` |
 | | `docs/decisions/DR-S1-*.md` · `DR-S3-p6-signup` · `DR-143-sim-sprint` · `DR-194-population` · `DR-198-aux-events` |
 | | `docs/research/sim_mechanism_evidence.md` · `docs/research/realism_report.*` (+ 대시보드 시험 사본 `dashboard/fixtures/sprint-v0/realism_report.json`) |
-| | `docs/simulator_generation.md` (data_spec §3 · §4.3 · data_grounding §2 의 생성 규칙을 옮긴 곳, 2026-11-23) |
+| | `docs/simulator_generation.md` (data_spec §3 · data_grounding §2 의 생성 규칙을 옮길 곳) |
 
 > **예외 하나 — S8 채점 입력 (#224 · DR-S8 결정 3, 2026-11-09).** 시뮬 팀의 `results/**` 금지는 S8 채점 입력(고객별 τ̂ `cate.jsonl` · 분기 목록)에 한해 **GATE 4 결과 커밋 뒤에만, S8 CLI 로만** 풀린다. 사람이 파일을 직접 열지 않고, 리포트에는 집계값만 싣는다(DR-S8 V4). 기계가독 판본은 `docs/team_boundaries.json` 의 `teams.sim.must_not_read_exceptions` 다.
 
