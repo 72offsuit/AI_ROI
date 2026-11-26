@@ -623,8 +623,14 @@ def segment_lines(segments: Mapping[str, Any]) -> list[str]:
     counts = " · ".join(f"{r.get('name')} {r.get('n')}" for r in rows)
     lines = [f"  segments   {counts or '—'}"]
     new_input = segments.get("new_input") or {}
+    if "n_scored" in new_input:  # #326 리뷰 — NEW 판정 범위 · 출처를 숨기지 않는다
+        lines.append(f"             NEW 판정 범위 — 점수 고객 {new_input['n_scored']}명(명부 {new_input.get('n_in_roster')}명 · "
+                     f"명부 밖 {new_input.get('n_outside_roster')}명 중 판정 {new_input.get('n_outside_roster_judged')}명), "
+                     f"NEW {new_input.get('n_new_in_roster')} + {new_input.get('n_new_outside_roster')}명, 가입일 모름 "
+                     f"{new_input.get('n_unknown_in_roster')} + {new_input.get('n_unknown_outside_roster')}명")
     if new_input.get("status") not in (None, "ok"):
-        lines.append(f"             ! NEW 판정 안 함 — {new_input.get('reason')}")
+        state = "일부만 판정" if new_input.get("status") == "partial" else "판정 안 함"
+        lines.append(f"             ! NEW {state} — {new_input.get('reason')}")
     results = {"supported": "지지", "not_supported": "지지되지 않음", "undetermined": "판정 불가",
                "not_evaluated": "평가 전", "partially_supported": "부분 지지"}
     kinds = {"insufficient_evidence": "근거 부족", "contradicted": "반증"}   # #219 2부 리뷰 — 지지되지 않음의 두 뜻

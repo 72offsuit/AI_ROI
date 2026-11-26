@@ -171,6 +171,7 @@ DECISION_API: dict[str, tuple[str, str]] = {
     # #219 — NEW 연결(DR-221 가입 시기) · 4분면 분포 · 쏠림 기록 · SEG-005 표(DR-219-segments)
     "uplift_score": ("src.decision.segments", "uplift_score"),
     "is_new_from_signup_tier": ("src.decision.segments", "is_new_from_signup_tier"),
+    "signup_tiers": ("src.decision.observed_tiers", "signup_tiers"),
     "quadrant_summary": ("src.decision.segments", "quadrant_summary"),
     "new_segment_shift": ("src.decision.segments", "new_segment_shift"),
     "segment_table": ("src.decision.segments", "segment_table"),
@@ -1402,22 +1403,57 @@ def dashboard_ab(result: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def new_customer_flags(ctx: Mapping[str, Any]) -> tuple[Any, Any, dict[str, Any]]:
-    """#219 — AI 세그먼트 NEW 의 입력: #218 명부 t2 행의 가입 시기 등급(DR-221). 다시 계산하지 않는다.
+def new_customer_flags(ctx: Mapping[str, Any], scored: Any = None) -> tuple[Any, Any, dict[str, Any], Any]:
+    """#219 — AI 세그먼트 NEW 의 입력: 가입 시기 등급(DR-221 — 가입 180일 미만 = NEW). 범위 = t2 점수 고객 전원.
 
-    반환 (NEW 여부 · 가입 시기 등급 · 기록). 명부가 없으면 NEW 를 판정하지 않는다 — 다른 기준으로 메우지 않는다.
+    - 명부(#218) t2 행(Eligible(t2))은 명부의 ``signup_tier`` 를 읽는다 — 다시 계산하지 않는다.
+    - 명부 밖 점수 고객(가입 60일 미만 · 구매 조건 미충족 등, #326 리뷰)은 같은 정의의 같은 함수
+      ``observed_tiers.signup_tiers`` 로 t2 가입일 명부(``ctx["signups_t2"]`` — Eligible(t2) 판정과 같은 출처)에서 정한다.
+    - 가입일 명부가 없으면 명부 밖 고객은 NEW 를 판정하지 않고(``status = partial``) 그 수를 남긴다 — 다른 기준으로 메우지 않는다.
+
+    반환 (NEW 여부 · 가입 시기 등급 · 기록 · 등급 출처). 출처는 ``roster`` · ``signups_t2`` · 결손(판정 안 함).
     """
+    pd = _pd()
     roster = ctx.get("split_roster")
-    if roster is None or not len(roster):
-        return None, None, {"status": "not_run",
-                            "reason": "명부가 없다 — 가입 시기 등급을 읽을 곳이 없어 NEW 를 판정하지 않았다(run_meta.split_roster)"}
-    rows = roster[roster["origin"] == "t2"]
-    if not len(rows):
-        return None, None, {"status": "not_run", "reason": "명부에 t2 행이 없다 — NEW 를 판정하지 않았다"}
-    signup = rows.set_index(rows["customer_id"].map(str))["signup_tier"]
+    rows = roster[roster["origin"] == "t2"] if roster is not None and len(roster) else None
+    from_roster = (rows.set_index(rows["customer_id"].map(str))["signup_tier"]
+                   if rows is not None and len(rows) else pd.Series(dtype=object))
+    ids = pd.Index([str(c) for c in (scored if scored is not None else from_roster.index)])
+    outside = ids[~ids.isin(from_roster.index)]
+    signups = ctx.get("signups_t2")
+    if not len(from_roster) and (signups is None or not len(outside)):
+        reason = ("명부가 없다 — " if roster is None or not len(roster) else "명부에 t2 행이 없다 — ")
+        return None, None, {"status": "not_run", "reason": reason + "t2 가입일 명부도 없어 NEW 를 판정하지 않았다"}, None
+    parts, sources = [from_roster], [pd.Series("roster", index=from_roster.index, dtype=object)]
+    if len(outside) and signups is not None:
+        computed = decision_fn("signup_tiers")(signups, ctx["t2"], outside)
+        parts.append(computed)
+        sources.append(pd.Series("signups_t2", index=computed.index, dtype=object))
+    signup = pd.concat(parts)
+    signup = signup[~signup.index.duplicated(keep="first")]
+    source = pd.concat(sources)
+    source = source[~source.index.duplicated(keep="first")]
     flags = decision_fn("is_new_from_signup_tier")(signup)
-    return flags, signup, {"status": "ok", "source": "#218 명부 t2 행의 signup_tier(DR-221 — 가입 180일 미만 = NEW)",
-                           "n_rows": int(len(rows))}
+    in_scope_roster = ids[ids.isin(from_roster.index)]
+    judged_outside = outside if signups is not None else outside[:0]
+    count = lambda index, code: int(signup.reindex(index).eq(code).sum())  # noqa: E731
+    record = {
+        "status": "ok" if signups is not None or not len(outside) else "partial",
+        "scope": "t2 점수 고객 전원",
+        "source": {"roster": "#218 명부 t2 행(Eligible(t2))의 signup_tier",
+                   "signups_t2": "명부 밖 점수 고객 — observed_tiers.signup_tiers(같은 정의), t2 가입일 명부"},
+        "definition": "DR-221 — 가입 180일 미만 = NEW, 가입일 모름 = UNKNOWN(NEW 아님)",
+        "n_scored": int(len(ids)), "n_in_roster": int(len(in_scope_roster)), "n_outside_roster": int(len(outside)),
+        "n_outside_roster_judged": int(len(judged_outside)),
+        "n_not_judged": int(len(outside) - len(judged_outside)),
+        "n_new_in_roster": count(in_scope_roster, "NEW"), "n_new_outside_roster": count(judged_outside, "NEW"),
+        "n_unknown_in_roster": count(in_scope_roster, "UNKNOWN"),
+        "n_unknown_outside_roster": count(judged_outside, "UNKNOWN"),
+    }
+    if record["status"] == "partial":
+        record["reason"] = (f"t2 가입일 명부가 없다 — 명부 밖 점수 고객 {record['n_not_judged']}명은 NEW 를 판정하지 않았다"
+                            "(세그먼트는 가치 축으로 매겼다)")
+    return flags, signup, record, source
 
 
 def segments_with_new(scores: Mapping[str, Any], ctx: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
@@ -1427,11 +1463,11 @@ def segments_with_new(scores: Mapping[str, Any], ctx: dict[str, Any]) -> tuple[A
     배정 결과 · NEW 여부 · 가입 시기는 ``ctx`` 에 둔다 — ``segments_6plus.csv`` 와 CLI 산출물이 같은 값을 쓴다.
     """
     assign = decision_fn("assign_segments")
-    try:
-        flags, signup, new_input = new_customer_flags(ctx)
-    except NotRun as reason:
-        flags, signup, new_input = None, None, {"status": "not_run", "reason": str(reason)}
     churn_p, cate, clv = scores["churn_p"], scores["cate"], scores["clv"]
+    try:
+        flags, signup, new_input, source = new_customer_flags(ctx, churn_p.index)
+    except NotRun as reason:
+        flags, signup, new_input, source = None, None, {"status": "not_run", "reason": str(reason)}, None
     aligned = None
     if flags is not None:
         if "is_new" in inspect.signature(assign).parameters:
@@ -1441,6 +1477,7 @@ def segments_with_new(scores: Mapping[str, Any], ctx: dict[str, Any]) -> tuple[A
             new_input = {"status": "not_run", "reason": "assign_segments 가 is_new 를 받지 않는다 — NEW 를 판정하지 않았다"}
     seg = assign(churn_p, cate, clv, **({"is_new": aligned} if aligned is not None else {}))
     ctx["segments_t2"], ctx["is_new_t2"], ctx["signup_tier_t2"] = seg, aligned, signup
+    ctx["signup_source_t2"] = source
     record: dict[str, Any] = {"new_input": new_input}
 
     def profile() -> dict[str, Any]:
@@ -1518,7 +1555,7 @@ def segments_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Pat
     try:
         table = decision_fn("segment_table")(scores["churn_p"], scores["cate"], scores.get("clv"), seg,
                                              ctx.get("signup_tier_t2"), margin_rate=scores.get("margin_rate"),
-                                             costs=costs)
+                                             costs=costs, signup_source=ctx.get("signup_source_t2"))
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(path, index=False)
@@ -2532,8 +2569,9 @@ def run(config: SprintConfig) -> Path:
             else:
                 bundle_t2: dict[str, Any] = {}
                 try:
-                    judged = eligibility(ctx["events_t2"], ctx["t2"], X2.index,
-                                         customer_signups(ctx["t2"], keep=bundle_t2))
+                    signups_t2 = customer_signups(ctx["t2"], keep=bundle_t2)
+                    judged = eligibility(ctx["events_t2"], ctx["t2"], X2.index, signups_t2)
+                    ctx["signups_t2"] = signups_t2  # #326 리뷰 — 명부 밖 점수 고객의 NEW 판정(같은 가입일 명부)
                 except NotRun as reason:
                     detail = f"Eligible(t2) 를 판정하지 못했다 — {reason}"
             if detail is None:

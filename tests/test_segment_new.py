@@ -143,6 +143,40 @@ class TestNewSegment(unittest.TestCase):
 
 
 @unittest.skipUnless(DEPS, REASON)
+class TestReviewFixes(unittest.TestCase):
+    """#326 리뷰 반례."""
+
+    def test_new_survives_when_every_cate_is_missing(self) -> None:
+        import numpy as np
+        import pandas as pd
+
+        from src.decision import segments as sg
+
+        churn, cate, clv, tier = synthetic(n=200)
+        empty = cate.assign(T1=np.nan, T2=np.nan, T3=np.nan, T4=np.nan)
+        seg = sg.assign_segments(churn, empty, clv, is_new=sg.is_new_from_signup_tier(tier))
+        self.assertEqual(set(tier.index[tier == "NEW"]), set(seg.index[seg == "NEW"]))   # 가입 시기만으로 NEW
+        self.assertTrue((seg[tier != "NEW"] == sg.UNSCORED).all())                         # 나머지는 점수 결손
+        self.assertIn("uplift_band", seg.attrs["thresholds"])
+        self.assertFalse((sg.assign_segments(churn, empty, clv) == "NEW").any())
+
+    def test_signup_tiers_is_the_observed_tiers_definition(self) -> None:
+        import pandas as pd
+
+        from src.decision import observed_tiers as ot
+
+        t2 = "2026-03-01T00:00:00+09:00"
+        signups = {"a": "2025-09-03", "b": "2025-09-02", "c": "2026-03-02", "d": None}   # 179 · 180 · 기준일 뒤 · 모름
+        got = ot.signup_tiers(signups, t2, ["a", "b", "c", "d", "e"])
+        self.assertEqual({"a": "NEW", "b": "EXISTING", "c": ot.UNKNOWN, "d": ot.UNKNOWN, "e": ot.UNKNOWN}, got.to_dict())
+        self.assertEqual(180, ot.NEW_CUSTOMER_DAYS)
+        from tests.test_feature_observed_tiers import Fixture
+
+        frame = ot.observed_tiers(Fixture().events(), t2, list("abcd"), signups)   # 같은 정의 — 구매가 없어도 가입 등급은 같다
+        self.assertEqual(frame["signup_tier"].to_dict(), got.reindex(list("abcd")).to_dict())
+
+
+@unittest.skipUnless(DEPS, REASON)
 class TestRunSprintSegments(unittest.TestCase):
     """run_sprint 는 import 하지 않는다 — 함수만 AST 로 떼어 실행한다."""
 
@@ -168,9 +202,37 @@ class TestRunSprintSegments(unittest.TestCase):
         roster = self.roster(tier)
         roster["origin"] = "t1"
         self.assertIn("t2 행이 없다", fn({"split_roster": roster})[2]["reason"])
-        flags, signup, record = fn({"split_roster": self.roster(tier)})
-        self.assertEqual(("ok", 50), (record["status"], record["n_rows"]))
+        flags, signup, record, source = fn({"split_roster": self.roster(tier)}, tier.index)
+        self.assertEqual(("ok", 50, 50, 0), (record["status"], record["n_scored"], record["n_in_roster"],
+                                             record["n_outside_roster"]))
         self.assertEqual(int((tier == "NEW").sum()), int(flags.eq(True).sum()))
+        self.assertEqual({"roster"}, set(source))
+
+    def test_scored_customers_outside_the_roster(self) -> None:
+        """#326 리뷰 — 명부(Eligible(t2)) 밖 점수 고객은 같은 정의로 정하고, 가입일 명부가 없으면 판정 안 함을 드러낸다."""
+        import pandas as pd
+
+        fn = self.parts()["new_customer_flags"]
+        tier = pd.Series(["NEW", "EXISTING"], index=pd.Index(["A", "B"]))
+        scored = pd.Index(["A", "B", "C", "D"])                          # C · D 는 명부 밖
+        signups = {"C": "2026-02-20", "D": "2025-01-01"}                   # t2 기준 9일 · 400일 넘게
+        ctx = {"split_roster": self.roster(tier), "signups_t2": signups, "t2": "2026-03-01T00:00:00+09:00"}
+        flags, signup, record, source = fn(ctx, scored)
+        self.assertEqual({"A": "NEW", "B": "EXISTING", "C": "NEW", "D": "EXISTING"}, signup.reindex(scored).to_dict())
+        self.assertEqual({"A": "roster", "B": "roster", "C": "signups_t2", "D": "signups_t2"},
+                         source.reindex(scored).to_dict())
+        self.assertEqual(("ok", 2, 2, 1, 1), (record["status"], record["n_outside_roster"],
+                                              record["n_outside_roster_judged"], record["n_new_in_roster"],
+                                              record["n_new_outside_roster"]))
+        # 가입일 명부가 없으면 명부 밖 고객은 판정하지 않는다 — partial · 수 · 사유
+        flags, signup, record, source = fn({"split_roster": self.roster(tier)}, scored)
+        self.assertEqual(("partial", 2), (record["status"], record["n_not_judged"]))
+        self.assertIn("명부 밖 점수 고객 2명", record["reason"])
+        self.assertTrue(signup.reindex(scored)[["C", "D"]].isna().all())
+        self.assertTrue(source.reindex(scored)[["C", "D"]].isna().all())  # 명부의 UNKNOWN 과 구분된다
+        # 명부가 없어도 가입일 명부가 있으면 전원을 같은 정의로 정한다
+        flags, signup, record, source = fn({"signups_t2": signups, "t2": ctx["t2"]}, pd.Index(["C", "D"]))
+        self.assertEqual(("ok", 0, 2), (record["status"], record["n_in_roster"], record["n_outside_roster_judged"]))
 
     def test_segments_with_new_and_file(self) -> None:
         import pandas as pd
@@ -246,6 +308,12 @@ class TestCliSegmentLines(unittest.TestCase):
         self.assertIn("H-SEG-1 지지되지 않음", cli.segment_lines(old_result)[1])   # 1부 결과 파일도 읽는다
         lines = cli.segment_lines({"segments": [], "new_input": {"status": "not_run", "reason": "명부가 없다"}})
         self.assertEqual(["  segments   —", "             ! NEW 판정 안 함 — 명부가 없다"], lines)
+        scope = {"status": "partial", "reason": "t2 가입일 명부가 없다", "n_scored": 10, "n_in_roster": 7,
+                 "n_outside_roster": 3, "n_outside_roster_judged": 0, "n_new_in_roster": 2, "n_new_outside_roster": 0,
+                 "n_unknown_in_roster": 1, "n_unknown_outside_roster": 0}
+        lines = cli.segment_lines({"segments": [], "new_input": scope})
+        self.assertIn("NEW 판정 범위 — 점수 고객 10명(명부 7명 · 명부 밖 3명 중 판정 0명)", lines[1])
+        self.assertEqual("             ! NEW 일부만 판정 — t2 가입일 명부가 없다", lines[2])
 
 
 if __name__ == "__main__":

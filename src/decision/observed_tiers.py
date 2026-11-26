@@ -151,6 +151,30 @@ def _category_tiers(orders: pd.DataFrame, ids: pd.Index, order_items: Any,
     return category, share, audit
 
 
+def _tenure_days(signups: Mapping[str, Any], t0, ids: pd.Index) -> pd.Series:
+    """기준 시각(KST 날짜) − 가입일(일). 가입일을 모르면 NaN."""
+    t0_day = t0.tz_convert(TIMEZONE).date()
+    days = [_signup_day(signups.get(cid)) for cid in ids]
+    return pd.Series([np.nan if d is None else float((t0_day - d).days) for d in days], index=ids, dtype=float)
+
+
+def _signup_codes(tenure: pd.Series) -> pd.Series:
+    """가입 시기 등급(DR-221) — 180일 미만 NEW · 이상 EXISTING · 모름(또는 기준일 뒤 가입) UNKNOWN."""
+    signup = pd.Series(UNKNOWN, index=tenure.index, dtype=object)
+    signup[(tenure >= 0) & (tenure < NEW_CUSTOMER_DAYS)] = "NEW"
+    signup[tenure >= NEW_CUSTOMER_DAYS] = "EXISTING"
+    return signup
+
+
+def signup_tiers(signups: Mapping[str, Any], index_time, customers) -> pd.Series:
+    """``customers`` 의 가입 시기 등급만 — ``observed_tiers`` 의 ``signup_tier`` 와 같은 함수 · 같은 정의(DR-221).
+
+    명부(#218)가 다루지 않는 고객(Eligible 밖 점수 고객)의 NEW 판정에 쓴다(#219 · #326 리뷰). index = customer_id 문자열.
+    """
+    ids = pd.Index([str(c) for c in customers], name="customer_id")
+    return _signup_codes(_tenure_days(signups, to_index_time(index_time), ids)).rename("signup_tier")
+
+
 def observed_tiers(events: pd.DataFrame, index_time, population, signups: Mapping[str, Any], *,
                    order_items: Any = None, product_categories: Mapping[str, str] | pd.Series | None = None,
                    ) -> pd.DataFrame:
@@ -194,13 +218,8 @@ def observed_tiers(events: pd.DataFrame, index_time, population, signups: Mappin
     for low, high, code in FREQUENCY_BANDS:
         frequency[(n_orders >= low) & (n_orders <= (np.inf if high is None else high))] = code
 
-    t0_day = t0.tz_convert(TIMEZONE).date()
-    signup_days = [_signup_day(signups.get(cid)) for cid in ids]
-    tenure = pd.Series([np.nan if d is None else float((t0_day - d).days) for d in signup_days],
-                       index=ids, dtype=float)
-    signup = pd.Series(UNKNOWN, index=ids, dtype=object)
-    signup[(tenure >= 0) & (tenure < NEW_CUSTOMER_DAYS)] = "NEW"
-    signup[tenure >= NEW_CUSTOMER_DAYS] = "EXISTING"
+    tenure = _tenure_days(signups, t0, ids)
+    signup = _signup_codes(tenure)
 
     reasons: dict[str, str] = {}
     if order_items is None:
@@ -246,7 +265,7 @@ def observed_tiers(events: pd.DataFrame, index_time, population, signups: Mappin
         "n_population": int(len(ids)),
         "counts": {col: {str(k): int(v) for k, v in out[col].value_counts().sort_index().items()}
                    for col in TIER_COLUMNS},
-        "signup": {"n_missing": int(sum(d is None for d in signup_days)), "n_after_cutoff": int((tenure < 0).sum())},
+        "signup": {"n_missing": int(tenure.isna().sum()), "n_after_cutoff": int((tenure < 0).sum())},
         "items": item_audit,
         "unknown_reasons": reasons,
     }
