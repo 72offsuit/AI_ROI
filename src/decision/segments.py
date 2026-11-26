@@ -102,7 +102,12 @@ def assign_segments(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: pd.
     band, ch, hv = th["uplift_band"], th["churn_high"], th["clv_high"]
 
     out = pd.Series(UNSCORED, index=idx, dtype=object)
+    # NEW 는 가입 시기만으로 정한다 — 점수가 없어도(CATE 전부 결손 등) 참으로 알려진 고객은 NEW 다(#326 리뷰).
+    new_mask = is_new.reindex(idx).eq(True) if is_new is not None else None
     if band is None:
+        if new_mask is not None:
+            out[new_mask] = "NEW"
+        out.attrs["thresholds"] = th
         return out
     pos = u > band
     neg = u < -band
@@ -125,8 +130,8 @@ def assign_segments(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: pd.
         out[~known & pos] = UNKNOWN_VALUE["persuadable"]
         out[~known & mid] = UNKNOWN_VALUE["near_zero"]
     out[neg] = "SLEEPING_DOG"
-    if is_new is not None:
-        out[is_new.reindex(idx).eq(True)] = "NEW"   # 참으로 알려진 고객만 — 결손은 NEW 로 보지 않는다
+    if new_mask is not None:
+        out[new_mask] = "NEW"   # 참으로 알려진 고객만 — 결손은 NEW 로 보지 않는다
     out.attrs["thresholds"] = th
     return out
 
@@ -176,7 +181,7 @@ LOW_VALUE = ("LV_PERSUADABLE", "LV_LOST_CAUSE")
 #: 고객 세그먼트 표(SRS SEG-005 필수 열 + 판정 근거 열). 결손은 빈 칸 — 0 으로 채우지 않는다.
 SEGMENT_TABLE_COLUMNS: tuple[str, ...] = (
     "customer_id", "segment", "segment_prd_id", "quadrant", "churn_probability", "uplift_score", "uplift_arm",
-    "predicted_clv_12m", "priority_score", "signup_tier",
+    "predicted_clv_12m", "priority_score", "signup_tier", "signup_tier_source",
 )
 
 
@@ -301,8 +306,12 @@ def new_segment_shift(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: p
 
 def segment_table(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: pd.Series | None,
                   segments: pd.Series, signup_tier: pd.Series | None = None,
-                  thresholds: dict[str, float] | None = None) -> pd.DataFrame:
+                  thresholds: dict[str, float] | None = None, *,
+                  signup_source: pd.Series | None = None) -> pd.DataFrame:
     """SRS SEG-005 고객 세그먼트 표(+ 4분면 · 우선순위 근거 열). 점수는 받은 그대로 옮기고, 결손은 비워 둔다.
+
+    ``signup_tier_source`` = 가입 시기 등급의 출처(``roster`` = #218 명부 · ``signups_t2`` = 명부 밖 고객을 같은 정의로
+    정함). 비어 있으면 NEW 를 판정하지 않은 고객이다 — 명부의 ``UNKNOWN``(가입일 모름)과 구분한다(#326 리뷰).
 
     ``priority_score`` = 과제 기본 ``uplift × CLV``(SEG-004) — 비용을 뺀 프로젝트 확장은 처치별 비용을 고객의
     처치(최대 CATE 처치)에 맞춰야 해서 2부에서 낸다.
@@ -327,5 +336,6 @@ def segment_table(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: pd.Se
         "predicted_clv_12m": (clv.reindex(idx).astype(float).to_numpy() if clv is not None else np.nan),
         "priority_score": priority_score(cate, clv).reindex(idx).to_numpy(),
         "signup_tier": (signup_tier.reindex(idx.map(str)).to_numpy() if signup_tier is not None else None),
+        "signup_tier_source": (signup_source.reindex(idx.map(str)).to_numpy() if signup_source is not None else None),
     })
     return table[list(SEGMENT_TABLE_COLUMNS)].sort_values("customer_id", kind="mergesort").reset_index(drop=True)
