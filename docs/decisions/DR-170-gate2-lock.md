@@ -78,7 +78,8 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
      사실로만 적는다. 같아야 한다는 조건은 두지 않는다 — 10/22 기록이 고정했다고 쓴 범위가 규칙 코드뿐이기 때문이다.
      2026-11-26 대조: `S1_RULE` · `plan_S0` · `s1_eligibility` · `plan_S1` · `_missing` · `_as_mapping` 이 태그와 같다. 나머지는
      태그에 없다(뒤에 추가된 입력 계산 · 상수).
-2. **예산 상한.** `C_RULE_DEFINITION` · `resolve_budget` 지문 + Baseline 실행의 C_rule 값(`budget.c_rule_planned_krw`) ·
+2. **예산 상한.** `strategies.py` 의 `planning_costs`, `run_sprint.py` 의 `C_RULE_DEFINITION` · `plan_costs` · `resolve_budget`
+   지문 + Baseline 실행의 C_rule 값(`budget.c_rule_planned_krw`) ·
    처치 단가(`planning_costs_krw`) · 그 출처. 처치 단가 자체는 GATE 1 경제 파라미터 Lock 대상이라 값만 적는다.
 3. **Baseline 결과.** S0 · S1 의 배정 수 · 처치 수 · 계획 비용 · 측정 계층 경제 지표(분기 창), 결과 파일(`run_meta.json` ·
    `strategy_comparison.json`) sha256, 실행 정보(run_id · repo_commit · simulator_commit · seed · 고객 수).
