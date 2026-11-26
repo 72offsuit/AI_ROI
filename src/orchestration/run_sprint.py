@@ -139,6 +139,11 @@ ELIGIBLE_DEFINITION = (
     f"{ELIGIBLE_MIN_ORDERS}건 · T0 − 마지막 구매일 ≥ {ELIGIBLE_MIN_DAYS_SINCE_PURCHASE}일 (KST 날짜 차, "
     "가입일은 교환 묶음 고객 명부)"
 )
+#: S1 규칙 입력 ``days_since_last_purchase`` 의 단위(``s1_inputs``). Eligible 과 같은 날짜 차다 — PRD §60 · SRS BASE-002 의
+#: "마지막 구매 후 28~90일" 도 날짜로 센다(DR-234 와 같은 해석). GATE 2 봉인 전에 정했다(DR-170-gate2-lock G1).
+S1_DAYS_DEFINITION = (
+    "t2 KST 날짜 − 마지막 구매 KST 날짜(일) — Eligible 과 같은 날짜 차, 같은 order_id 는 1건 (DR-170-gate2-lock G1)"
+)
 
 RESULT_FILES: tuple[str, ...] = (
     "run_meta", "churn_eval", "clv_eval", "uplift_eval", "segments", "strategy_comparison", "ab_test",
@@ -871,8 +876,9 @@ def event_count_by_type(frame: Any) -> dict[str, int]:
 def s1_inputs(events: Any, index_time: datetime, population: Any, eligible: Any) -> dict[str, Any]:
     """S1 규칙 입력 — `index_time` 미만 이벤트에서 고객별로 계산한다.
 
-    - ``days_since_last_purchase``: 마지막 주문부터의 일수(소수). 주문이 없으면 NaN(0 으로 채우지 않는다).
-      S1 규칙(28~90일)이 이 값을 쓴다 — Eligible 의 날짜 차와는 따로다(DR-234).
+    - ``days_since_last_purchase``: ``index_time`` 의 KST 날짜 − 마지막 주문의 KST 날짜(일, 정수값). 주문이 없으면
+      NaN(0 으로 채우지 않는다). S1 규칙(28~90일)이 이 값을 쓴다 — Eligible(``eligibility``)과 같은 날짜 차다
+      (``S1_DAYS_DEFINITION`` · DR-170-gate2-lock G1). 예전의 시각 차(소수 일)는 하한 쪽 하루를 뺐다.
     - ``lifetime_order_count``: 주문 수(``purchase`` 1행 = 주문 1건, 같은 order_id 는 1건).
     - ``eligible``: 호출자가 ``eligibility`` 로 낸 플래그를 ``population`` 에 맞춰 싣는다(data_spec §4.1).
 
@@ -881,15 +887,16 @@ def s1_inputs(events: Any, index_time: datetime, population: Any, eligible: Any)
     pd = _pd()
     stamps = _timestamps(events)
     end = index_time if stamps.dt.tz is not None else index_time.astimezone(KST).replace(tzinfo=None)
-    before = events.loc[stamps < end].assign(_ts=stamps[stamps < end])
+    t0_day = index_time.astimezone(KST).date()
+    before = events.loc[stamps < end].assign(_day=_kst_dates(stamps[stamps < end]))
     purchases = before[before["event_type"] == "purchase"]
     key = purchases["order_id"].where(purchases["order_id"].notna(), "evt:" + purchases["event_id"].astype(str))
     orders = purchases.assign(_key=key).drop_duplicates(subset=["customer_id", "_key"])
     count = orders.groupby("customer_id").size().reindex(population, fill_value=0).astype(float)
-    last = orders.groupby("customer_id")["_ts"].max().reindex(population)
-    days = (end - last).dt.total_seconds() / 86400.0
+    last_day = orders.groupby("customer_id")["_day"].max().reindex(population)
+    days = [None if pd.isna(d) else float((t0_day - d).days) for d in last_day]
     return {
-        "days_since_last_purchase": pd.Series(days.to_numpy(), index=population, name="days_since_last_purchase"),
+        "days_since_last_purchase": pd.Series(days, index=population, dtype=float, name="days_since_last_purchase"),
         "lifetime_order_count": pd.Series(count.to_numpy(), index=population, name="lifetime_order_count"),
         "eligible": eligible.reindex(population, fill_value=False).astype(bool).rename("eligible"),
     }
@@ -2384,6 +2391,7 @@ def run(config: SprintConfig) -> Path:
                     "source": "이벤트(t2 미만 purchase) · 교환 묶음 가입일 명부 — 오케스트레이션 계산",
                     "index_time": ctx["t2"],
                     "eligible_definition": ELIGIBLE_DEFINITION + " — t2 기준, Feature(t2) 고객 중",
+                    "days_definition": S1_DAYS_DEFINITION,
                     **judged["counts"],
                     "n_with_purchase_history": int(scores["days_since_last_purchase"].notna().sum()),
                 }

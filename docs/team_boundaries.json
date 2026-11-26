@@ -128,6 +128,7 @@
       "docs/team_boundaries.json",
       ".github/**",
       "config/gate1_lock.yaml",
+      "config/gate2_lock.yaml",
       "dashboard/**",
       ".agent-team/**"
     ],
