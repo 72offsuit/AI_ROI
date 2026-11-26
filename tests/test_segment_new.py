@@ -88,13 +88,15 @@ class TestNewSegment(unittest.TestCase):
         self.assertEqual("supported", h["result"])
         ev = h["evidence"]
         self.assertEqual(ab_test.ALPHA, ev["alpha"])                  # A/B 분석과 같은 유의수준
-        self.assertGreater(ev["ci95"][0], 0)
+        self.assertGreater(ev["ci"][0], 0)
+        self.assertEqual((0.95, None), (ev["ci_level"], h["not_supported_kind"]))
+        self.assertIn("조건부", ev["interval_note"])
         self.assertGreater(ev["share_new"], 0.97)                    # 강한 쏠림이어도 판정한다(적은 쪽 10명 기준을 쓰지 않는다)
 
         churn, cate, clv, tier = synthetic(seed=2)                   # 신규 · 기존 CLV 분포가 같은 데이터
         h = sg.new_segment_shift(churn, cate, clv, sg.is_new_from_signup_tier(tier))["hypotheses"][0]
-        self.assertEqual("not_supported", h["result"])
-        self.assertLessEqual(h["evidence"]["ci95"][0], 0)
+        self.assertEqual(("not_supported", "insufficient_evidence"), (h["result"], h["not_supported_kind"]))  # 반증이 아니다
+        self.assertLessEqual(h["evidence"]["ci"][0], 0)
 
         churn, cate, clv, tier = synthetic(new_share=0.02, seed=3)   # 신규 약 40명 — 표본 부족
         h = sg.new_segment_shift(churn, cate, clv, sg.is_new_from_signup_tier(tier))["hypotheses"][0]
@@ -107,13 +109,14 @@ class TestNewSegment(unittest.TestCase):
 
         got = _two_proportions(56, 70, 48, 80, 0.05)
         self.assertAlmostEqual(0.2, got["diff"])
-        self.assertAlmostEqual(0.0524, got["ci95"][0], places=4)
-        self.assertAlmostEqual(0.3339, got["ci95"][1], places=4)
+        self.assertAlmostEqual(0.0524, got["ci"][0], places=4)
+        self.assertAlmostEqual(0.3339, got["ci"][1], places=4)
         # 한쪽 비율 1(100/100) — Wald 는 그쪽 분산을 0 으로 봐 구간이 좁아진다. score 구간은 그쪽 불확실성도 넣는다.
         extreme = _two_proportions(100, 100, 50, 100, 0.05)
         wald_lower = 0.5 - 1.959964 * math.sqrt(0.5 * 0.5 / 100)
-        self.assertLess(extreme["ci95"][0], wald_lower)
-        self.assertGreater(extreme["ci95"][0], 0)
+        self.assertLess(extreme["ci"][0], wald_lower)
+        self.assertGreater(extreme["ci"][0], 0)
+        self.assertEqual(0.9, _two_proportions(56, 70, 48, 80, 0.10)["ci_level"])   # 구간 수준은 α 를 따른다(키에 95 를 박지 않는다)
 
     def test_segment_table(self) -> None:
         import numpy as np
@@ -147,7 +150,8 @@ class TestRunSprintSegments(unittest.TestCase):
         from tests.test_feature_split_roster import _run_sprint_parts
 
         parts = _run_sprint_parts("DECISION_API", "NotRun", "decision_fn", "_pd", "new_customer_flags",
-                                  "segments_with_new", "segment_hypotheses", "SEGMENTS_FILE", "segments_file")
+                                  "segments_with_new", "segment_hypotheses", "SEGMENTS_FILE", "segments_file",
+                                  "net_value_status")
         parts.update(inspect=inspect, Path=Path)
         return parts
 

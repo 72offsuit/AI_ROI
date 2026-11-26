@@ -626,12 +626,15 @@ def segment_lines(segments: Mapping[str, Any]) -> list[str]:
     if new_input.get("status") not in (None, "ok"):
         lines.append(f"             ! NEW 판정 안 함 — {new_input.get('reason')}")
     results = {"supported": "지지", "not_supported": "지지되지 않음", "undetermined": "판정 불가",
-               "not_evaluated": "평가 전"}
+               "not_evaluated": "평가 전", "partially_supported": "부분 지지"}
+    kinds = {"insufficient_evidence": "근거 부족", "contradicted": "반증"}   # #219 2부 리뷰 — 지지되지 않음의 두 뜻
     hypotheses = [h for h in (segments.get("hypotheses") or (segments.get("new_segment") or {}).get("hypotheses") or [])
                   if isinstance(h, Mapping)]
     if hypotheses:
         lines.append("             가설(결과 전 등록, DR-219-segments) " + " · ".join(
-            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}" for h in hypotheses))
+            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}"
+            + (f"({kinds[h['not_supported_kind']]})" if h.get("not_supported_kind") in kinds else "")
+            for h in hypotheses))
     return lines
 
 

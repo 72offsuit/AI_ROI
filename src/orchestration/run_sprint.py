@@ -1528,9 +1528,25 @@ def segments_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Pat
         return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
     extra_files[SEGMENTS_FILE] = path
     return {"status": "ok", "file": SEGMENTS_FILE, "rows": int(len(table)), "columns": list(table.columns),
-            "note": ("priority_score = uplift × CLV(SEG-004 과제 기본). expected_net_value_krw · net_arm = 처치별 "
-                     "CATE × CLV × margin_rate − 계획 비용 최대(S4 와 같은 정의, DR-219-segments). 빈 칸 = 계산 불가(결손) — "
-                     "0 으로 채우지 않았다")}
+            "net_value": net_value_status(scores, costs, table),
+            "note": ("priority_score = uplift × CLV(SEG-004 과제 기본). expected_net_value_krw = 처치별 CATE × CLV × "
+                     "margin_rate − 계획 비용의 최댓값, net_arm = 그 값이 가장 큰 **순가치 최대 후보 처치**(S4 와 같은 정의, "
+                     "DR-219-segments) — 순가치가 0 이하여도 남는다. 실제 배정에는 Eligible(t2) · 양의 순가치 · 예산 조건이 "
+                     "따로 필요하다(S4). 빈 칸 = 계산 불가(결손 — 사유는 net_value) — 0 으로 채우지 않았다")}
+
+
+def net_value_status(scores: Mapping[str, Any], costs: Mapping[str, Any] | None, table: Any) -> dict[str, Any]:
+    """#219 2부 리뷰 — ``segments_6plus.csv`` 의 비용을 뺀 우선순위 열이 비었으면 그 사유(margin_rate · 비용 · CLV · CATE)."""
+    missing = [label for label, absent in (
+        ("margin_rate 없음(기여이익률 — 매출 CLV 를 이익으로 쓰지 않는다, #217)", scores.get("margin_rate") is None),
+        ("처치별 계획 비용 없음", not costs),
+        ("12개월 CLV 없음", scores.get("clv") is None),
+        ("처치별 CATE 표 없음", not hasattr(scores.get("cate"), "columns"))) if absent]
+    blank = int(table["expected_net_value_krw"].isna().sum()) if "expected_net_value_krw" in table else None
+    if missing:
+        return {"status": "not_run", "reason": " · ".join(missing), "n_blank": blank}
+    return {"status": "ok", "n_blank": blank,
+            "blank_reason": "빈 칸은 그 고객의 CATE · CLV 결손이다" if blank else None}
 
 
 def _segment_summary(segments: Any, scores: Mapping[str, Any]) -> dict[str, Any]:

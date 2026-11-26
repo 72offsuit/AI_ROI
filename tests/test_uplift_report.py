@@ -61,11 +61,34 @@ class TestDeciles(unittest.TestCase):
         want = first.loc[first["t"], "y"].mean() - first.loc[~first["t"], "y"].mean()
         self.assertAlmostEqual(want, res["rows"][0]["effect"])
         self.assertAlmostEqual(first["s"].mean(), res["rows"][0]["mean_predicted_uplift"])
-        lo, hi = res["rows"][0]["uplift_ci95"]
+        lo, hi = res["rows"][0]["uplift_ci"]
         self.assertLess(lo, res["rows"][0]["effect"])
         self.assertGreater(hi, res["rows"][0]["effect"])
         self.assertEqual(("T3", int(sel.sum()), 0), (res["arm"], res["n"], res["n_excluded_unscored"]))
+        self.assertEqual((0.95, "Newcombe(1998) hybrid score interval"), (res["ci_level"], res["ci_method"]))
         json.dumps(res)
+
+    def test_extreme_decile_keeps_a_non_degenerate_interval(self) -> None:
+        """리뷰 반례 — 처치 2/2 유지 · 대조 0/2 유지 구간. Wald 는 [+1, +1] 이었다. 수 · 점추정은 그대로 싣는다."""
+        import pandas as pd
+
+        from src.decision.segments import _two_proportions
+        from src.decision.uplift_report import uplift_deciles
+
+        ids = pd.Index([f"C{i:02d}" for i in range(40)])
+        arms = pd.Series(["T3", "T3", "T0", "T0"] + ["T3", "T0"] * 18, index=ids)
+        y = pd.Series([1.0, 1.0, 0.0, 0.0] + [1.0, 0.0, 0.0, 1.0] * 9, index=ids)
+        score = pd.Series([1.0 - i / 100 for i in range(40)], index=ids)
+        cate = pd.DataFrame({"T1": score, "T2": score, "T3": score, "T4": score})
+        row = uplift_deciles({"treatment": arms, "y": y, "cate": {"t_learner": cate}, "primary_arm": "T3"},
+                             "t_learner")["rows"][0]
+        self.assertEqual((2, 2, 2, 0, 1.0), (row["n_treated"], row["n_control"], row["retained_treated"],
+                                             row["retained_control"], row["effect"]))
+        lo, hi = row["uplift_ci"]
+        self.assertLess(lo, 0.6)                     # 폭 0 이 아니다
+        self.assertLessEqual(hi, 1.0)
+        want = _two_proportions(2, 2, 0, 2, 0.05)
+        self.assertAlmostEqual(want["ci"][0], lo)
 
 
 @unittest.skipUnless(DEPS, REASON)
@@ -85,16 +108,27 @@ class TestLearnerAgreement(unittest.TestCase):
 class TestQuadrantValidation(unittest.TestCase):
     """H-SEG-2 — DR-219-segments 「2부 결정」의 규칙 그대로."""
 
-    def test_supported_when_persuadables_respond(self) -> None:
+    def test_partially_supported_when_sleeping_dogs_cannot_be_judged(self) -> None:
         import numpy as np
 
         from src.decision.uplift_report import quadrant_validation
 
         test, group = fake_test(persuadable_effect=0.25)
         h = quadrant_validation(test, "t_learner")
-        self.assertEqual(("H-SEG-2", "supported"), (h["id"], h["result"]))
+        # 리뷰 반례 — ② 칸이 표본 기준 미달(SD 대조 < 100명)이면 전체를 '지지'로 올리지 않는다
+        self.assertEqual(("H-SEG-2", "partially_supported", None), (h["id"], h["result"], h["not_supported_kind"]))
+        self.assertEqual({"persuadables_vs_rest": "supported", "sleeping_dogs_le_zero": "undetermined"}, h["parts"])
+        self.assertIsNone(h["evidence"]["sleeping_dogs"]["ci"])
+        self.assertIn("< 100명", h["evidence"]["sleeping_dogs"]["reason"])
+        self.assertIn("① ", h["evaluation"])
         ev = h["evidence"]
-        self.assertGreater(ev["ci95"][0], 0)
+        self.assertGreater(ev["ci"][0], 0)
+        self.assertEqual(0.95, ev["ci_level"])
+        # 추정 대상 = 처치군을 합친 유지율 − 대조 — 처치별 수 · 가중치를 싣는다(T4 까지 관측된 처치)
+        arms = ev["persuadables"]["treated_by_arm"]
+        self.assertEqual(ev["persuadables"]["n_treated"], sum(arms.values()))
+        self.assertAlmostEqual(1.0, sum(ev["persuadables"]["treated_weights"].values()))
+        self.assertIn("가중", ev["estimand"])
         # 실측 효과 = 고객군 안 처치(T1~T4) − 대조(T0) 유지율. Wald 구간은 네 칸 이항 분산의 합.
         y, t = test["y"].to_numpy(), test["treatment"].to_numpy() != "T0"
         p = ev["persuadables"]
@@ -105,19 +139,39 @@ class TestQuadrantValidation(unittest.TestCase):
         var = sum(r * (1 - r) / n for r, n in ((p["rate_treated"], p["n_treated"]), (p["rate_control"], p["n_control"]),
                                                 (ev["rest"]["rate_treated"], ev["rest"]["n_treated"]),
                                                 (ev["rest"]["rate_control"], ev["rest"]["n_control"])))
-        self.assertAlmostEqual(ev["diff"] - 1.959964 * math.sqrt(var), ev["ci95"][0], places=5)
+        self.assertAlmostEqual(ev["diff"] - 1.959964 * math.sqrt(var), ev["ci"][0], places=5)
         self.assertEqual(0.05, ev["alpha"])
 
-    def test_not_supported_without_difference_or_with_responding_sleeping_dogs(self) -> None:
+    def test_supported_only_when_both_claims_hold(self) -> None:
+        from src.decision.uplift_report import quadrant_validation
+
+        test, _ = fake_test(n=8000, persuadable_effect=0.25, sd_effect=-0.3, share_sd=0.10, seed=3)
+        h = quadrant_validation(test, "t_learner")
+        self.assertEqual(("supported", None), (h["result"], h["not_supported_kind"]))
+        self.assertLessEqual(h["evidence"]["sleeping_dogs"]["ci"][1], 0)
+
+    def test_not_supported_separates_insufficient_evidence_from_contradiction(self) -> None:
         from src.decision.uplift_report import quadrant_validation
 
         test, _ = fake_test(persuadable_effect=0.0, seed=1)
-        self.assertEqual("not_supported", quadrant_validation(test, "t_learner")["result"])
+        h = quadrant_validation(test, "t_learner")
+        self.assertEqual(("not_supported", "insufficient_evidence"), (h["result"], h["not_supported_kind"]))
         test, _ = fake_test(n=8000, persuadable_effect=0.25, sd_effect=0.3, share_sd=0.10, seed=2)  # SD 대조 ≥ 100명
         h = quadrant_validation(test, "t_learner")
         self.assertEqual("supported", h["evidence"]["persuadables_result"])
         self.assertEqual("contradicted", h["evidence"]["sleeping_dogs"]["result"])
-        self.assertEqual("not_supported", h["result"])           # ② 반증이면 지지되지 않음
+        self.assertEqual(("not_supported", "contradicted"), (h["result"], h["not_supported_kind"]))
+
+    def test_sleeping_dogs_interval_across_zero_is_only_partial_support(self) -> None:
+        from src.decision.uplift_report import quadrant_validation
+
+        # 리뷰 반례 — SD 실측 차이가 양수이고 구간이 0 을 걸치면 "0 이하"까지 지지했다고 읽히면 안 된다
+        test, _ = fake_test(n=8000, persuadable_effect=0.25, sd_effect=0.03, share_sd=0.10, seed=5)
+        h = quadrant_validation(test, "t_learner")
+        sd = h["evidence"]["sleeping_dogs"]
+        self.assertLess(sd["ci"][0], 0)
+        self.assertGreater(sd["ci"][1], 0)
+        self.assertEqual(("inconclusive", "partially_supported"), (sd["result"], h["result"]))
 
     def test_small_cells_are_undetermined(self) -> None:
         from src.decision.uplift_report import quadrant_validation
@@ -125,8 +179,32 @@ class TestQuadrantValidation(unittest.TestCase):
         test, _ = fake_test(n=300, persuadable_effect=0.25)
         h = quadrant_validation(test, "t_learner")
         self.assertEqual("undetermined", h["result"])
-        self.assertIn("100명 미만", h["evidence"]["reason"])
+        self.assertIn("< 100명", h["evidence"]["reason"])
         self.assertEqual("undetermined", h["evidence"]["sleeping_dogs"]["result"])
+
+    def test_extreme_cells_withhold_the_interval(self) -> None:
+        """리뷰 반례 — 네 칸 120 · 120 · 240 · 240명, 유지율 0 · 1. Wald 는 [+1, +1] 이었다 — 구간 · 판정을 보류한다."""
+        import pandas as pd
+
+        from src.decision.uplift_report import quadrant_validation
+
+        n = {"pt": 120, "pc": 120, "rt": 240, "rc": 240}
+        arms, ys, us = [], [], []
+        for key, size in n.items():
+            arms += ["T1" if key.endswith("t") else "T0"] * size
+            ys += [1.0 if key == "pt" else 0.0] * size
+            us += [0.5 if key.startswith("p") else 0.0] * size
+        ids = pd.Index([f"C{i:04d}" for i in range(len(arms))])
+        u = pd.Series(us, index=ids)
+        test = {"treatment": pd.Series(arms, index=ids), "y": pd.Series(ys, index=ids),
+                "cate": {"t_learner": pd.DataFrame({"T1": u, "T2": u, "T3": u, "T4": u})}, "primary_arm": "T1"}
+        h = quadrant_validation(test, "t_learner")
+        ev = h["evidence"]
+        self.assertEqual((120, 240), (ev["cells"]["persuadables_treated"], ev["cells"]["rest_control"]))
+        self.assertEqual((1.0, None), (ev["diff"], ev["ci"]))        # 점추정은 싣고 구간은 보류
+        self.assertEqual(("undetermined", "undetermined"), (h["parts"]["persuadables_vs_rest"], h["result"]))
+        self.assertIn("적은 쪽 < 10명", ev["reason"])
+        json.dumps(h)
 
     def test_report_bundle_and_unknown_method(self) -> None:
         from src.decision.uplift_report import uplift_report
@@ -183,10 +261,29 @@ class TestProfileAndNetValue(unittest.TestCase):
         want = (a.mean() - b.mean()) / math.sqrt((a.var(ddof=1) + b.var(ddof=1)) / 2)
         self.assertAlmostEqual(want, res["features"][0]["smd"])
         self.assertAlmostEqual(0.1, res["features"][1]["missing_persuadables"])
-        shares = {r["group"]: r for r in res["tiers"]["signup_tier"]}
+        shares = {r["group"]: r for r in res["tiers"]["signup_tier"]["rows"]}
         self.assertAlmostEqual(0.5, shares["NEW"]["share_persuadables"])
         self.assertAlmostEqual(0.0, shares["NEW"]["share_rest"])
         json.dumps(res)
+
+    def test_tier_shares_use_roster_customers_and_count_the_rest_apart(self) -> None:
+        """리뷰 반례 — 두 집단 각 2명, 명부에 있는 고객(1명 · 2명)이 모두 NEW. 명부 밖을 분모에 넣으면 50% 대 100%."""
+        import pandas as pd
+
+        from src.decision.segments import persuadables_profile
+
+        ids = pd.Index(["P1", "P2", "R1", "R2", "R3"])
+        quad = pd.Series(["Persuadables", "Persuadables", "Sure Things", "Lost Causes", "Sure Things"], index=ids)
+        feats = pd.DataFrame({"x": [1.0, 2.0, 3.0, 4.0, 5.0]}, index=ids)
+        tiers = pd.DataFrame({"signup_tier": ["NEW", "NEW", "NEW", "UNKNOWN"]}, index=pd.Index(["P1", "R1", "R2", "R3"]))
+        axis = persuadables_profile(quad, feats, tiers)["tiers"]["signup_tier"]
+        shares = {r["group"]: r for r in axis["rows"]}
+        self.assertEqual((1.0, 2 / 3), (shares["NEW"]["share_persuadables"], shares["NEW"]["share_rest"]))
+        self.assertEqual({"n_total": 2, "n_in_roster": 1, "n_not_in_roster": 1, "n_roster_unknown": 0,
+                          "n_missing_in_roster": 0}, axis["coverage"]["persuadables"])
+        self.assertEqual((3, 0, 1), (axis["coverage"]["rest"]["n_in_roster"], axis["coverage"]["rest"]["n_not_in_roster"],
+                                     axis["coverage"]["rest"]["n_roster_unknown"]))   # 명부 UNKNOWN ≠ 명부 밖
+        self.assertAlmostEqual(1 / 3, shares["UNKNOWN"]["share_rest"])
 
     def test_net_value_is_the_s4_definition(self) -> None:
         import numpy as np
@@ -215,7 +312,21 @@ class TestRunSprintWiring(unittest.TestCase):
     def parts(self):
         from tests.test_feature_split_roster import _run_sprint_parts
 
-        return _run_sprint_parts("DECISION_API", "NotRun", "decision_fn", "uplift_test_report", "segment_hypotheses")
+        return _run_sprint_parts("DECISION_API", "NotRun", "decision_fn", "uplift_test_report", "segment_hypotheses",
+                                 "net_value_status")
+
+    def test_net_value_blank_reason(self) -> None:
+        import pandas as pd
+
+        fn = self.parts()["net_value_status"]
+        table = pd.DataFrame({"expected_net_value_krw": [None, 10.0]})
+        cate = pd.DataFrame({"T1": [0.1, 0.2]})
+        got = fn({"cate": cate, "clv": pd.Series([1.0, 2.0])}, {"T1": 500.0}, table)
+        self.assertEqual("not_run", got["status"])
+        self.assertIn("margin_rate 없음", got["reason"])
+        self.assertIn("처치별 계획 비용 없음", fn({"cate": cate, "clv": 1, "margin_rate": 0.3}, None, table)["reason"])
+        ok = fn({"cate": cate, "clv": pd.Series([1.0, 2.0]), "margin_rate": 0.3}, {"T1": 500.0}, table)
+        self.assertEqual(("ok", 1), (ok["status"], ok["n_blank"]))
 
     def test_report_statuses_and_hypotheses(self) -> None:
         parts = self.parts()
@@ -262,6 +373,16 @@ class TestCliLines(unittest.TestCase):
         self.assertEqual([], cli.uplift_test_lines({}, fmt))
         self.assertIn("없음 — 불러온 모델", cli.uplift_test_lines(
             {"test_report": {"status": "not_run", "reason": "불러온 모델"}}, fmt)[0])
+
+    def test_segment_hypothesis_labels(self) -> None:
+        from src import main as cli
+
+        segments = {"segments": [], "hypotheses": [
+            {"id": "H-SEG-1", "result": "not_supported", "not_supported_kind": None},
+            {"id": "H-SEG-2", "result": "partially_supported", "not_supported_kind": None}]}
+        self.assertTrue(cli.segment_lines(segments)[-1].endswith("H-SEG-1 지지되지 않음 · H-SEG-2 부분 지지"))
+        segments["hypotheses"][1] = {"id": "H-SEG-2", "result": "not_supported", "not_supported_kind": "contradicted"}
+        self.assertTrue(cli.segment_lines(segments)[-1].endswith("H-SEG-2 지지되지 않음(반증)"))
 
 
 if __name__ == "__main__":

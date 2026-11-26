@@ -231,8 +231,8 @@ def _two_proportions(x1: int, n1: int, x2: int, n2: int, alpha: float) -> dict[s
     l2, u2 = _wilson(x2, n2, z)
     diff = p1 - p2
     return {"share_new": p1, "share_existing": p2, "diff": diff,
-            "ci95": [diff - math.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2), diff + math.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2)],
-            "method": "Newcombe(1998) hybrid score interval"}
+            "ci": [diff - math.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2), diff + math.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2)],
+            "ci_level": round(1 - alpha, 10), "method": "Newcombe(1998) hybrid score interval"}
 
 
 #: 결과 전에 등록한 가설(DR-219-segments). 근거 자료로 정할 수 없는 기대라 가설로 두고 실행마다 같은 규칙으로 평가한다.
@@ -288,8 +288,14 @@ def new_segment_shift(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: p
                                                     "n_value_new": n_new_value, "n_value_existing": n_old_value})
     else:
         test = _two_proportions(lv_new, n_new_value, lv_old, n_old_value, alpha)
-        hyp.update(result="supported" if test["ci95"][0] > 0 else "not_supported",
-                   evidence={**test, "n_value_new": n_new_value, "n_value_existing": n_old_value, "alpha": alpha})
+        supported = test["ci"][0] > 0
+        # #326 리뷰 — 지지되지 않음은 차이를 지지할 근거가 부족하다는 뜻이다(반증이 아니다). 구간은 한 실행의 공통 점수 ·
+        # 분위수 경계로 나눈 고객 안의 비교라, 경계 추정의 불확실성까지 담은 실행 간 구간이 아니다 — 이 실행에 조건부인 근사다.
+        hyp.update(result="supported" if supported else "not_supported",
+                   not_supported_kind=None if supported else "insufficient_evidence",
+                   evidence={**test, "n_value_new": n_new_value, "n_value_existing": n_old_value, "alpha": alpha,
+                             "interval_note": ("이 실행의 점수 · 분위수 경계에 조건부인 근사 — 경계 추정의 불확실성은 "
+                                               "담지 않는다")})
     return {
         "rule": NEW_SEGMENT_SOURCE,
         "n_new": int(new.sum()), "n_existing": int(existing.sum()),
@@ -327,7 +333,9 @@ def persuadables_profile(quadrants: pd.Series, features: pd.DataFrame,
     """SRS UP-006 — Persuadables 대 나머지(4분면이 매겨진 고객)의 관측 Feature 차이(DR-219-segments 2부).
 
     Feature 마다 두 집단의 평균 · 결손 비율 · 표준화 평균차(SMD = 평균 차 ÷ √((분산₁ + 분산₂)/2), Austin 2009)를 내고
-    |SMD| 내림차순으로 싣는다. 판정 기준값은 쓰지 않는다. 관측 등급(``tiers``)이 있으면 축마다 등급 비율도 나란히.
+    |SMD| 내림차순으로 싣는다. 판정 기준값은 쓰지 않는다. 관측 등급(``tiers`` — #218 명부 t2 행, Eligible(t2)만)이 있으면
+    축마다 등급 비율도 나란히 싣는다. 비율의 분모는 **명부에 있는 고객**이다 — 명부 밖 고객은 ``coverage`` 에 따로 세고
+    명부가 매긴 ``UNKNOWN`` 등급과 섞지 않는다(2026-11-26 광진 리뷰, PR #328).
     """
     scored = quadrants[quadrants != UNSCORED]
     pers = scored.index[scored == "Persuadables"]
@@ -352,14 +360,30 @@ def persuadables_profile(quadrants: pd.Series, features: pd.DataFrame,
     if tiers is not None:
         frame = tiers.copy()
         frame.index = frame.index.map(str)
+        frame = frame[~frame.index.duplicated(keep=False)]
+        members = {"persuadables": pers.map(str), "rest": rest.map(str)}
         for col in frame.columns:
-            p_vals = frame[col].reindex(pers.map(str))
-            r_vals = frame[col].reindex(rest.map(str))
-            codes = sorted({str(v) for v in pd.concat([p_vals, r_vals]).dropna()})
-            tier_rows[str(col)] = [{"group": code,
-                                    "share_persuadables": float((p_vals == code).mean()) if len(p_vals) else None,
-                                    "share_rest": float((r_vals == code).mean()) if len(r_vals) else None}
-                                   for code in codes]
+            values, coverage = {}, {}
+            for name, ids in members.items():
+                inside = ids.isin(frame.index)
+                vals = frame[col].reindex(ids[inside])
+                values[name] = vals
+                coverage[name] = {"n_total": int(len(ids)), "n_in_roster": int(inside.sum()),
+                                  "n_not_in_roster": int((~inside).sum()),
+                                  "n_roster_unknown": int((vals.astype(object) == "UNKNOWN").sum()),
+                                  "n_missing_in_roster": int(vals.isna().sum())}
+            codes = sorted({str(v) for v in pd.concat(list(values.values())).dropna()})
+            rows_out = []
+            for code in codes:
+                row: dict[str, Any] = {"group": code}
+                for name, vals in values.items():
+                    count = int((vals.astype(object) == code).sum())
+                    denom = coverage[name]["n_in_roster"]
+                    row[f"n_{name}"] = count
+                    row[f"share_{name}"] = count / denom if denom else None
+                rows_out.append(row)
+            tier_rows[str(col)] = {"denominator": "명부(#218 t2 행 — Eligible(t2))에 있는 고객 — 명부 밖 고객은 coverage 에만",
+                                   "coverage": coverage, "rows": rows_out}
     return {"n_persuadables": int(len(pers)), "n_rest": int(len(rest)), "features": rows, "tiers": tier_rows,
             "measure": "SMD = (평균 Persuadables − 평균 나머지) ÷ √((분산₁ + 분산₂)/2) — Austin(2009). 판정 기준값 없음",
             "note": "관측 Feature(t2 Feature 표)만 쓴다(PRD §21). 원인이 아니라 차이다 — 그 Feature 가 반응을 만든다는 뜻이 아니다"}
