@@ -216,95 +216,24 @@ required_run_days  = warmup_days + max(label_window_days, clv_horizon_days) + ta
 </tbody></table></div>
 <div class="notice"><b>고객 수를 26,000으로 잡은 이유:</b> 고객 수도 기간과 마찬가지로 자유 파라미터다. 다만 T0 시점 Eligible 조건(§4.1)을 적용하면 생성 고객의 약 78%만 배정 대상이 되므로, <b>T/C 각 10,000명(PRD §29)을 Eligible 기준으로 채우려면</b> 26,000명이 필요하다. 배정 대상 규모를 다르게 잡고 싶으면 이 비율을 역산해 <code>num_customers</code>를 조정한다.</div>
 
-<h3>3.2 Persona 구성비</h3>
-<div class="table-wrap"><table>
-<thead><tr><th>Persona</th><th class="num">비율</th><th class="num">인원</th><th>특징</th><th>가입 시점 분포</th></tr></thead>
-<tbody>
-<tr><td>P1 VIP 충성</td><td class="num">8%</td><td class="num">2,080</td><td>고빈도·고AOV·저이탈</td><td>Day 0 일괄(기존 고객)</td></tr>
-<tr><td>P2 일반 충성</td><td class="num">27%</td><td class="num">7,020</td><td>안정적 반복구매</td><td>Day 0 일괄</td></tr>
-<tr><td>P3 가격민감</td><td class="num">22%</td><td class="num">5,720</td><td>쿠폰 반응 높음·정상가 전환 낮음</td><td>Day 0 일괄</td></tr>
-<tr><td>P4 탐색형</td><td class="num">18%</td><td class="num">4,680</td><td>탐색 많음·장바구니 이탈 높음</td><td>Day 0 일괄</td></tr>
-<tr><td>P5 이탈진행</td><td class="num">15%</td><td class="num">3,900</td><td>방문·구매 감쇠 진행</td><td>Day 0 일괄</td></tr>
-<tr><td>P6 신규가입</td><td class="num">10%</td><td class="num">2,600</td><td>이력 부족·온보딩 민감</td><td>Day 1 ~ 272 균등</td></tr>
-</tbody></table></div>
-<p>P6는 시뮬레이션 도중 가입한다. 따라서 T0 시점에 가입 60일 미만인 P6 일부는 Eligible에서 제외되며, 이 구조가 <b>이력 길이가 다른 고객이 섞인 현실적인 모집단</b>을 만든다.</p>
+<div class="notice"><b>생성 값은 내부 문서로 옮겼다 (2026-11-23, #163 리드 결정 2026-11-14).</b> Persona 구성비 · Hidden Trait 분포와 Persona별 모수 · 일별 행동 확률식 · 감쇠 시점 분포 · 처치 효과 생성식(§4.3)은 시뮬레이터 팀 문서 <code>docs/simulator_generation.md</code>(시스템 팀 must_not_read)에 있다. 생성 값의 정본은 <code>config/simulator_config.yaml</code>이다. 옮기기 전까지 이 절은 시스템 팀이 이미 읽어 온 부분이다.</div>
 
-<h3>3.3 Hidden Trait 생성</h3>
-<p>[0,1] 범위 Trait은 Persona별 평균 <code>μ<sub>p</sub></code>와 집중도 <code>κ = 12</code>로 재파라미터화한 Beta 분포에서 뽑는다. 이렇게 하면 Persona 안에서도 개인차가 생기고, Persona 간 경계가 겹친다.</p>
-<pre class="code">Trait ~ Beta(α, β),  α = μ_p · κ,  β = (1 − μ_p) · κ,  κ = 12
-연속량(AOV, purchase_cycle)은 LogNormal(ln median_p, σ = 0.45)
-모든 표본은 customer_seed = hash(random_seed, customer_id) 로 재현 가능하게 뽑는다</pre>
+<h3>3.2 Persona</h3>
+<p>Persona는 P1 VIP 충성 · P2 일반 충성 · P3 가격민감 · P4 탐색형 · P5 이탈진행 · P6 신규가입의 6종이다(PRD §17). Persona는 생성용 라벨이라 관측 데이터에 없다. P6은 시뮬레이션 도중 가입하므로, T0 시점에 가입 60일 미만인 고객은 Eligible(§4.1)에서 빠진다 — 이력 길이가 다른 고객이 섞인 모집단이 된다.</p>
 
-<div class="table-wrap"><table>
-<thead><tr><th>Hidden Trait</th><th>분포</th><th class="num">P1</th><th class="num">P2</th><th class="num">P3</th><th class="num">P4</th><th class="num">P5</th><th class="num">P6</th></tr></thead>
-<tbody>
-<tr><td><code>base_visit_frequency</code> (회/주)</td><td>Gamma(k=4)</td><td class="num">4.5</td><td class="num">2.8</td><td class="num">2.0</td><td class="num">3.5</td><td class="num">1.4</td><td class="num">2.2</td></tr>
-<tr><td><code>base_purchase_probability</code> (방문당)</td><td>Beta</td><td class="num">0.42</td><td class="num">0.30</td><td class="num">0.18</td><td class="num">0.10</td><td class="num">0.12</td><td class="num">0.20</td></tr>
-<tr><td><code>purchase_cycle</code> (일, 중앙값)</td><td>LogNormal</td><td class="num">6</td><td class="num">10</td><td class="num">16</td><td class="num">21</td><td class="num">30</td><td class="num">14</td></tr>
-<tr><td><code>average_order_value</code> (원, 중앙값)</td><td>LogNormal</td><td class="num">72,000</td><td class="num">48,000</td><td class="num">34,000</td><td class="num">39,000</td><td class="num">31,000</td><td class="num">36,000</td></tr>
-<tr><td><code>price_sensitivity</code></td><td>Beta</td><td class="num">0.20</td><td class="num">0.35</td><td class="num">0.80</td><td class="num">0.50</td><td class="num">0.45</td><td class="num">0.45</td></tr>
-<tr><td><code>coupon_sensitivity</code></td><td>Beta</td><td class="num">0.25</td><td class="num">0.40</td><td class="num">0.85</td><td class="num">0.45</td><td class="num">0.50</td><td class="num">0.60</td></tr>
-<tr><td><code>shipping_fee_sensitivity</code></td><td>Beta</td><td class="num">0.15</td><td class="num">0.40</td><td class="num">0.70</td><td class="num">0.50</td><td class="num">0.45</td><td class="num">0.55</td></tr>
-<tr><td><code>brand_loyalty</code></td><td>Beta</td><td class="num">0.85</td><td class="num">0.70</td><td class="num">0.25</td><td class="num">0.30</td><td class="num">0.30</td><td class="num">0.40</td></tr>
-<tr><td><code>marketing_responsiveness</code></td><td>Beta</td><td class="num">0.35</td><td class="num">0.45</td><td class="num">0.75</td><td class="num">0.40</td><td class="num">0.30</td><td class="num">0.65</td></tr>
-<tr><td><code>marketing_fatigue</code></td><td>Beta</td><td class="num">0.30</td><td class="num">0.25</td><td class="num">0.15</td><td class="num">0.30</td><td class="num">0.55</td><td class="num">0.10</td></tr>
-<tr><td><code>base_churn_propensity</code></td><td>Beta</td><td class="num">0.04</td><td class="num">0.10</td><td class="num">0.22</td><td class="num">0.28</td><td class="num">0.55</td><td class="num">0.30</td></tr>
-<tr><td><code>cart_abandonment_propensity</code></td><td>Beta</td><td class="num">0.15</td><td class="num">0.25</td><td class="num">0.45</td><td class="num">0.65</td><td class="num">0.40</td><td class="num">0.40</td></tr>
-<tr><td><code>search_propensity</code></td><td>Beta</td><td class="num">0.30</td><td class="num">0.35</td><td class="num">0.55</td><td class="num">0.85</td><td class="num">0.25</td><td class="num">0.60</td></tr>
-<tr><td><code>review_propensity</code></td><td>Beta</td><td class="num">0.30</td><td class="num">0.20</td><td class="num">0.15</td><td class="num">0.20</td><td class="num">0.10</td><td class="num">0.25</td></tr>
-<tr><td><code>cs_contact_propensity</code></td><td>Beta</td><td class="num">0.10</td><td class="num">0.10</td><td class="num">0.18</td><td class="num">0.12</td><td class="num">0.22</td><td class="num">0.20</td></tr>
-</tbody></table></div>
-<p><b>Shipping-sensitive</b>와 <b>Promotion-fatigued</b>는 별도 Persona가 아니라 위 Trait의 상위 분위(<code>shipping_fee_sensitivity &gt; 0.7</code>, <code>marketing_fatigue &gt; 0.6</code>)로 표현한다(PRD §19).</p>
+<h3>3.3 Hidden Trait</h3>
+<p>각 Persona 안에서도 고객마다 행동 성향(Hidden Trait)이 다르게 뽑힌다(PRD §18). 같은 seed면 같은 고객이 재현된다. Trait 값은 관측 데이터에 없다.</p>
 
-<h3>3.4 일별 행동 생성 규칙 (Tick = 1일)</h3>
-<pre class="code"># ① 방문
-p_visit(i,t) = clip( base_visit_frequency_i / 7
-                     × s_weekday(t) × s_season(t)
-                     × decay_i(t) × treat_boost_i(t),  0, 1 )
-
-s_weekday  = {월 .95, 화 .95, 수 1.00, 목 1.05, 금 1.20, 토 1.15, 일 .85}
-s_season   = 명절 직전 7일 1.40 / 연말 12월 1.20 / 그 외 1.00
-decay_i(t) = exp( −λ_i · max(0, t − t_decay_i) )        # 이탈 진행 감쇠
-             λ_i = 0.004 + 0.020 · base_churn_propensity_i
-             t_decay_i : P5는 Day 0, 그 외는 Bernoulli(base_churn_propensity_i)로
-                         진입 여부를 뽑고 Uniform(60, 500)에서 시점 샘플링
-
-# ② 구매 (방문한 경우에만)
-p_buy(i,t) = clip( base_purchase_probability_i
-                   × cycle_factor(i,t) × price_factor(i,t)
-                   × coupon_factor(i,t) × ship_factor(i,t), 0, 1 )
-
-cycle_factor = 1 − exp( −days_since_last_purchase / purchase_cycle_i )
-price_factor = 1 − price_sensitivity_i · (basket_price_index − 1)
-coupon_factor= 1 + coupon_sensitivity_i · active_discount_rate(i,t)
-ship_factor  = 1 − shipping_fee_sensitivity_i · 1{basket &lt; 40,000원} · 0.35
-
-# ③ 장바구니 / 세션
-basket_size    ~ Poisson(λ = 3 + 6 · (AOV_i / 45,000))     범위 [1, 18]
-order_amount   = Σ unit_price × quantity                    (AOV_i 중심으로 수렴)
-page_views     ~ Poisson(4 + 9 · search_propensity_i)
-session_duration ~ Gamma(shape=2, scale=110초) × (1 + search_propensity_i)
-cart_abandon   ~ Bernoulli(cart_abandonment_propensity_i)   # 담고 미구매
-
-# ④ 부수 행동
-review     ~ Bernoulli(review_propensity_i)      구매 후 1~5일 내
-cs_contact ~ Bernoulli(cs_contact_propensity_i / 30)  일 단위
-
-# ④ 구현 규칙 (#198, 리드 합의 2026-10-26 · 근거 docs/decisions/DR-198-aux-events.md)
-search       세션 시작 때 한 번 ~ Bernoulli(search_propensity_i × s_search × w_intent)
-             w_intent = 구매 의도 세션이면 w_search_intent, 아니면 1   (상한 1)
-             검색 세션의 전환 배수는 생성 모수가 아니라 실현 검증 항목이다
+<h3>3.4 일별 행동 생성 (Tick = 1일)</h3>
+<p>방문 → 구매 → 장바구니 · 세션 → 부수 행동 순으로 하루 단위 확률을 평가한다. 식과 계수는 내부 문서에 있다. 아래는 두 팀이 같은 뜻으로 써야 하는 <b>이벤트 정의</b>만 남긴 것이다(측정 계약 · DR-198 · DR-255 · DR-256이 인용한다).</p>
+<pre class="code"># ④ 부수 행동 — 이벤트 정의 (#198 · DR-198)
 return_visit 구매 뒤 첫 방문 세션을 session_start 대신 이 이벤트로 연다 (visit_count 이중 계산 방지)
-review       주문당 최대 1건 ~ Bernoulli(review_propensity_i × s_review), 당첨 주문의 한 상품
-             구매 시각부터 24시간 이상 144시간 미만(경과 1~5일, 날짜 차수가 아니다) 안의 첫 방문 세션을
-             여는 시각에 기록 — 그 안에 방문이 없으면 발생하지 않는다
-cs_contact   가입 이후 매일 ~ Bernoulli(cs_contact_propensity_i / 30 × s_cs), 세션 밖
-             s_search · w_search_intent · s_review · s_cs = config/simulator_config.yaml behavior.aux_events
-             (s_* 100% = 위 원문. #198 실측으로 s_review 40% · w_search_intent 175% 로 정했다 — 실효 확률이
-              원문과 다르다. 원문 문구는 리드 확인 뒤 고친다. 근거·실측: DR-198)</pre>
+review       주문당 최대 1건. 구매 시각부터 24시간 이상 144시간 미만(경과 1~5일, 날짜 차수가 아니다) 안의
+             첫 방문 세션을 여는 시각에 기록 — 그 안에 방문이 없으면 발생하지 않는다
+cs_contact   세션 밖 이벤트</pre>
 
 <h3>3.5 시간에 따른 행동 변화 (PRD §26 필수)</h3>
-<p>감쇠 <code>decay_i(t)</code>가 걸린 고객은 다음 5개 지표가 <b>동시에</b> 움직인다. 이 변화가 곧 Behavioral Change Feature(§8)가 잡아내야 할 신호다.</p>
+<p>이탈이 진행되는 고객은 다음 지표가 <b>동시에</b> 움직인다. 이 변화가 곧 Behavioral Change Feature(§8)가 잡아내야 할 신호다.</p>
 <div class="checks">
 <div>↑ <code>purchase_interval</code> — 구매 간격 증가</div>
 <div>↓ <code>visit_count_recent_2w</code> — 방문 빈도 감소</div>
@@ -313,7 +242,7 @@ cs_contact   가입 이후 매일 ~ Bernoulli(cs_contact_propensity_i / 30 × s_
 <div>↓ <code>search_to_purchase_conversion</code> — 탐색 대비 전환 하락</div>
 <div>↓ <code>repurchase_probability</code> — 재구매 확률 하락</div>
 </div>
-<div class="good"><b>설계 의도:</b> 감쇠는 <b>연속적</b>이고 시점이 고객마다 다르다. 특정 날짜에 일괄 스위치가 꺼지는 방식이면 모델이 날짜 하나만 학습해 AUC가 비현실적으로 높아진다(PRD Risk 2 “Unrealistically Easy Model”). 감쇠 시작 시점은 Uniform(60, 500)에서 개별 샘플링한다.</p></div>
+<div class="good"><b>설계 의도:</b> 감쇠는 <b>연속적</b>이고 시점이 고객마다 다르다. 특정 날짜에 일괄 스위치가 꺼지는 방식이면 모델이 날짜 하나만 학습해 AUC가 비현실적으로 높아진다(PRD Risk 2 “Unrealistically Easy Model”).</div>
 </section>
 
 <section class="section" id="s4"><h2>4. 처치군·통제군 정의와 결과 생성 규칙</h2>
@@ -337,6 +266,7 @@ cs_contact   가입 이후 매일 ~ Bernoulli(cs_contact_propensity_i / 30 × s_
 </div>
 
 <h3>4.2 무작위 배정 규칙</h3>
+<div class="notice"><b>번복 안내 (2026-11-23, DR-S3-assignment).</b> 아래는 v1.0 설계다. 실제 배정은 <code>run_sprint.rct_assign</code>이 비율을 고정한 순열 배정(층화 없음)으로 하고, 시뮬레이터는 <code>apply_treatment</code>로 받기만 한다. 배정 비율 · 주체는 DR-S3-assignment 상단 상자를 본다.</div>
 <pre class="code">assignment_method : stratified_random   (1 : 1)
 stratum           : persona (6) × recency_bucket (4: 14–27 / 28–41 / 42–89 / 90+ 일)
                     → 24개 층, 층 내에서 정확히 1:1 분할
@@ -359,29 +289,19 @@ W = 0 → Control   : T0 No Treatment (쿠폰·푸시·무료배송 모두 없�
 <p>결과는 <code>results/assignment_balance.json</code>에 저장하고 대시보드 A/B View에 노출한다.</p>
 
 <h3>4.3 처치 효과 생성 규칙 <span class="tag new">교수자 피드백 반영</span></h3>
-<p>처치는 <b>모든 고객에게 같은 크기로 작동하지 않는다.</b> 고객별 효과 <code>τ<sub>i</sub></code>를 Hidden Trait에서 결정론적으로 계산한 뒤, 관찰기간 동안 구매 확률에 승법으로 적용한다.</p>
-<pre class="code"># 고객별 처치 효과 (T0에서 1회 결정)
-τ_i = 0.55 · coupon_sensitivity_i · recency_gain_i          # 긍정 성분
-      − 0.45 · max(0, marketing_fatigue_i − 0.6) / 0.4       # 부정 성분(Sleeping Dog)
-
-recency_gain_i = clip( days_since_last_purchase_i(T0) / 28,  0.3, 1.5 )
-
-# 관찰기간 중 구매 확률 부스트 (Treatment군에만 적용)
-treat_boost_i(t) = 1 + τ_i · exp( −(t − T0) / 7 )      for  T0 ≤ t ≤ T0+13
-                 = 1                                    for  t &gt; T0+13
-
-# 쿠폰 사용 조건: order_amount ≥ 50,000원 인 주문에 한해 7,000원 차감
+<p>처치는 <b>모든 고객에게 같은 크기로 작동하지 않는다.</b> 고객별 효과 <code>τ<sub>i</sub></code>를 Hidden Trait에서 정한 뒤, 관찰기간 초반 구매 확률에 적용한다. 생성식은 내부 문서(<code>docs/simulator_generation.md</code>)에 있다.</p>
+<pre class="code"># 쿠폰 사용 조건: order_amount ≥ 50,000원 인 주문에 한해 7,000원 차감
 # 최소주문금액 미달 시 쿠폰 미사용 → 할인 비용 미발생, 메시지 비용만 발생</pre>
 
 <div class="two">
-<article class="card green"><h3>이 식이 만드는 4분면</h3><ul>
-<li><b>Persuadables</b> — <code>coupon_sensitivity</code> 높고 <code>fatigue</code> 낮음 → <code>τ &gt; 0</code>, 기저 유지확률 중간</li>
-<li><b>Sure Things</b> — 기저 구매확률이 이미 높아 처치 없이도 유지 → <code>Y(0)=Y(1)=1</code></li>
-<li><b>Lost Causes</b> — 감쇠가 깊게 진행 → 처치해도 <code>Y(1)=0</code></li>
-<li><b>Sleeping Dogs</b> — <code>marketing_fatigue &gt; 0.6</code> → <code>τ &lt; 0</code>, 처치가 역효과</li>
+<article class="card green"><h3>4분면</h3><ul>
+<li><b>Persuadables</b> — 처치가 유지를 만든 고객(<code>τ &gt; 0</code>)</li>
+<li><b>Sure Things</b> — 처치 없이도 유지 → <code>Y(0)=Y(1)=1</code></li>
+<li><b>Lost Causes</b> — 처치해도 이탈 → <code>Y(1)=0</code></li>
+<li><b>Sleeping Dogs</b> — 처치가 역효과(<code>τ &lt; 0</code>)</li>
 </ul></article>
 <article class="card rose"><h3>강도 가드레일 <span class="tag req">필수</span></h3>
-<p>PRD Risk 4 “Treatment Too Strong”에 대응해 생성 결과가 아래 범위를 벗어나면 <b>GATE 1 이전에</b> <code>τ_base = 0.55</code>를 조정한다. GATE 1 이후에는 조정하지 않는다.</p>
+<p>PRD Risk 4 “Treatment Too Strong”에 대응해 생성 결과가 아래 범위를 벗어나면 <b>GATE 1 이전에</b> 처치 효과 생성 계수를 조정한다. GATE 1 이후에는 조정하지 않는다.</p>
 <ul>
 <li>전체 ATE(유지율 차이): <b>3.0 ~ 6.0 %p</b></li>
 <li>쿠폰 사용률: <b>25 ~ 40%</b></li>
@@ -1021,11 +941,11 @@ for k, T0 in enumerate(campaign_index_dates):             # 1M / 6M / 12M … �
 <div class="table-wrap"><table>
 <thead><tr><th>지적</th><th>반영 내용</th><th>위치</th></tr></thead>
 <tbody>
-<tr><td>가상 고객 데이터 생성 규칙 구체화</td><td>Persona 구성비·Hidden Trait 분포표(15개 × 6 Persona)·일별 행동 확률식·시간 감쇠식을 수치까지 확정</td><td>§3</td></tr>
+<tr><td>가상 고객 데이터 생성 규칙 구체화</td><td>Persona 구성비·Hidden Trait 분포표(15개 × 6 Persona)·일별 행동 확률식·시간 감쇠식을 수치까지 확정(2026-11-23 내부 문서로 옮김 — §3 안내)</td><td>§3 · 내부 문서</td></tr>
 <tr><td>이탈 정의 구체화</td><td>운영 상태 정의(28/42일)와 모델 라벨 정의(전향 42일 window)를 <b>분리</b>하고 임계값 확정 절차를 명시</td><td>§5</td></tr>
-<tr><td>처치군·통제군 정의</td><td>Eligible 조건·층화 무작위 배정(24층 1:1)·배정 시각·Balance Check 기준(SMD&lt;0.1)</td><td>§4.1 – 4.2</td></tr>
-<tr><td>무작위 처치 배정 명시</td><td><code>W ~ Bernoulli(0.5)</code>, PCG64 seed 규칙, Feature Cutoff 이후 배정으로 입력이 W를 볼 수 없게 설계</td><td>§4.2</td></tr>
-<tr><td>결과 생성 규칙 명시</td><td><code>τ_i</code> 산출식과 관찰기간 부스트 감쇠식, 4분면이 이 식에서 어떻게 나오는지 서술</td><td>§4.3</td></tr>
+<tr><td>처치군·통제군 정의</td><td>Eligible 조건·층화 무작위 배정(24층 1:1)·배정 시각·Balance Check 기준(SMD&lt;0.1) — 배정 방식은 2026-11-23 번복(§4.2 안내)</td><td>§4.1 – 4.2</td></tr>
+<tr><td>무작위 처치 배정 명시</td><td><code>W ~ Bernoulli(0.5)</code>, PCG64 seed 규칙, Feature Cutoff 이후 배정으로 입력이 W를 볼 수 없게 설계 — 배정 방식은 2026-11-23 번복(§4.2 안내)</td><td>§4.2</td></tr>
+<tr><td>결과 생성 규칙 명시</td><td>처치 효과 생성식 · 4분면 정의(2026-11-23 생성식은 내부 문서로 옮김 — §4.3에는 4분면 정의만 남음)</td><td>§4.3 · 내부 문서</td></tr>
 <tr><td>캠페인 비용</td><td>메시지 30원(전원)·쿠폰 7,000원(사용 시)·고정비 100,000원·AI 투자비 상각까지 확정. 회계 발생 시점 규칙 포함</td><td>§6.2 – 6.4</td></tr>
 <tr><td>반응·이탈 관찰기간</td><td>반응 14일 / 이탈 42일 / CLV 365일로 <b>분리 정의</b>, 시간축 도해</td><td>§2</td></tr>
 <tr><td>캠페인 이후 정보 배제</td><td>Feature Cutoff = T0−1일 23:59:59 단일 선 + 금지 컬럼 목록 + 자동 검증 테스트 8종</td><td>§8 · §11.1</td></tr>
@@ -1186,22 +1106,14 @@ time_control:
   api: [init, advance, snapshot, restore, apply_treatment]
   split_invariance_test: true  # advance(a)+advance(b) == advance(a+b)
   backend_only: true           # UI 우회, Event Sink 직접 기록
-personas:
-  vip_loyal: {ratio: 0.08}     loyal: {ratio: 0.27}
-  price_sensitive: {ratio: 0.22}  explorer: {ratio: 0.18}
-  churn_progressing: {ratio: 0.15}  new_customer: {ratio: 0.10}
-traits:
-  concentration_kappa: 12
-  lognormal_sigma: 0.45
+# personas · traits — 생성 값은 내부 문서(docs/simulator_generation.md, 시스템 팀 must_not_read)로 옮겼다 (#163)
 churn:
   at_risk_days: 28             # GATE 1 절차 통과 후 Lock
   no_purchase_days: 42
   no_login_days: 60
   rule_operator: OR
   label_window_days: 42        # 고정
-experiment:
-  assignment_method: stratified_random
-  strata: [persona, recency_bucket]
+experiment:                    # 배정 방식은 번복됐다 — §4.2 안내 (DR-S3-assignment)
   treatment_min_size: 10000
   control_min_size: 10000
   response_window_days: 14
