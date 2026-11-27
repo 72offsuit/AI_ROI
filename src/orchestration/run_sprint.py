@@ -210,6 +210,7 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "build_split_roster": ("src.decision.split_roster", "build_split_roster"),
     # #303 ML-010 — 관측 등급별 ML-009 지표(t1 시간 순서 검증, DR-303)
     "tier_performance": ("src.decision.churn", "tier_performance"),
+    "segment_performance": ("src.decision.churn", "segment_performance"),
     "order_items_frame": ("src.decision.split_roster", "order_items_frame"),
 }
 
@@ -2130,6 +2131,91 @@ def churn_tier_performance(ctx: Mapping[str, Any], roster_record: Mapping[str, A
         return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
 
 
+def churn_segment_performance(ctx: Mapping[str, Any], method: Any) -> dict[str, Any]:
+    """#303 ML-010 AI 세그먼트 축 — t1 Validation 고객에게 **t1 라벨을 쓰지 않은 t1 입력**으로 세그먼트를 매기고
+    세그먼트별 ML-009 지표를 낸다(DR-303 「AI 세그먼트 축」).
+
+    - 고객: Validation(탐색 RCT T0 군) 중 Uplift **test 분할** 고객. 학습 분할 고객의 CATE 는 그 고객의 [t1, t2) 결과로
+      학습된 값이라 세그먼트가 라벨에 따라 갈린다 — 그 고객은 세그먼트 없이 전체 지표에만 들어간다(수를 남긴다).
+    - 이탈 점수: 고른 모델의 시간 순서 검증 점수(앞 기준일 학습). 최종 모델은 t1 라벨로 학습했다.
+    - CATE: test 분할 예측(``uplift_eval.fitted_method`` 와 같은 메타러너). CLV: 12개월 모델(t1 미만 이력으로 학습)로 t1 기준
+      이력을 매긴 값. NEW: #218 명부 t1 validation 행의 가입 시기 등급(DR-221).
+    - 배정은 ``assign_segments`` 그대로(경계는 배정 고객 안의 분위수 — 생산과 같은 정의). t2 세그먼트를 가져오지 않는다 —
+      t2 Feature 창의 마지막 42일이 t1 라벨 창 [t1, t2) 이다.
+
+    결과 단계가 아니다 — 못 내면 사유만 남긴다.
+    """
+    try:
+        pd = _pd()
+        validation = ctx.get("churn_validation")
+        if not validation:
+            raise NotRun(ctx.get("churn_validation_reason") or "churn 단계에 도달하지 않았다 — 시간 순서 검증 예측이 없다")
+        test = ctx.get("uplift_test")
+        if not test:
+            raise NotRun("Uplift test 분할 예측이 없다 — 이 고객의 결과로 학습하지 않은 CATE 가 없어 세그먼트를 매기지 않는다")
+        if not method:
+            raise NotRun("Uplift 학습에 쓴 메타러너를 모른다")
+        cate_all = (test.get("cate") or {}).get(method)
+        if cate_all is None:
+            raise NotRun(f"Uplift test 분할에 {method} CATE 가 없다")
+        treatment = pd.Series(test["treatment"])
+        treatment.index = treatment.index.map(str)
+        control = pd.Index(treatment.index[treatment == "T0"])
+        validation_ids = pd.Index(pd.Series(validation["y"]).index.map(str))
+        ids = validation_ids[validation_ids.isin(control)]
+        if not len(ids):
+            raise NotRun("Validation 고객 중 Uplift test 분할 T0 고객이 없다")
+        chosen = validation["chosen"]
+        churn_p = pd.Series(validation["models"][chosen]["score"]).astype(float)
+        churn_p.index = churn_p.index.map(str)
+        churn_p = churn_p.reindex(ids)
+        cate = cate_all.copy()
+        cate.index = cate.index.map(str)
+        cate = cate.reindex(ids)
+
+        clv, clv_input = None, {"status": "not_run", "reason": "12개월 CLV 모델이 없다 — 가치 축 대신 가치 모름 라벨"}
+        if ctx.get("clv_12m_model") is not None and ctx.get("events_t2") is not None:
+            values = decision_fn("predict_lifetime")(ctx["clv_12m_model"], ctx["events_t2"], ctx["t1"])
+            values.index = values.index.map(str)
+            clv = values.reindex(ids).astype(float)
+            clv_input = {"status": "ok", "source": "12개월 CLV 모델(t1 미만 구매 이력으로 학습) — t1 기준 이력",
+                         "n_missing": int(clv.isna().sum())}
+
+        flags, new_input = None, {"status": "not_run", "reason": "명부 t1 행이 없다 — NEW 를 판정하지 않았다",
+                                  "n_not_judged": int(len(ids))}
+        roster = ctx.get("split_roster")
+        if roster is not None and len(roster):
+            rows = roster[(roster["origin"] == "t1") & (roster["role"] == "validation")]
+            if len(rows):
+                signup = rows.set_index(rows["customer_id"].map(str))["signup_tier"]
+                flags = decision_fn("is_new_from_signup_tier")(signup).reindex(ids)
+                # #326 리뷰와 같은 이유 — 명부 행이 없는 고객은 NEW 가 아닌 쪽으로 배정되므로 판정하지 않은 수를 숨기지 않는다
+                in_roster = ids.isin(signup.index)
+                n_not_judged = int((~in_roster).sum())
+                new_input = {"status": "partial" if n_not_judged else "ok",
+                             "source": "#218 명부 t1 validation 행의 signup_tier(DR-221 — 가입 180일 미만 = NEW)",
+                             "n_new": int(flags.eq(True).sum()), "n_in_roster": int(in_roster.sum()),
+                             "n_unknown_in_roster": int(signup.reindex(ids[in_roster]).astype(object).eq("UNKNOWN").sum()),
+                             "n_not_judged": n_not_judged}
+                if n_not_judged:
+                    new_input["reason"] = (f"명부 t1 validation 행에 없는 세그먼트 고객 {n_not_judged}명은 NEW 를 판정하지 않았다 — "
+                                           "가입일을 모르는 고객처럼 가치 세그먼트로 배정된다")
+        segments = decision_fn("assign_segments")(churn_p, cate, clv, **({"is_new": flags} if flags is not None else {}))
+        inputs = {
+            "population": "Validation(탐색 RCT T0 군) ∩ Uplift test 분할",
+            "n_validation": int(len(validation_ids)), "n_test_split_control": int(len(control)), "n_segmented": int(len(ids)),
+            "churn_score": f"{chosen} 의 시간 순서 검증 점수(앞 기준일 학습 — t1 라벨을 쓰지 않았다)",
+            "uplift": f"{method} 의 test 분할 CATE(이 고객의 결과로 학습하지 않았다)",
+            "clv": clv_input, "new": new_input,
+            "thresholds": {k: (None if v is None else float(v)) for k, v in (segments.attrs.get("thresholds") or {}).items()},
+        }
+        return decision_fn("segment_performance")(validation, segments, inputs=inputs)
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+
+
 def temporal_holdout_scope(labeled: Any, eligible: Any, treated: Any, roster: Any) -> tuple[list[Any], dict[str, Any]]:
     """#319 리뷰 — 기존 시간 평가(DR-179, 기존 고객의 미래 시점)에 넘길 고객과 그 근거.
 
@@ -2961,6 +3047,8 @@ def run(config: SprintConfig) -> Path:
         roster_record = ctx.get("split_roster_record") or prepare_split_roster(ctx)
         # #303 ML-010 — 관측 등급별 ML-009 지표(t1 Validation). 명부의 t1 등급 · 역할을 읽는다.
         churn_eval["by_tier"] = churn_tier_performance(ctx, roster_record)
+        # #303 ML-010 AI 세그먼트 축 — t1 라벨을 쓰지 않은 t1 입력으로 매긴 세그먼트(Uplift test 분할 T0 고객)
+        churn_eval["by_segment"] = churn_segment_performance(ctx, uplift_eval.get("fitted_method"))
         if isinstance(roster_record.get("official_test"), Mapping) and "temporal_holdout_scope" in ctx:
             roster_record = {**roster_record, "official_test": {**roster_record["official_test"],
                                                                 "temporal_holdout": ctx["temporal_holdout_scope"]}}

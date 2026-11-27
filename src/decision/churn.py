@@ -1088,6 +1088,86 @@ def tier_performance(validation: Mapping[str, Any], roster_t1: pd.DataFrame,
             "hypotheses": evaluate_tier_hypotheses(result["axes"])}
 
 
+# ── #303 ML-010 AI 세그먼트 축(SEG-002, DR-303 「AI 세그먼트 축」) ─────────────────────────────
+
+SEGMENT_AXIS = "ai_segment"
+#: AI 세그먼트 코드 → 뜻(``segments.assign_segments`` 의 출력). PRD §20 S1~S6 · Sleeping Dogs 뒤에 가치를 모를 때 ·
+#: 점수 결손 라벨을 둔다 — 어떤 고객군도 빼지 않는다(SRS ML-010).
+SEGMENT_LABELS: dict[str, str] = {
+    "HV_PERSUADABLE": "고가치 · 설득 가능(S1)", "HV_SURE_THING": "고가치 · 그냥 둬도 유지(S2)",
+    "HV_LOST_CAUSE": "고가치 · 반응 없음(S3)", "LV_PERSUADABLE": "저가치 · 설득 가능(S4)",
+    "LV_LOST_CAUSE": "저가치 · 반응 없음(S5)", "NEW": "신규 가입(S6)", "SLEEPING_DOG": "처치 역효과(Sleeping Dogs)",
+    "CLV_UNKNOWN_PERSUADABLE": "가치 모름 · 설득 가능", "CLV_UNKNOWN_NEAR_ZERO": "가치 모름 · 반응 ≈ 0",
+    "UNSCORED": "점수 결손 — 판정 불가",
+}
+#: SRS SEG-002 세그먼트(가설 판정 대상). 가치 모름 · 점수 결손 라벨은 싣지만 판정하지 않는다.
+SEG002_SEGMENTS: tuple[str, ...] = ("HV_PERSUADABLE", "HV_SURE_THING", "HV_LOST_CAUSE", "LV_PERSUADABLE",
+                                    "LV_LOST_CAUSE", "NEW", "SLEEPING_DOG")
+#: 고른 모델의 이탈 점수로 가른 세그먼트 — ``assign_segments`` 는 고가치 · |uplift| ≤ 띠 고객을 이탈 점수 분위수로
+#: 둘로 나눈다. 그 안에서는 점수 범위가 잘려 그 모델의 ROC-AUC 가 구조적으로 낮아진다(같은 고객의 기준선과 짝지어도
+#: 고른 모델 쪽만 잘린다). 값 · 검정은 싣고 표시하되 가설 판정에 쓰지 않는다(DR-303).
+SCORE_RESTRICTED_SEGMENTS: tuple[str, ...] = ("HV_SURE_THING", "HV_LOST_CAUSE")
+
+#: 결과 전에 등록한 가설(DR-303 「AI 세그먼트 축」). 평가 결과 표기는 ``TIER_HYPOTHESES`` 와 같다.
+SEGMENT_HYPOTHESES: tuple[dict[str, str], ...] = (
+    {"id": "H-ML010-4",
+     "statement": ("고른 모델은 표본 부족이 아니고 이탈 점수로 가르지 않은 어느 AI 세그먼트(SEG-002)에서도 규칙 기준선보다 "
+                   "ROC-AUC 가 유의하게 낮지 않다"),
+     "why": ("혼합 전략(PRD §61.1 · S6, #305)이 세그먼트마다 규칙과 AI 중 무엇을 쓸지 정하려면 세그먼트별로 모델이 규칙보다 "
+             "나은지 알아야 한다 — 세그먼트별 이탈 성능은 계산한 적이 없다"),
+     "evaluation": ("below_baseline 세그먼트가 없으면 지지, 있으면 지지되지 않음(그 세그먼트 목록), 판정한 세그먼트가 없으면 "
+                    "판정 불가. 이탈 점수로 가른 세그먼트(HV_SURE_THING · HV_LOST_CAUSE)와 SEG-002 밖 라벨은 판정에 쓰지 않는다")},
+)
+
+
+#: 결과를 읽는 문구 — H-ML010-1 과 같은 이유(#325 리뷰): "지지"가 같음 · 우월의 증거로 읽히지 않게 한다. 규칙은 그대로다.
+SEGMENT_READINGS: dict[str, str] = {
+    "supported": ("판정한 세그먼트에서 기준선 대비 유의한 열세가 관측되지 않음 — 같다는 증거는 아니고, 같은 Validation 에서 "
+                  "모델을 골라 모델에 유리한 쪽으로 치우칠 수 있다(rule.selection_effect). 이탈 점수로 가른 세그먼트는 판단 밖이다"),
+    "not_supported": "기준선보다 유의하게 낮은 세그먼트가 있다(evidence.below_baseline)",
+    "undetermined": "판정한 세그먼트가 없다 — 표본 부족 · 검정 불가(evidence.not_judged)",
+}
+
+
+def evaluate_segment_hypotheses(rows: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """``SEGMENT_HYPOTHESES`` 를 이 실행의 세그먼트별 결과로 평가한다 — 규칙은 결과 전에 고정했다(DR-303)."""
+    eligible = [r for r in rows if r.get("group") in SEG002_SEGMENTS and r["group"] not in SCORE_RESTRICTED_SEGMENTS]
+    judged = [r for r in eligible if (r.get("tests") or {}).get("vs_baseline")]
+    below = [r["group"] for r in judged if r["tests"]["vs_baseline"]["below"]]
+    result = "undetermined" if not judged else ("not_supported" if below else "supported")
+    evidence = {"n_groups_judged": len(judged), "groups_judged": [r["group"] for r in judged], "below_baseline": below,
+                "not_judged": {r["group"]: (r.get("small_group_reason") or "검정 불가(한 클래스뿐인 쪽이 있다)")
+                               for r in eligible if r not in judged},
+                "excluded_score_restricted": list(SCORE_RESTRICTED_SEGMENTS)}
+    return [{**SEGMENT_HYPOTHESES[0], "result": result, "reading": SEGMENT_READINGS[result], "evidence": evidence}]
+
+
+def segment_performance(validation: Mapping[str, Any], segments: pd.Series, *,
+                        inputs: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """#303 ML-010 — AI 세그먼트(SEG-002)별 ML-009 지표. 등급 축과 같은 ``group_performance`` · 같은 규칙이다.
+
+    ``segments``: index = customer_id, 값 = ``assign_segments`` 코드. 실행 루프가 t1 라벨을 쓰지 않은 t1 입력으로
+    매긴다(DR-303 「AI 세그먼트 축」 — 고객은 Validation 중 탐색 RCT test 분할 T0 고객). 세그먼트가 없는 Validation
+    고객은 수를 남기고 전체 지표에만 들어간다. ``inputs`` 는 세그먼트 입력의 출처 · 수 · 경계값 기록이다.
+
+    이탈 점수로 가른 세그먼트(``SCORE_RESTRICTED_SEGMENTS``)는 ``score_restricted`` 로 표시한다 — 약한 고객군 표시 ·
+    검정은 그대로 싣지만 점수 범위가 잘린 결과라 가설 판정에 쓰지 않는다.
+    """
+    groups = pd.DataFrame({SEGMENT_AXIS: pd.Series(segments, dtype=object)})
+    result = group_performance(
+        validation, groups, {SEGMENT_AXIS: SEGMENT_LABELS},
+        population="t1 시간 순서 검증 모집단(탐색 RCT T0 군 — 앞 기준일 학습 모델로 평가)",
+        groups_source="t1 입력(t1 라벨을 쓰지 않은 값)으로 매긴 AI 세그먼트 — 탐색 RCT test 분할 T0 고객(DR-303)")
+    rows = result["axes"][SEGMENT_AXIS]
+    for row in rows:
+        row["score_restricted"] = row["group"] in SCORE_RESTRICTED_SEGMENTS
+    rule = {**result["rule"], "score_restricted": (
+        f"{' · '.join(SCORE_RESTRICTED_SEGMENTS)} 는 고른 모델의 이탈 점수로 가른 고객군이다 — 점수 범위가 잘려 그 모델의 "
+        "ROC-AUC 가 구조적으로 낮다. 값 · 검정은 싣고 가설 판정에 쓰지 않는다")}
+    return {**result, "rule": rule, "axis_names": {SEGMENT_AXIS: "AI 세그먼트"}, "inputs": dict(inputs or {}),
+            "hypotheses": evaluate_segment_hypotheses(rows)}
+
+
 def _group_names(model, X: pd.DataFrame) -> list[str]:
     """전처리 후 컬럼 → 원 Feature 이름(결측 지시자는 원 Feature 로 묶는다)."""
     imputer = model[0][-1]
