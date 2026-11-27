@@ -497,6 +497,54 @@ def _legacy_churn_selection(churn: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
+#: #303 ML-010 — 관측 등급 축 이름. 결과 파일 ``by_tier.axis_names`` 가 없을 때 쓴다(CLI 는 결정 모듈을 import 하지 않는다).
+TIER_AXIS_NAMES: dict[str, str] = {"value_tier": "가치 등급", "frequency_tier": "구매 횟수",
+                                   "signup_tier": "가입 시기", "category_tier": "주 구매 상품군"}
+
+
+def churn_tier_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
+    """#303 ML-010 — 관측 등급별 고른 모델의 ROC-AUC(t1 Validation). 표본 부족 · 약한 고객군을 빼지 않고 표시한다.
+
+    전체 지표(혼동행렬 · 상위 리프트 · 보정 등)와 후보 · 기준선 값은 ``churn_eval.by_tier`` 에 있다.
+    """
+    tiers = churn.get("by_tier")
+    if not isinstance(tiers, Mapping):
+        return []
+    if tiers.get("status") != "ok":
+        state = "보류" if tiers.get("status") == "withheld" else "없음"
+        return [f"             등급별 지표(ML-010) {state} — {tiers.get('reason') or '사유가 적혀 있지 않다'}"]
+    chosen, baseline = tiers.get("chosen"), tiers.get("baseline")
+    overall = tiers.get("overall") or {}
+    head = (f"             등급별 ROC-AUC (ML-010 · t1 Validation · {chosen}) — 전체 "
+            f"{fmt((overall.get(chosen) or {}).get('roc_auc'))}")
+    if baseline:
+        head += f" · 기준선 {baseline} {fmt((overall.get(baseline) or {}).get('roc_auc'))}"
+    lines = [head]
+    names = {**TIER_AXIS_NAMES, **(tiers.get("axis_names") or {})}
+    for axis, rows in (tiers.get("axes") or {}).items():
+        cells = []
+        for row in rows:
+            auc = ((row.get("models") or {}).get(chosen) or {}).get("roc_auc")
+            cells.append(f"{'!' if row.get('weak') else ''}{row.get('group')} {fmt(auc)}"
+                         f"(n {row.get('n')}{' 표본 부족' if row.get('small_group') else ''})")
+        lines.append(f"               {names.get(axis, axis)}  " + " · ".join(cells))
+    alpha = (tiers.get("rule") or {}).get("alpha")
+    level = "—" if not isinstance(alpha, (int, float)) else f"{1 - alpha:.0%}"
+    lines.append(f"               ! 약한 고객군 = 같은 고객의 기준선보다, 또는 나머지 고객보다 ROC-AUC 가 유의하게 낮음"
+                 f"(DeLong {level}, 표본 부족 제외) — 표시만, 적용 범위는 Validation 으로만 정한다")
+    results = {"supported": "지지", "not_supported": "지지되지 않음", "undetermined": "판정 불가"}
+    hypotheses = [h for h in tiers.get("hypotheses") or [] if isinstance(h, Mapping)]
+    if hypotheses:
+        lines.append("               가설(결과 전 등록, DR-303) " + " · ".join(
+            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}" for h in hypotheses))
+    missing = tiers.get("n_without_group")
+    if missing:
+        check = tiers.get("roster_check") or {}
+        lines.append(f"               ! 등급 없는 Validation 고객 {missing}명(명부에 없음 {check.get('n_not_in_roster')} · "
+                     f"역할이 validation 아님 {check.get('n_role_not_validation')}) — 전체 지표에만 들어갔다")
+    return lines
+
+
 def uplift_selection_state(uplift: Mapping[str, Any]) -> tuple[str, str]:
     """#320 리뷰 — Uplift 학습 방법이 어떻게 정해졌나. (상태, 설명) — 상태는 selected · not_selected · loaded · absent.
 
@@ -613,6 +661,7 @@ def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> lis
         if isinstance(holdout, Mapping):
             lines.append(f"             시간 홀드아웃 {holdout.get('name')} ROC-AUC {fmt(holdout.get('roc_auc'))} "
                          f"(n={holdout.get('n_test')}) — 선택 뒤 보고만")
+        lines.extend(churn_tier_lines(churn, fmt))
     uplift = _read_json(run_dir / "uplift_eval.json")
     if uplift.get("status") == "ok":
         lines.extend(uplift_selection_lines(uplift, fmt))
