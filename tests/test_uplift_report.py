@@ -41,6 +41,28 @@ def fake_test(n=4000, seed=0, persuadable_effect=0.2, rest_effect=0.0, sd_effect
             "primary_arm": "T3", "best_method": "t_learner"}, group
 
 
+def cell_test(spec):
+    """칸 수를 정해 둔 test 분할 — ``spec[군] = (처치 수, 처치 유지 수, 대조 수, 대조 유지 수)``, 군은 P · R · SD.
+
+    CATE 는 P 0.5 · R 0 · SD −0.5 로 같고, R 이 고객의 60% 이상이어야 '≈0 띠' 반폭이 0 이 되어 4분면이 군과 그대로 맞는다.
+    처치군은 T1 하나다. 결과가 정해져 있어 효과 · 구간을 손으로 셀 수 있다.
+    """
+    import pandas as pd
+
+    base = {"P": 0.5, "R": 0.0, "SD": -0.5}
+    arms, ys, us = [], [], []
+    for g, (n_t, r_t, n_c, r_c) in spec.items():
+        for n, r, arm in ((n_t, r_t, "T1"), (n_c, r_c, "T0")):
+            arms += [arm] * n
+            ys += [1.0] * r + [0.0] * (n - r)
+            us += [base[g]] * n
+    assert sum(spec["R"][i] for i in (0, 2)) >= 0.6 * len(arms)
+    ids = pd.Index([f"C{i:05d}" for i in range(len(arms))])
+    u = pd.Series(us, index=ids)
+    return {"treatment": pd.Series(arms, index=ids), "y": pd.Series(ys, index=ids),
+            "cate": {"t_learner": pd.DataFrame({"T1": u, "T2": u, "T3": u, "T4": u})}, "primary_arm": "T1"}
+
+
 @unittest.skipUnless(DEPS, REASON)
 class TestDeciles(unittest.TestCase):
     def test_rows_equal_the_hand_computed_split(self) -> None:
@@ -206,6 +228,59 @@ class TestQuadrantValidation(unittest.TestCase):
         self.assertIn("적은 쪽 < 10명", ev["reason"])
         json.dumps(h)
 
+    def test_contradiction_of_either_claim_decides_the_whole(self) -> None:
+        """재리뷰 반례 — ② 반증이면 ① 이 근거 부족 · 판정 불가여도 전체가 반증이다(두 주장의 논리곱)."""
+        from src import main as cli
+        from src.decision.uplift_report import quadrant_validation
+
+        sd = (400, 320, 200, 100)                         # Sleeping Dogs 효과 0.8 − 0.5 = +30%p → ② 반증
+        r = (4000, 2000, 2000, 1000)
+        for label, p, part1 in (("① 근거 부족", (400, 200, 200, 100), "inconclusive"),
+                                ("① 판정 불가", (50, 25, 50, 25), "undetermined")):
+            with self.subTest(label):
+                h = quadrant_validation(cell_test({"P": p, "R": r, "SD": sd}), "t_learner")
+                ev = h["evidence"]["sleeping_dogs"]
+                self.assertAlmostEqual(0.30, ev["effect"])
+                self.assertGreater(ev["ci"][0], 0)
+                self.assertEqual({"persuadables_vs_rest": part1, "sleeping_dogs_le_zero": "contradicted"}, h["parts"])
+                self.assertEqual(("not_supported", "contradicted"), (h["result"], h["not_supported_kind"]))
+                self.assertEqual([{"claim": "sleeping_dogs_le_zero", "reading": "② Sleeping Dogs 효과 > 0"}],
+                                 h["contradicted_by"])
+                line = cli.segment_lines({"segments": [], "hypotheses": [h]})[-1]
+                self.assertTrue(line.endswith("H-SEG-2 지지되지 않음(반증 — ② Sleeping Dogs 효과 > 0)"), line)
+                json.dumps(h)
+
+    def test_persuadables_interval_on_the_opposite_side_is_a_contradiction(self) -> None:
+        """재리뷰 반례 — ① 구간 전체가 0 아래면 근거 부족이 아니라 반증이다. ② 미확정(작은 칸)이어도 전체가 반증."""
+        from src.decision.uplift_report import quadrant_validation
+
+        h = quadrant_validation(cell_test({"P": (400, 100, 200, 100), "R": (4000, 2000, 2000, 1000),
+                                           "SD": (50, 25, 50, 25)}), "t_learner")
+        ev = h["evidence"]
+        self.assertLess(ev["ci"][1], 0)                    # P 효과 −25%p, 나머지 ≈ 0
+        self.assertEqual({"persuadables_vs_rest": "contradicted", "sleeping_dogs_le_zero": "undetermined"}, h["parts"])
+        self.assertEqual(("not_supported", "contradicted"), (h["result"], h["not_supported_kind"]))
+        self.assertEqual(["persuadables_vs_rest"], [c["claim"] for c in h["contradicted_by"]])
+        self.assertEqual("contradicted", ev["persuadables_result"])
+        # 구간이 0 을 포함하면 반증이 아니라 미확정 → 근거 부족
+        h = quadrant_validation(cell_test({"P": (400, 200, 200, 100), "R": (4000, 2000, 2000, 1000),
+                                           "SD": (50, 25, 50, 25)}), "t_learner")
+        self.assertLess(h["evidence"]["ci"][0], 0)
+        self.assertGreater(h["evidence"]["ci"][1], 0)
+        self.assertEqual(("not_supported", "insufficient_evidence", []),
+                         (h["result"], h["not_supported_kind"], h["contradicted_by"]))
+        self.assertEqual("inconclusive", h["parts"]["persuadables_vs_rest"])
+
+    def test_both_claims_contradicted_are_both_listed(self) -> None:
+        from src import main as cli
+        from src.decision.uplift_report import quadrant_validation
+
+        h = quadrant_validation(cell_test({"P": (400, 100, 200, 100), "R": (4000, 2000, 2000, 1000),
+                                           "SD": (400, 320, 200, 100)}), "t_learner")
+        self.assertEqual(["persuadables_vs_rest", "sleeping_dogs_le_zero"], [c["claim"] for c in h["contradicted_by"]])
+        line = cli.segment_lines({"segments": [], "hypotheses": [h]})[-1]
+        self.assertIn("(반증 — ① Persuadables 효과 ≤ 나머지 · ② Sleeping Dogs 효과 > 0)", line)
+
     def test_report_bundle_and_unknown_method(self) -> None:
         from src.decision.uplift_report import uplift_report
 
@@ -284,6 +359,25 @@ class TestProfileAndNetValue(unittest.TestCase):
         self.assertEqual((3, 0, 1), (axis["coverage"]["rest"]["n_in_roster"], axis["coverage"]["rest"]["n_not_in_roster"],
                                      axis["coverage"]["rest"]["n_roster_unknown"]))   # 명부 UNKNOWN ≠ 명부 밖
         self.assertAlmostEqual(1 / 3, shares["UNKNOWN"]["share_rest"])
+
+    def test_tier_part_is_not_run_without_a_roster(self) -> None:
+        """재리뷰 제안 — 명부가 없으면 Feature 차이는 내고 등급 부분만 not_run 과 사유를 남긴다."""
+        import pandas as pd
+
+        from src.decision.segments import persuadables_profile
+
+        ids = pd.Index(["P1", "P2", "R1", "R2"])
+        quad = pd.Series(["Persuadables", "Persuadables", "Sure Things", "Lost Causes"], index=ids)
+        feats = pd.DataFrame({"x": [1.0, 2.0, 3.0, 5.0]}, index=ids)
+        for tiers, reason in ((None, "명부(#218 t2 행)가 없다"), (pd.DataFrame({"signup_tier": []}), "t2 행이 없다"),
+                              (pd.DataFrame(index=ids), "등급 열이 없다")):
+            res = persuadables_profile(quad, feats, tiers)
+            self.assertEqual(("not_run", {}), (res["tiers_status"], res["tiers"]))
+            self.assertIn(reason, res["tiers_reason"])
+            self.assertEqual(["x"], [r["feature"] for r in res["features"]])
+        res = persuadables_profile(quad, feats, pd.DataFrame({"signup_tier": ["NEW"] * 4}, index=ids))
+        self.assertEqual("ok", res["tiers_status"])
+        self.assertNotIn("tiers_reason", res)
 
     def test_net_value_is_the_s4_definition(self) -> None:
         import numpy as np

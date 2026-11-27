@@ -636,11 +636,17 @@ def segment_lines(segments: Mapping[str, Any]) -> list[str]:
     kinds = {"insufficient_evidence": "근거 부족", "contradicted": "반증"}   # #219 2부 리뷰 — 지지되지 않음의 두 뜻
     hypotheses = [h for h in (segments.get("hypotheses") or (segments.get("new_segment") or {}).get("hypotheses") or [])
                   if isinstance(h, Mapping)]
+
+    def kind(h: Mapping[str, Any]) -> str:
+        if h.get("not_supported_kind") not in kinds:
+            return ""
+        # #328 재리뷰 — 어느 주장에 반대 근거가 있었는지 적는다(H-SEG-2 ``contradicted_by``)
+        why = [str(c.get("reading") or c.get("claim")) for c in h.get("contradicted_by") or [] if isinstance(c, Mapping)]
+        return f"({kinds[h['not_supported_kind']]}{' — ' + ' · '.join(why) if why else ''})"
+
     if hypotheses:
         lines.append("             가설(결과 전 등록, DR-219-segments) " + " · ".join(
-            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}"
-            + (f"({kinds[h['not_supported_kind']]})" if h.get("not_supported_kind") in kinds else "")
-            for h in hypotheses))
+            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}{kind(h)}" for h in hypotheses))
     return lines
 
 

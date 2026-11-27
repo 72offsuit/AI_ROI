@@ -307,7 +307,8 @@ def new_segment_shift(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: p
         "n_signup_unknown": int((~new & ~existing).sum()),
         "underlying_of_new": counts(new), "existing": counts(existing),
         "note": ("underlying_of_new = NEW 를 판정하지 않았다면 NEW 고객이 들어갔을 세그먼트(같은 점수 · 같은 경계). "
-                 "가입일을 모르는 고객은 NEW 로 보지 않는다"),
+                 "가입일을 모르는 고객은 NEW 로 보지 않는다. n_signup_unknown = 가입일 모름(UNKNOWN) + 판정하지 않은 고객"
+                 "(명부 밖인데 가입일 명부가 없다) — 둘은 segments.new_input 의 n_unknown_* · n_not_judged 로 나뉜다"),
         "hypotheses": [hyp],   # H-SEG-2 는 test 분할에서 평가한다(uplift_report.quadrant_validation)
     }
 
@@ -340,7 +341,8 @@ def persuadables_profile(quadrants: pd.Series, features: pd.DataFrame,
     Feature 마다 두 집단의 평균 · 결손 비율 · 표준화 평균차(SMD = 평균 차 ÷ √((분산₁ + 분산₂)/2), Austin 2009)를 내고
     |SMD| 내림차순으로 싣는다. 판정 기준값은 쓰지 않는다. 관측 등급(``tiers`` — #218 명부 t2 행, Eligible(t2)만)이 있으면
     축마다 등급 비율도 나란히 싣는다. 비율의 분모는 **명부에 있는 고객**이다 — 명부 밖 고객은 ``coverage`` 에 따로 세고
-    명부가 매긴 ``UNKNOWN`` 등급과 섞지 않는다(2026-11-26 광진 리뷰, PR #328).
+    명부가 매긴 ``UNKNOWN`` 등급과 섞지 않는다(2026-11-26 광진 리뷰, PR #328). 명부가 없거나 t2 행 · 등급 열이 없으면
+    등급 부분만 ``tiers_status = not_run`` 과 사유를 남긴다 — Feature 차이는 그대로 낸다(2026-11-27 재리뷰).
     """
     scored = quadrants[quadrants != UNSCORED]
     pers = scored.index[scored == "Persuadables"]
@@ -362,7 +364,10 @@ def persuadables_profile(quadrants: pd.Series, features: pd.DataFrame,
                      "missing_rest": float(b.isna().mean()) if len(b) else None, "smd": smd})
     rows.sort(key=lambda r: (r["smd"] is None, -abs(r["smd"] or 0.0), r["feature"]))
     tier_rows: dict[str, Any] = {}
-    if tiers is not None:
+    tier_reason = ("관측 등급 명부(#218 t2 행)가 없다" if tiers is None else
+                   "명부에 t2 행이 없다" if len(tiers) == 0 else
+                   "명부에 등급 열이 없다" if len(tiers.columns) == 0 else None)
+    if tier_reason is None:
         frame = tiers.copy()
         frame.index = frame.index.map(str)
         frame = frame[~frame.index.duplicated(keep=False)]
@@ -390,6 +395,7 @@ def persuadables_profile(quadrants: pd.Series, features: pd.DataFrame,
             tier_rows[str(col)] = {"denominator": "명부(#218 t2 행 — Eligible(t2))에 있는 고객 — 명부 밖 고객은 coverage 에만",
                                    "coverage": coverage, "rows": rows_out}
     return {"n_persuadables": int(len(pers)), "n_rest": int(len(rest)), "features": rows, "tiers": tier_rows,
+            "tiers_status": "not_run" if tier_reason else "ok", **({"tiers_reason": tier_reason} if tier_reason else {}),
             "measure": "SMD = (평균 Persuadables − 평균 나머지) ÷ √((분산₁ + 분산₂)/2) — Austin(2009). 판정 기준값 없음",
             "note": "관측 Feature(t2 Feature 표)만 쓴다(PRD §21). 원인이 아니라 차이다 — 그 Feature 가 반응을 만든다는 뜻이 아니다"}
 
