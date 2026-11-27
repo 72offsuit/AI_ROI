@@ -572,9 +572,13 @@ def temporal_validation(name: str, overrides: Mapping[str, Any] | None, X: pd.Da
         threshold = _threshold_from_train(factory, Xp, yp, seed)
         metrics = _metrics(y, score, threshold)
         report = classification_report(y, score, threshold=threshold)
+        predicted = score >= threshold
     return {"scheme": "temporal_validation", "n_train": int(len(yp)), "n_valid": int(len(y)),
             "pos_rate_train": float(np.mean(yp)), "pos_rate_valid": float(np.mean(y)), **metrics,
-            "report": report}  # SRS ML-009 — 앞 기준일 학습 임계로 t1 에서 판정
+            "report": report,  # SRS ML-009 — 앞 기준일 학습 임계로 t1 에서 판정
+            # #303 ML-010 — 고객별 점수 · 판정. evaluate_churn_models 가 떼어 낸다(결과 파일에 고객별 값을 싣지 않는다).
+            "_predictions": {"score": np.asarray(score, dtype=float), "predicted": np.asarray(predicted, dtype=bool),
+                             "probability": name != "rule_recency"}}
 
 
 #: #303 · DR-303-model-selection — 이탈 모델 선택 규칙. GATE 3 전에 고정한다(결과를 보고 바꾸지 않는다).
@@ -649,11 +653,15 @@ def selection_record(models: list[dict], basis: str, metric: str, chosen: str, n
 # ── 평가 ────────────────────────────────────────────────────────────────────
 
 @_limited_threads
-def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.DataFrame, Any] | None = None) -> dict:
+def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.DataFrame, Any] | None = None,
+                          keep_predictions: bool = False) -> dict:
     """Baseline 2 + 제안 4 를 같은 Stratified K-Fold(``N_SPLITS``)로 평가한다. 형식은 모듈 설명 참조.
 
     #215 — 제안 모델은 먼저 Validation 튜닝(``tune_model``)을 거친다. ``prior``(앞 기준일 Feature · 라벨)가
     오면 튜닝 · 모델 선택을 **시간 순서 검증**으로 하고, 없으면 무작위 교차검증으로 고른다(그 사실을 적는다).
+
+    #303 ML-010 — ``keep_predictions`` 이고 시간 순서 검증을 했으면 후보별 고객 점수 · 판정을 ``_validation`` 에
+    담는다(``group_performance`` 입력). JSON 이 아니다 — 호출자가 결과 파일에 싣기 전에 떼어 낸다.
     """
     X, yv = _prepare(X, y)
     prior_data: tuple[pd.DataFrame, np.ndarray] | None = None
@@ -672,6 +680,7 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
     folds = fold_indices(yv, seed)
     models = []
     oof: dict[str, np.ndarray] = {}  # 검증 fold 예측 — 임계값 비교표 · 보정표(#215)
+    predictions: dict[str, dict[str, Any]] = {}  # 시간 순서 검증의 고객별 점수 · 판정(#303 ML-010)
     for name in usable:
         per_fold: dict[str, list[float]] = {}   # 키는 _metrics 의 지표 이름(ML-009 #303 포함)
         thresholds = []
@@ -707,6 +716,7 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
             entry["tuning"] = tuning[name]
         if prior_data is not None:  # #215 — 시간 순서 검증
             entry["temporal_validation"] = temporal_validation(name, overrides.get(name), X, yv, seed, prior_data)
+            predictions[name] = entry["temporal_validation"].pop("_predictions")
         models.append(entry)
 
     # #215 — 고르는 기준: 시간 순서 검증이 있으면 그 점수, 없으면 무작위 교차검증 평균(튜닝 지표와 같은 지표).
@@ -727,7 +737,7 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
     else:
         chosen_report = {"basis": basis, **classification_report(yv, best_oof, threshold=_best_f1_threshold(yv, best_oof)),
                          "note": "바깥 CV 검증 예측(OOF) — 임계는 같은 OOF 의 F1 최대(표시용, threshold_table 과 같은 규칙)"}
-    return {
+    result = {
         "label_def": LABEL_DEF, "n": int(len(yv)), "pos_rate": float(yv.mean()),
         "n_features": int(X.shape[1]), "seed": int(seed),
         "cv_scheme": f"StratifiedKFold(n_splits={len(folds)}, shuffle=True, random_state={seed})",
@@ -764,6 +774,318 @@ def evaluate_churn_models(X: pd.DataFrame, y, seed: int, *, prior: tuple[pd.Data
                                              "나올 수 있다 — 순서(ROC-AUC)와 별개로 본다",
                         **calibration(yv, best_oof)},
     }
+    if keep_predictions and predictions:
+        index = X.index.map(str)
+        result["_validation"] = {
+            "y": pd.Series(yv, index=index, name="churn"), "chosen": best["name"],
+            "models": {name: {"score": pd.Series(p["score"], index=index), "predicted": pd.Series(p["predicted"], index=index),
+                              "probability": p["probability"]} for name, p in predictions.items()},
+        }
+    return result
+
+
+#: #303 ML-010 · DR-303 — 약한 고객군 판정의 유의수준(양측). 프로젝트의 다른 통계 판정인 A/B 분석
+#: (``config/experiment_config.yaml`` ``ab_test.alpha``)과 같은 값이다 — 시험이 두 값이 같은지 본다.
+GROUP_TEST_ALPHA = 0.05
+#: 고객군마다 고른 모델과 나란히 보는 기준선. S1 규칙(그리고 같은 고객 · 같은 순서를 쓰는 S6)이 고객을 줄 세우는
+#: 신호(마지막 구매 후 경과일 내림차순, ``strategies.S1_RULE``)와 같은 신호만 쓰는 후보다 — "모델이 맞지 않는
+#: 고객군은 규칙으로"(PRD §38.2)의 비교 상대.
+GROUP_BASELINE = "rule_recency"
+#: 관측 등급 축의 이름(CLI · 보고서). 코드 → 뜻은 ``observed_tiers.TIER_LABELS``.
+TIER_AXIS_NAMES: dict[str, str] = {"value_tier": "가치 등급", "frequency_tier": "구매 횟수",
+                                   "signup_tier": "가입 시기", "category_tier": "주 구매 상품군"}
+
+
+def _z(alpha: float) -> float:
+    from scipy.stats import norm
+
+    return float(norm.ppf(1 - alpha / 2))
+
+
+def delong(y, scores: list) -> tuple[np.ndarray, np.ndarray] | None:
+    """DeLong(1988) — 같은 고객에 대한 점수 여러 개의 ROC-AUC 와 그 공분산 행렬(비모수).
+
+    양성 · 음성이 각각 2명 이상이어야 한다(아니면 None). 순위는 중간 순위(동점 0.5)라 AUC 가 ``roc_auc_score`` 와 같다.
+    """
+    from scipy.stats import rankdata
+
+    y = np.asarray(y).astype(int)
+    pos, neg = y == 1, y == 0
+    m, n = int(pos.sum()), int(neg.sum())
+    if m < 2 or n < 2:
+        return None
+    v10, v01 = [], []
+    for score in scores:
+        s = np.asarray(score, dtype=float)
+        x, z = s[pos], s[neg]
+        ranks = rankdata(np.concatenate([x, z]))
+        v10.append((ranks[:m] - rankdata(x)) / n)          # 양성마다: 그보다 낮은 음성 비율(동점 0.5)
+        v01.append(1.0 - (ranks[m:] - rankdata(z)) / m)    # 음성마다: 그보다 높은 양성 비율(동점 0.5)
+    aucs = np.array([v.mean() for v in v10])
+    cov = np.atleast_2d(np.cov(np.vstack(v10))) / m + np.atleast_2d(np.cov(np.vstack(v01))) / n
+    return aucs, cov
+
+
+def _diff_test(diff: float, var: float, alpha: float) -> dict[str, Any]:
+    half = _z(alpha) * math.sqrt(max(var, 0.0))
+    return {"diff": float(diff), "ci95": [float(diff - half), float(diff + half)], "below": bool(diff + half < 0)}
+
+
+def _group_metrics(y, score, predicted, probability: bool) -> dict[str, Any]:
+    """한 고객군 · 한 모델의 ML-009 지표. 계산할 수 없는 값은 None 이다 — 0 으로 채우지 않는다.
+
+    판정(``predicted``)은 전체 Validation 과 같은 임계(앞 기준일 학습 데이터 안에서 정한 값)다 — 고객군마다 다시
+    정하면 Validation 으로 임계를 맞추는 셈이고, 운영에서도 임계는 하나다. ROC-AUC 95% 구간은 DeLong.
+    """
+    from sklearn.metrics import average_precision_score, roc_auc_score
+
+    y = np.asarray(y).astype(int)
+    s = np.asarray(score, dtype=float)
+    pred = np.asarray(predicted).astype(bool)
+    n, positives = int(len(y)), int(y.sum())
+    two_class = 0 < positives < n
+    tp = int((pred & (y == 1)).sum())
+    fp = int((pred & (y == 0)).sum())
+    fn = int((~pred & (y == 1)).sum())
+    tn = int((~pred & (y == 0)).sum())
+    cal = calibration(y, s) if probability and n else None
+    dl = delong(y, [s])
+    ci = None
+    if dl is not None:
+        half = _z(GROUP_TEST_ALPHA) * math.sqrt(max(float(dl[1][0, 0]), 0.0))
+        ci = [max(0.0, float(dl[0][0] - half)), min(1.0, float(dl[0][0] + half))]
+    return {
+        "n": n, "positives": positives, "pos_rate": positives / n if n else None,
+        "roc_auc": float(roc_auc_score(y, s)) if two_class else None,
+        "roc_auc_ci95": ci,
+        "pr_auc": float(average_precision_score(y, s)) if two_class else None,
+        "confusion_matrix": {"tp": tp, "fp": fp, "fn": fn, "tn": tn},
+        "precision": tp / (tp + fp) if tp + fp else None,
+        "recall": tp / positives if positives else None,
+        "f1": 2 * tp / (2 * tp + fp + fn) if 2 * tp + fp + fn else None,
+        "top": [{"share": share, "n_top": max(1, int(math.ceil(n * share))) if n else 0,
+                 "lift": _finite(lift_at(y, s, share)) if n else None,
+                 "capture": _finite(capture_at(y, s, share)) if n else None} for share in TOP_SHARES],
+        "brier": _finite(cal["brier"]) if cal else None,
+        "ece": _finite(cal["ece"]) if cal else None,
+        "probability_distribution": ([{"low": b["low"], "high": b["high"], "n": b["n"]} for b in cal["bins"]]
+                                     if cal else None),
+    }
+
+
+def group_performance(validation: Mapping[str, Any], groups: pd.DataFrame, axes: Mapping[str, Mapping[str, str]], *,
+                      population: str, groups_source: str) -> dict[str, Any]:
+    """SRS ML-010 · PRD §38.2 — 고객군마다 후보별 ML-009 지표. **시간 순서 검증(Validation) 예측만** 쓴다.
+
+    - ``validation``: ``evaluate_churn_models(keep_predictions=True)`` 의 ``_validation`` — 라벨 · 고른 모델 · 후보별
+      고객 점수와 판정(index = customer_id 문자열).
+    - ``groups``: index = customer_id, 열 = ``axes`` 의 축. 이미 정한 고객군을 읽기만 한다(다시 나누지 않는다).
+    - ``axes``: 축 → {코드: 뜻}. 코드 순서대로 싣고, 고객이 없는 코드도 n = 0 으로 싣는다. 뜻에 없는 코드가 나오면
+      뒤에 붙인다 — 어떤 고객군도 빼지 않는다.
+
+    **약한 고객군**(표본 부족이 아닌 고객군만, DR-303): 고른 모델의 ROC-AUC 가 ① 같은 고객의 기준선
+    (``GROUP_BASELINE``)보다 유의하게 낮거나(짝지은 DeLong 차이의 95% 구간 상한 < 0, ``below_baseline``) ② 그 고객군
+    밖 나머지 고객보다 유의하게 낮다(독립 두 표본 DeLong 차이의 95% 구간 상한 < 0, ``below_rest``). 고객군 수만큼 검정을
+    하지만 다중 비교 보정은 하지 않는다 — 표시는 살펴볼 후보를 숨기지 않으려는 것이고(PRD §38.2) 적용 범위 결정이
+    아니다. 모델 적용 범위는 여기서 정하지 않는다 — Validation 에서만 정한다. Test · Final Holdout 은 쓰지 않는다.
+    """
+    from src.decision.observed_tiers import MIN_GROUP_CUSTOMERS, MIN_GROUP_MINORITY, small_group
+
+    y = pd.Series(validation["y"]).astype(int)
+    y.index = y.index.map(str)
+    models = validation["models"]
+    chosen = validation["chosen"]
+    baseline = GROUP_BASELINE if GROUP_BASELINE in models else None
+    frame = groups.copy()
+    frame.index = frame.index.map(str)
+    frame = frame[~frame.index.duplicated(keep=False)].reindex(y.index)
+    grouped = frame.notna().any(axis=1) if len(frame.columns) else pd.Series(False, index=y.index)
+    yv = y.to_numpy()
+    scores = {name: m["score"].reindex(y.index).to_numpy(dtype=float) for name, m in models.items()}
+    predicted = {name: m["predicted"].reindex(y.index).to_numpy() for name, m in models.items()}
+
+    def measure(idx: np.ndarray) -> dict[str, dict[str, Any]]:
+        return {name: _group_metrics(yv[idx], scores[name][idx], predicted[name][idx], m["probability"])
+                for name, m in models.items()}
+
+    def small_reason(n: int, positives: int) -> str | None:
+        if n < MIN_GROUP_CUSTOMERS:
+            return f"고객 {n}명 < {MIN_GROUP_CUSTOMERS}명"
+        if small_group(n, positives):
+            return f"적은 쪽 클래스 {min(positives, n - positives)}명 < {MIN_GROUP_MINORITY}명"
+        return None
+
+    def tests(idx: np.ndarray, rest_mask: np.ndarray) -> dict[str, Any]:
+        """``rest_mask`` = 같은 축에서 고객군이 정해진 다른 고객(#325 리뷰) — 고객군이 없는 고객은 비교군에 넣지 않는다."""
+        n_rest, rest_positives = int(rest_mask.sum()), int(yv[rest_mask].sum())
+        out: dict[str, Any] = {"vs_baseline": None, "vs_rest": None, "n_rest": n_rest, "vs_rest_reason": None}
+        if baseline is not None:
+            paired = delong(yv[idx], [scores[chosen][idx], scores[baseline][idx]])
+            if paired is not None:
+                aucs, cov = paired
+                out["vs_baseline"] = _diff_test(aucs[0] - aucs[1], cov[0, 0] + cov[1, 1] - 2 * cov[0, 1],
+                                                GROUP_TEST_ALPHA)
+        rest_small = small_reason(n_rest, rest_positives)
+        if rest_small is not None:  # 비교군도 표본 부족 기준을 지킨다(DR-221) — 검정하지 않고 사유를 남긴다
+            out["vs_rest_reason"] = f"나머지 고객 표본 부족 — {rest_small}"
+            return out
+        inside, rest = delong(yv[idx], [scores[chosen][idx]]), delong(yv[rest_mask], [scores[chosen][rest_mask]])
+        if inside is None or rest is None:
+            out["vs_rest_reason"] = "검정 불가 — 한 클래스뿐인 쪽이 있다"
+            return out
+        out["vs_rest"] = {**_diff_test(inside[0][0] - rest[0][0], inside[1][0, 0] + rest[1][0, 0], GROUP_TEST_ALPHA),
+                          "n_rest": n_rest}
+        return out
+
+    overall = measure(np.ones(len(yv), dtype=bool))
+    out_axes: dict[str, list[dict[str, Any]]] = {}
+    for axis, labels in axes.items():
+        values = frame[axis] if axis in frame.columns else pd.Series(None, index=y.index, dtype=object)
+        codes = list(labels) + sorted({str(v) for v in values.dropna()} - set(labels))
+        in_axis = values.notna().to_numpy()
+        rows = []
+        for code in codes:
+            idx = values.astype(object).eq(code).fillna(False).astype(bool).to_numpy()
+            n, positives = int(idx.sum()), int(yv[idx].sum())
+            small = small_group(n, positives)
+            reason = small_reason(n, positives)
+            weak: bool | None = None
+            weak_reasons: list[str] = []
+            checks = None
+            if not small:
+                checks = tests(idx, in_axis & ~idx)
+                done = [key for key in ("vs_baseline", "vs_rest") if checks[key] is not None]
+                weak_reasons = [{"vs_baseline": "below_baseline", "vs_rest": "below_rest"}[key]
+                                for key in done if checks[key]["below"]]
+                weak = bool(weak_reasons) if done else None
+            rows.append({"group": code, "label": labels.get(code), "n": n, "positives": positives,
+                         "small_group": small, "small_group_reason": reason, "weak": weak,
+                         "weak_reasons": weak_reasons, "tests": checks, "models": measure(idx)})
+        out_axes[axis] = rows
+    return {
+        "status": "ok", "basis": "temporal_validation", "population": population, "groups_source": groups_source,
+        "chosen": chosen, "baseline": baseline, "models": list(models),
+        "n": int(len(y)), "n_grouped": int(grouped.sum()), "n_without_group": int((~grouped).sum()),
+        "overall": overall, "axes": out_axes,
+        "rule": {
+            "small_group": (f"고객 {MIN_GROUP_CUSTOMERS}명 미만이거나 적은 쪽 클래스 {MIN_GROUP_MINORITY}명 미만 — 값은 싣고 "
+                            "약한 고객군 판정 · 비교에 쓰지 않는다(DR-221)"),
+            "weak_group": (f"표본 부족이 아닌 고객군에서 {chosen} 의 ROC-AUC 가 같은 고객의 {baseline or '기준선(없음)'} 보다"
+                           "(below_baseline, 짝지은 DeLong) 또는 나머지 고객보다(below_rest, 독립 DeLong) 유의하게 낮다 — "
+                           f"차이의 {1 - GROUP_TEST_ALPHA:.0%} 구간 상한 < 0. 다중 비교 보정 없음 — 표시만 하고 적용 범위는 "
+                           "정하지 않는다"),
+            "rest": ("나머지 고객 = 같은 축에서 고객군이 정해진 다른 고객(고객군이 없는 고객 — 명부 밖 · 역할 불일치 · 그 축 결손 — "
+                     "은 전체 지표에만 넣고 비교군에 넣지 않는다). 나머지에도 표본 부족 기준을 적용하고, 부족하면 검정하지 않고 "
+                     "vs_rest_reason 에 사유를 남긴다"),
+            "selection_effect": ("고른 모델은 같은 t1 Validation 의 ROC-AUC 로 골랐다 — 같은 데이터에서 평가한 성능은 낙관적으로 "
+                                 "치우칠 수 있다(Cawley & Talbot 2010). 기준선과의 비교(below_baseline)는 모델에 유리한 쪽으로 기운다"),
+            "alpha": GROUP_TEST_ALPHA, "test": "DeLong(1988) ROC-AUC 분산 · 공분산",
+            "threshold": "전체 Validation 과 같은 임계(앞 기준일 학습 데이터 안에서 정함)",
+            "decision": "docs/decisions/DR-303-model-selection.md",
+        },
+        "note": ("Validation(시간 순서 검증 — 앞 기준일 학습 → t1 평가)에서만 냈다. Test · Final Holdout 이 아니다. "
+                 "모델 적용 범위를 고객군으로 제한할지는 이 표로 Validation 에서만 정한다(PRD §38.2)"),
+    }
+
+
+#: #303 ML-010 — 고객군별 성능의 가설(DR-303). 근거 자료가 없어 결과 전에 가설로 세우고, 실행마다 같은 규칙으로 평가한다.
+#: 평가 결과: supported(지지) · not_supported(지지되지 않음) · undetermined(판정 불가 — 표본 부족 · 검정 불가).
+TIER_HYPOTHESES: tuple[dict[str, str], ...] = (
+    {"id": "H-ML010-1",
+     "statement": "고른 모델은 표본 부족이 아닌 어느 관측 등급에서도 규칙 기준선보다 ROC-AUC 가 유의하게 낮지 않다",
+     "why": "PRD §38.2 의 '잘 맞는 고객군에만 모델' 선택지가 필요한지 — 등급별 성능은 아무도 계산한 적이 없다(DR-221 노출 기록)",
+     "evaluation": "below_baseline 등급이 없으면 지지, 있으면 지지되지 않음(그 등급 목록), 판정한 등급이 없으면 판정 불가"},
+    {"id": "H-ML010-2",
+     "statement": "신규 가입 고객(signup_tier NEW)에서 고른 모델의 ROC-AUC 가 나머지 고객보다 유의하게 낮다",
+     "why": "가입 180일 미만은 Feature 창(180일)이 다 차지 않아 금액 · 횟수 근거가 짧다(DR-221 가입 시기 근거)",
+     "evaluation": "NEW 가 below_rest 면 지지, 검정했으나 아니면 지지되지 않음(같다는 증거는 아니다), 표본 부족이면 판정 불가"},
+    {"id": "H-ML010-3",
+     "statement": "180일 창 안 구매 1회 고객(frequency_tier F1_ONCE)에서 고른 모델의 ROC-AUC 가 나머지 고객보다 유의하게 낮다",
+     "why": "구매가 한 번이면 창 안에서 구매 간격 · 반복을 관측할 수 없다",
+     "evaluation": "F1_ONCE 가 below_rest 면 지지, 검정했으나 아니면 지지되지 않음(같다는 증거는 아니다), 표본 부족이면 판정 불가"},
+)
+
+
+#: 결과를 읽는 문구(#325 리뷰) — "지지"가 같음 · 우월의 증거로 읽히지 않게 한다. 규칙은 바꾸지 않는다.
+TIER_READINGS: dict[str, dict[str, str]] = {
+    "H-ML010-1": {
+        "supported": ("검정 가능한 등급에서 기준선 대비 유의한 열세가 관측되지 않음 — 같다는 증거는 아니고, 같은 Validation 에서 "
+                      "모델을 골라 모델에 유리한 쪽으로 치우칠 수 있다"),
+        "not_supported": "기준선보다 유의하게 낮은 등급이 있다(evidence.below_baseline)",
+        "undetermined": "검정 가능한 등급이 없다 — 표본 부족 · 검정 불가",
+    },
+    "H-ML010-2": {
+        "supported": "신규 가입 고객의 ROC-AUC 가 같은 축의 나머지 고객보다 유의하게 낮다",
+        "not_supported": "유의하게 낮다는 근거가 부족하다 — 같다는 증거는 아니다",
+        "undetermined": "판정 불가 — 고객군 또는 나머지 고객의 표본 부족 · 검정 불가(evidence.reason)",
+    },
+    "H-ML010-3": {
+        "supported": "구매 1회 고객의 ROC-AUC 가 같은 축의 나머지 고객보다 유의하게 낮다",
+        "not_supported": "유의하게 낮다는 근거가 부족하다 — 같다는 증거는 아니다",
+        "undetermined": "판정 불가 — 고객군 또는 나머지 고객의 표본 부족 · 검정 불가(evidence.reason)",
+    },
+}
+
+
+def evaluate_tier_hypotheses(axes: Mapping[str, list[Mapping[str, Any]]]) -> list[dict[str, Any]]:
+    """``TIER_HYPOTHESES`` 를 이 실행의 등급별 결과로 평가한다 — 규칙은 결과 전에 고정했다(DR-303)."""
+    rows = {(axis, row["group"]): row for axis, items in axes.items() for row in items}
+    judged = [(axis, row) for (axis, _), row in rows.items() if (row.get("tests") or {}).get("vs_baseline")]
+    below = [f"{axis}={row['group']}" for axis, row in judged if row["tests"]["vs_baseline"]["below"]]
+    out = []
+    for hyp in TIER_HYPOTHESES:
+        if hyp["id"] == "H-ML010-1":
+            result = "undetermined" if not judged else ("not_supported" if below else "supported")
+            evidence = {"n_groups_judged": len(judged), "below_baseline": below}
+        else:
+            key = ("signup_tier", "NEW") if hyp["id"] == "H-ML010-2" else ("frequency_tier", "F1_ONCE")
+            row = rows.get(key) or {}
+            checks = row.get("tests") or {}
+            test = checks.get("vs_rest")
+            if row.get("small_group", True) or test is None:
+                result = "undetermined"
+                evidence = {"group": f"{key[0]}={key[1]}", "n": row.get("n"), "n_rest": checks.get("n_rest"),
+                            "reason": (row.get("small_group_reason") or checks.get("vs_rest_reason")
+                                       or "검정 불가(한 클래스뿐인 쪽이 있다)")}
+            else:
+                result = "supported" if test["below"] else "not_supported"
+                evidence = {"group": f"{key[0]}={key[1]}", "n": row["n"], "n_rest": test.get("n_rest"),
+                            "diff_vs_rest": test["diff"], "ci95": test["ci95"]}
+        out.append({**hyp, "result": result, "reading": TIER_READINGS[hyp["id"]][result], "evidence": evidence})
+    return out
+
+
+def tier_performance(validation: Mapping[str, Any], roster_t1: pd.DataFrame,
+                     frequency_check: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    """#303 ML-010 — 관측 등급(DR-221)별 ML-009 지표. 등급은 #218 명부의 t1 행을 그대로 읽는다(다시 계산하지 않는다).
+
+    ``roster_t1``: 명부의 ``origin == "t1"`` 행(``customer_id`` · ``role`` · 등급 열). Validation 고객의 명부 역할이
+    ``validation`` 이 아니거나 명부에 없으면 그 수를 남긴다 — 그런 고객은 등급 없이 전체 지표에만 들어간다.
+
+    ``frequency_check``: 명부 요약의 t1 ``frequency_band_check``. 구매 횟수 구간이 아직 확정 전
+    (``observed_tiers.FREQUENCY_BANDS_FINAL`` 거짓)인데 점검 범위를 벗어났으면 지표를 내지 않는다(``withheld``) —
+    DR-221 은 그때 등급별 성능을 보기 **전에** 구간을 한 번 고칠 수 있게 했다.
+    """
+    from src.decision.observed_tiers import FREQUENCY_BANDS_FINAL, TIER_COLUMNS, TIER_LABELS, TIER_VERSION
+
+    if not FREQUENCY_BANDS_FINAL and isinstance(frequency_check, Mapping) and frequency_check.get("outside"):
+        return {"status": "withheld", "tier_version": TIER_VERSION, "frequency_band_check": dict(frequency_check),
+                "reason": (f"DR-221 구매 횟수 구간 점검 — {', '.join(map(str, frequency_check['outside']))} 가 t1 Eligible 의 "
+                           f"{frequency_check.get('range')} 밖이다. 구간을 확정(FREQUENCY_BANDS_FINAL)하기 전에는 등급별 "
+                           "성능을 내지 않는다 — 분포만 보고 구간을 고칠지 먼저 정한다")}
+    rows = roster_t1.copy()
+    rows["customer_id"] = rows["customer_id"].map(str)
+    rows = rows.set_index("customer_id")
+    ids = pd.Series(validation["y"]).index.map(str)
+    roles = rows["role"].reindex(ids)
+    mismatch = roles.notna() & (roles != "validation")
+    tiers = rows.loc[rows["role"] == "validation", list(TIER_COLUMNS)]
+    result = group_performance(validation, tiers, {axis: TIER_LABELS[axis] for axis in TIER_COLUMNS},
+                               population="t1 시간 순서 검증 모집단(탐색 RCT T0 군 — 앞 기준일 학습 모델로 평가)",
+                               groups_source="#218 명부 t1 validation 행의 관측 등급(DR-221)")
+    return {**result, "tier_version": TIER_VERSION, "axis_names": dict(TIER_AXIS_NAMES),
+            "roster_check": {"n_not_in_roster": int(roles.isna().sum()), "n_role_not_validation": int(mismatch.sum())},
+            "hypotheses": evaluate_tier_hypotheses(result["axes"])}
 
 
 def _group_names(model, X: pd.DataFrame) -> list[str]:

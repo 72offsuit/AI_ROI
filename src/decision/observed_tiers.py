@@ -58,6 +58,10 @@ FREQUENCY_BANDS: tuple[tuple[int, int | None, str], ...] = (
 NEW_CUSTOMER_DAYS = 180
 #: 상품군 동률 순서 = 측정 계층 ``Category`` 정의 순서.
 CATEGORY_ORDER: tuple[str, ...] = tuple(item.value for item in Category)
+#: DR-221 "한 번의 예외"(구매 횟수 구간)를 정리했는가 — 첫 실측의 분포 점검(라벨 · 점수 없이) 뒤 리드가 추가 결정으로
+#: True 로 바꾼다. False 인 동안 점검이 범위를 벗어난 실행은 등급별 이탈률 · 성능을 내지 않는다(구간을 고칠 수 있는
+#: 동안 결과를 먼저 보지 않는다). True 뒤에는 범위를 벗어나도 고치지 않고 표본 부족으로 보고한다.
+FREQUENCY_BANDS_FINAL = False
 #: 고객군 지표의 표본 부족 기준(ANA-008 · ML-010) — 값은 싣되 비교 · 판정에 쓰지 않는다.
 MIN_GROUP_CUSTOMERS = 100
 MIN_GROUP_MINORITY = 10

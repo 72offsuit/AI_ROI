@@ -208,6 +208,8 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "clv_table": ("src.decision.clv_lifetime", "clv_table"),
     # #218 — 기준일별 공통 명부 · 관측 등급(DR-218-common-roster · DR-221-observed-tiers)
     "build_split_roster": ("src.decision.split_roster", "build_split_roster"),
+    # #303 ML-010 — 관측 등급별 ML-009 지표(t1 시간 순서 검증, DR-303)
+    "tier_performance": ("src.decision.churn", "tier_performance"),
     "order_items_frame": ("src.decision.split_roster", "order_items_frame"),
 }
 
@@ -2102,6 +2104,32 @@ def write_split_roster(path: Path, ctx: Mapping[str, Any], extra_files: dict[str
     return {**record, "file": ROSTER_FILE, "file_sha256": digest, "feature_store": store}
 
 
+def churn_tier_performance(ctx: Mapping[str, Any], roster_record: Mapping[str, Any]) -> dict[str, Any]:
+    """#303 ML-010 — t1 시간 순서 검증 예측을 명부(#218)의 t1 관측 등급으로 나눠 등급별 ML-009 지표를 낸다(DR-303).
+
+    명부가 계산한 등급을 그대로 읽는다(DR-221 — 소비처는 다시 계산하지 않는다). t1 Validation 은 t2 분기 결과와
+    무관하므로 명부를 늦게 만든 실행(과제 Test 후보 ``withheld``)에서도 낸다. 명부 요약의 t1 구매 횟수 구간 점검을
+    함께 넘긴다(구간 확정 전 점검 밖이면 결정 모듈이 보류한다). 결과 단계가 아니다 — 못 내면 사유만 남긴다.
+    """
+    try:
+        validation = ctx.get("churn_validation")
+        if not validation:
+            raise NotRun(ctx.get("churn_validation_reason") or "churn 단계에 도달하지 않았다 — 시간 순서 검증 예측이 없다")
+        roster = ctx.get("split_roster")
+        if roster is None or not len(roster):
+            raise NotRun("명부가 없다 — 등급을 읽을 곳이 없다(run_meta.split_roster 의 사유 참조)")
+        rows = roster[roster["origin"] == "t1"]
+        if not len(rows):
+            raise NotRun("명부에 t1 행이 없다 — t1 기준일이 not_run 이다(run_meta.split_roster)")
+        check = (((roster_record.get("origins") or {}).get("t1") or {}).get("frequency_band_check")
+                 if isinstance(roster_record, Mapping) else None)
+        return decision_fn("tier_performance")(validation, rows, check)
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+
+
 def temporal_holdout_scope(labeled: Any, eligible: Any, treated: Any, roster: Any) -> tuple[list[Any], dict[str, Any]]:
     """#319 리뷰 — 기존 시간 평가(DR-179, 기존 고객의 미래 시점)에 넘길 고객과 그 근거.
 
@@ -2381,6 +2409,7 @@ def run(config: SprintConfig) -> Path:
                 churn_eval.update(_loaded_record(config.load_models, meta, loaded_manifest))
                 churn_eval["best_proposed"] = getattr(model, "name", None)
                 churn_eval["fitted_evaluation"] = _fitted_evaluation("evaluate_fitted_churn", model, X, y)
+                ctx["churn_validation_reason"] = "불러온 모델 — 이 실행에서 시간 순서 검증을 하지 않았다"
                 ctx["churn_model"] = model
                 ctx["churn_train"] = (X, y)  # 시간 홀드아웃의 모집단 대조용 — 학습 모집단은 trained_run 쪽이다
                 if churn_eval["best_proposed"] is not None:
@@ -2391,11 +2420,21 @@ def run(config: SprintConfig) -> Path:
                 fit = decision_fn("fit_best_churn")
                 prior = ctx.get("churn_prior") or {"status": "not_run", "reason": "앞 기준일 단계에 도달하지 않았다"}
                 churn_eval["prior_origin"] = {k: v for k, v in prior.items() if k not in PRIOR_PRIVATE_KEYS}
+                parameters = inspect.signature(evaluate).parameters
                 extra = ({"prior": (prior["X"], prior["y"])}
-                         if prior.get("status") == "ok" and "prior" in inspect.signature(evaluate).parameters else {})
+                         if prior.get("status") == "ok" and "prior" in parameters else {})
+                if "keep_predictions" in parameters:  # #303 ML-010 — 등급별 지표용 Validation 예측(결과 파일엔 안 싣는다)
+                    extra["keep_predictions"] = True
                 with override_attr(DECISION_API["evaluate_churn_models"][0], "N_SPLITS", config.cv_folds) as folds:
                     churn_eval["cv_folds_override"] = folds
                     evaluation = evaluate(X, y, config.seed, **extra)
+                    ctx["churn_validation"] = (evaluation.pop("_validation", None)
+                                               if isinstance(evaluation, dict) else None)
+                    if ctx["churn_validation"] is None:
+                        ctx["churn_validation_reason"] = (
+                            "시간 순서 검증을 하지 않았다 — 앞 기준일 "
+                            f"{(evaluation.get('temporal_validation_data') or {}).get('reason') or prior.get('reason') or '데이터 없음'}"
+                            if isinstance(evaluation, Mapping) else "평가 결과가 없다")
                     churn_eval.update(evaluation)  # label_def · n · pos_rate · models · shap_top … (대시보드 ChurnEval)
                     if "eval_result" in inspect.signature(fit).parameters:
                         ctx["churn_model"] = fit(X, y, config.seed, eval_result=evaluation)
@@ -2920,6 +2959,8 @@ def run(config: SprintConfig) -> Path:
         # #218 — 기준일별 공통 명부 · 관측 등급. scores_t2 뒤에 이미 만들었다(t2 분기 결과를 읽기 전). 앞 단계에서 중단돼
         # 거기까지 못 갔으면 여기서 만든다 — 그때 분기 결과를 읽었으면 과제 Test 후보를 보류한다. 파일은 저장 뒤에 쓴다(표 지문).
         roster_record = ctx.get("split_roster_record") or prepare_split_roster(ctx)
+        # #303 ML-010 — 관측 등급별 ML-009 지표(t1 Validation). 명부의 t1 등급 · 역할을 읽는다.
+        churn_eval["by_tier"] = churn_tier_performance(ctx, roster_record)
         if isinstance(roster_record.get("official_test"), Mapping) and "temporal_holdout_scope" in ctx:
             roster_record = {**roster_record, "official_test": {**roster_record["official_test"],
                                                                 "temporal_holdout": ctx["temporal_holdout_scope"]}}

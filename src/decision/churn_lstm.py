@@ -16,9 +16,10 @@ import time
 import numpy as np
 import pandas as pd
 
+from src.decision.churn_dl_compare import LABEL_WINDOW
 from src.decision.churn_sequence import (
     DLConfig, SequenceBatch, SequenceContractError, TOKEN_VOCAB,
-    align_binary_labels, id_hash, load_dl_config, thaw_json, bound_value_hash,
+    align_binary_labels, id_hash, load_dl_config, thaw_json, bound_value_hash, event_time,
 )
 from src.decision.churn_artifacts import atomic_artifact_directory
 
@@ -97,14 +98,48 @@ def fit_lstm(train: SequenceBatch, train_labels: pd.Series,
     config = load_dl_config() if config is None else config
     _compatible(train, config)
     _compatible(validation, config)
-    if set(train.ids).intersection(validation.ids):
-        raise SequenceContractError('Train and Validation customers overlap')
+    train_at = event_time(train.metadata['index_time'])
+    validation_at = event_time(validation.metadata['index_time'])
+    temporal = train_at != validation_at
+    if not temporal and set(train.ids).intersection(validation.ids):
+        raise SequenceContractError('Train and Validation customer/origin pairs overlap')
+    if temporal and train_at + LABEL_WINDOW > validation_at:
+        raise SequenceContractError('training label window must end before or at the validation origin')
     y_train = align_binary_labels(train_labels, train.ids, require_two_classes=True)
     y_val = align_binary_labels(validation_labels, validation.ids, require_two_classes=True)
+    return _fit(train, y_train, config, validation=(validation, y_val), temporal=temporal)
+
+
+def refit_lstm(train: SequenceBatch, labels: pd.Series, selected: FittedLSTM):
+    """선택 단계의 검증 표본(t1)으로 선택된 epoch 수만큼 적합한다."""
+    config = selected.config
+    _compatible(train, config)
+    y_train = align_binary_labels(labels, train.ids, require_two_classes=True)
+    selection = selected.training
+    if (selection.get('selection_metric') != 'roc_auc'
+            or selection.get('validation_sequence_sha256') != train.model_input_sha256()
+            or selection['validation_ids_sha256'] != id_hash(train.ids)
+            or selection['validation_label_sha256'] != bound_value_hash(train.ids, y_train)):
+        raise SequenceContractError('final LSTM train cohort must match the t1 selection evidence')
+    epochs = selection['best_epoch']
+    if type(epochs) is not int or not 1 <= epochs <= config.max_epochs:
+        raise SequenceContractError('invalid selected epoch count')
+    fitted = _fit(train, y_train, config, fixed_epochs=epochs)
+    fitted.training['selection_epoch'] = epochs
+    return fitted
+
+
+def _fit(train, y_train, config, *, validation=None, temporal=False, fixed_epochs=None):
     import torch
+    if temporal:
+        from sklearn.metrics import roc_auc_score
+
     # 복원 가능한 설정만 남기고 호출자의 전역 RNG/thread 설정을 복구한다.
     old_threads = torch.get_num_threads()
     start_wall, start_cpu = time.perf_counter(), time.process_time()
+    validation_batch, y_val = validation if validation is not None else (None, None)
+    max_epochs = fixed_epochs if fixed_epochs is not None else config.max_epochs
+    restored_loss = None
     with torch.random.fork_rng(devices=[]):
         try:
             torch.set_num_threads(config.cpu_threads)
@@ -113,14 +148,15 @@ def fit_lstm(train: SequenceBatch, train_labels: pd.Series,
             optimizer = torch.optim.Adam(net.parameters(), lr=config.learning_rate)
             loss_fn = torch.nn.BCEWithLogitsLoss()
             labels_t = torch.tensor(y_train)
-            labels_v = torch.tensor(y_val)
+            labels_v = torch.tensor(y_val) if validation is not None else None
             x = torch.tensor(train.tokens, dtype=torch.long)
             lengths = torch.tensor(train.lengths, dtype=torch.long)
             generator = torch.Generator(device='cpu').manual_seed(config.seed)
-            stopping = EarlyStop(config.patience, config.min_delta)
+            # AUC 후보의 실제 최댓값을 복원한다. 기존 합성 loss 경로는 min_delta를 유지한다.
+            stopping = EarlyStop(config.patience, 0.0 if temporal else config.min_delta)
             best_state, logs = None, []
             stopped_early = False
-            for epoch in range(1, config.max_epochs + 1):
+            for epoch in range(1, max_epochs + 1):
                 net.train()
                 total = 0.0
                 for indices in torch.randperm(len(train.ids), generator=generator).split(config.batch_size):
@@ -131,37 +167,53 @@ def fit_lstm(train: SequenceBatch, train_labels: pd.Series,
                     loss.backward()
                     optimizer.step()
                     total += float(loss.detach()) * len(indices)
-                val_loss = float(loss_fn(_tensor_batches(net, validation, config.batch_size, torch), labels_v))
-                improved, stop = stopping.update(val_loss, epoch)
-                if improved:
-                    best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
-                logs.append({'epoch': epoch, 'train_loss': total / len(train.ids),
-                             'validation_loss': val_loss, 'improved': bool(improved)})
-                if stop:
-                    stopped_early = epoch < config.max_epochs
-                    break
-            if best_state is None:
-                raise SequenceContractError('training produced no usable checkpoint')
-            net.load_state_dict(best_state)
+                row = {'epoch': epoch, 'train_loss': total / len(train.ids),
+                       'validation_loss': None, 'improved': None}
+                logs.append(row)
+                if validation is not None:
+                    logits = _tensor_batches(net, validation_batch, config.batch_size, torch)
+                    val_loss = float(loss_fn(logits, labels_v))
+                    if temporal:
+                        row['validation_roc_auc'] = float(roc_auc_score(y_val, torch.sigmoid(logits).numpy()))
+                    criterion = 1 - row['validation_roc_auc'] if temporal else val_loss
+                    improved, stop = stopping.update(criterion, epoch)
+                    row.update(validation_loss=val_loss, improved=bool(improved))
+                    if improved:
+                        best_state = {k: v.detach().clone() for k, v in net.state_dict().items()}
+                    if stop:
+                        stopped_early = epoch < max_epochs
+                        break
+            if validation is not None:
+                if best_state is None:
+                    raise SequenceContractError('training produced no usable checkpoint')
+                net.load_state_dict(best_state)
+                restored_loss = float(loss_fn(_tensor_batches(net, validation_batch, config.batch_size, torch), labels_v))
             net.eval()
-            restored_loss = float(loss_fn(_tensor_batches(net, validation, config.batch_size, torch), labels_v))
         finally:
             torch.set_num_threads(old_threads)
     return FittedLSTM(net, config, {
         'version': 'lstm-event-v1', 'device': 'cpu', 'seed': config.seed,
         'python': platform.python_version(), 'torch': torch.__version__,
-        'epochs_run': len(logs), 'best_epoch': stopping.best_epoch,
-        'best_validation_loss': stopping.best, 'restored_validation_loss': restored_loss,
-        'stopped_early': stopped_early, 'stop_reason': 'patience' if len(logs) < config.max_epochs else 'max_epochs',
+        'epochs_run': len(logs), 'best_epoch': stopping.best_epoch if validation is not None else None,
+        'best_validation_loss': logs[stopping.best_epoch - 1]['validation_loss'] if validation is not None else None,
+        'restored_validation_loss': restored_loss,
+        'stopped_early': stopped_early,
+        'stop_reason': 'fixed_selection_epoch' if validation is None else ('patience' if stopped_early else 'max_epochs'),
+        'selection_metric': ('roc_auc' if temporal else 'log_loss') if validation is not None else None,
         'history': logs, 'wall_seconds': time.perf_counter() - start_wall,
         'cpu_seconds': time.process_time() - start_cpu,
-        'train_ids': list(train.ids), 'validation_ids': list(validation.ids),
-        'train_ids_sha256': id_hash(train.ids), 'validation_ids_sha256': id_hash(validation.ids),
-        'train_metadata': thaw_json(train.metadata), 'validation_metadata': thaw_json(validation.metadata),
+        'train_ids': list(train.ids), 'validation_ids': list(validation_batch.ids) if validation is not None else [],
+        'train_ids_sha256': id_hash(train.ids),
+        'validation_ids_sha256': id_hash(validation_batch.ids) if validation is not None else None,
+        'train_sequence_sha256': train.model_input_sha256(),
+        'validation_sequence_sha256': validation_batch.model_input_sha256() if validation is not None else None,
+        'train_metadata': thaw_json(train.metadata),
+        'validation_metadata': thaw_json(validation_batch.metadata) if validation is not None else None,
         'label_sha256': bound_value_hash(train.ids, y_train),
-        'validation_label_sha256': bound_value_hash(validation.ids, y_val),
+        'validation_label_sha256': bound_value_hash(validation_batch.ids, y_val) if validation is not None else None,
         'label_hash_method': 'sorted-id-value-json-v1',
-        'split_scope': 'caller-provided customer-disjoint Train/Validation; temporal compliance not established',
+        'split_scope': ('t1-only refit' if validation is None else
+                        'customer/origin pair separation' if temporal else 'same-origin disjoint customer groups'),
         'test_accesses_during_fit': 0, 'final_holdout_used': False,
     })
 
@@ -203,7 +255,10 @@ def _write_model_artifacts(model, directory):
     log.write_text(json.dumps(model.training, ensure_ascii=False, allow_nan=False, indent=2), encoding='utf-8')
     curve = directory / 'dl_training_curve.csv'
     with curve.open('w', newline='', encoding='utf-8') as stream:
-        writer = csv.DictWriter(stream, fieldnames=['epoch', 'train_loss', 'validation_loss', 'improved'])
+        fields = ['epoch', 'train_loss', 'validation_loss', 'improved']
+        if model.training.get('selection_metric') == 'roc_auc':
+            fields.append('validation_roc_auc')
+        writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         writer.writerows(model.training['history'])
     manifest = {'version': 'lstm-event-v1', 'config': config_data, 'vocabulary': dict(TOKEN_VOCAB),
