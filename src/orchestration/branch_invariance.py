@@ -10,6 +10,9 @@
 모든 분기 · 모든 고객이 같으면 ``same``, 하나라도 다르면 ``differs``(그때 DR-234 P3 기각을 다시 본다). 명부가 없으면
 ``not_run``. **봉인 대상 분기(``REQUIRED_BRANCHES`` = 실행 루프의 S0~S5) 중 하나라도** 배정 파일 · 원본이 없거나 그 분기 단계가
 ``ok`` 가 아니면 ``incomplete`` 와 빠진 분기 · 사유다 — 있는 분기만으로 ``same`` 을 내지 않는다(PR #327 리뷰, DR-170-gate2-lock G5).
+경로가 있어도 **원본이 실행 당시와 같은지** 다시 대조한다(PR #327 2차 리뷰): 결과 파일(``strategy_comparison.json``)에 남은 분기별
+읽기 근거(실행 ID · 파일 · 크기 · 행 수)를 같은 실행의 기록에 맞춰 ``verify_event_run`` 으로 다시 확인하고, 읽은 뒤 파일이 바뀌지
+않았는지 본다. 파티션이 하나라도 빠지거나 다르면 그 분기는 ``incomplete`` 다.
 다른 값으로 근사하지 않는다. 결과에는 고객 ID 를 넣지 않는다(수와 합계만).
 
     python -m src.orchestration.branch_invariance <결과 폴더> [--out 경로]
@@ -34,6 +37,8 @@ REQUIRED_BRANCHES: tuple[str, ...] = ("S0", "S1", "S2", "S3", "S4", "S5")
 RESULT_FILE = "branch_invariance.json"
 #: ``run_sprint.ROSTER_FILE`` 과 같은 이름(시험이 대조한다) — 무거운 실행 루프를 import 하지 않는다.
 ROSTER_FILE = "split_roster.csv"
+#: ``run_sprint.RESULT_FILES`` 의 ``strategy_comparison`` 결과 파일 — 분기별 읽기 근거(``event_read_evidence``)가 여기 있다.
+COMPARISON_FILE = "strategy_comparison.json"
 ROSTER_ORIGIN = "t2"
 GROUPS = ("non_eligible", "untreated_eligible")
 DEFINITION = (
@@ -148,12 +153,92 @@ def _inputs(run_dir: Path) -> dict[str, Any]:
     roster_name = (meta.get("split_roster") or {}).get("file") or ROSTER_FILE
     return {
         "run_id": meta.get("run_id"), "start": _when(timeline["t2"]), "end": _when(timeline["end"]),
+        "history_t2": (meta.get("event_read_evidence") or {}).get("t2"),
+        "recorded_reads": recorded_reads(run_dir, meta.get("run_id")),
         "branches": list(REQUIRED_BRANCHES), "missing": missing,
         "raw_roots": {s: Path(str(raw_roots[s])) for s in REQUIRED_BRANCHES if s not in missing},
         "assignments": {s: Path(str(strategy_files[s])) for s in REQUIRED_BRANCHES if s not in missing},
         "roster": run_dir / str(roster_name),
         "extra_branches": sorted(set(strategy_files) - set(REQUIRED_BRANCHES)),
     }
+
+
+def recorded_reads(run_dir: Path, run_id: Any) -> dict[str, Any]:
+    """같은 실행의 결과 파일에 남은 분기별 읽기 근거(실행 당시 ``verify_event_run`` 결과). 없으면 분기마다 사유 문자열."""
+    path = Path(run_dir) / COMPARISON_FILE
+    if not path.exists():
+        return {s: f"{COMPARISON_FILE} 가 없다 — 실행 당시 분기 읽기 근거를 알 수 없다" for s in REQUIRED_BRANCHES}
+    comparison = _read_json(path)
+    if run_id is None or comparison.get("run_id") != run_id:
+        return {s: f"{COMPARISON_FILE} run_id {comparison.get('run_id')!r} ≠ run_meta {run_id!r}" for s in REQUIRED_BRANCHES}
+    details = comparison.get("strategy_details") or {}
+    return {s: ((details.get(s) or {}).get("event_read_evidence")
+                or f"{COMPARISON_FILE} 에 이 분기의 event_read_evidence 가 없다") for s in REQUIRED_BRANCHES}
+
+
+def _sizes(fingerprints: Any) -> dict[str, Any] | None:
+    """``{파일: [크기, mtime_ns]}`` → ``{파일: 크기}``. mtime 은 결과 폴더를 옮기면 바뀌어 대조하지 않는다(내용은 다이제스트가 본다)."""
+    if not isinstance(fingerprints, Mapping):
+        return None
+    out = {}
+    for name, signature in fingerprints.items():
+        if not isinstance(signature, (list, tuple)) or len(signature) != 2:
+            return None
+        out[str(name)] = signature[0]
+    return out
+
+
+def verify_branch_read(root: Path, recorded: Any, history: Any) -> tuple[dict[str, Any] | None, str | None]:
+    """분기 원본을 실행 당시 기록과 다시 대조한다 — ``(지금의 근거, None)`` 또는 ``(None, 사유)``.
+
+    1. 실행 당시 읽기 근거가 ``ok`` 이고 실행 ID 가 있어야 한다(없으면 그 분기는 검증된 적이 없다).
+    2. 그 실행 ID 로 ``verify_event_run`` 을 다시 돌린다 — 실행 기록의 파일 목록 · 다이제스트 · 행 수와 디스크가 같은지,
+       기록하지 않은 파티션이 없는지. 실행 루프(``_branch_proof``)와 같이 분기 루트만으로 먼저 보고, 안 되면 본선 t2
+       읽기 근거(``run_meta.event_read_evidence.t2``)를 외부 부모로 넘긴다.
+    3. 결과 파일에 남은 행 수 · 파일 수 · 파일별 크기와 지금이 같아야 한다(분기 루트의 실행 기록까지 함께 바뀐 경우).
+    """
+    from src.decision.observation_contract import verify_event_run
+
+    if isinstance(recorded, str):
+        return None, recorded
+    if not isinstance(recorded, Mapping) or recorded.get("status") != "ok" or not isinstance(recorded.get("run_id"), str):
+        status = recorded.get("status") if isinstance(recorded, Mapping) else None
+        return None, f"실행 당시 분기 읽기 근거가 ok 가 아니다(status={status!r})"
+    run_id = recorded["run_id"]
+    proof = verify_event_run(root, run_id)
+    if proof.get("status") != "ok" and isinstance(history, Mapping):
+        local = proof.get("reason")
+        proof = verify_event_run(root, run_id, history_evidence=history)
+        if proof.get("status") != "ok":
+            return None, f"분기 원본 재검증 실패 — 분기 루트: {local}; 본선 history: {proof.get('reason')}"
+    if proof.get("status") != "ok":
+        return None, f"분기 원본 재검증 실패 — {proof.get('reason')}"
+    then, now = _sizes(recorded.get("fingerprints")), _sizes(proof.get("fingerprints"))
+    problems = []
+    if then is None or now is None:
+        problems.append("파일 지문을 읽을 수 없다")
+    elif then != now:
+        lost, added = sorted(set(then) - set(now)), sorted(set(now) - set(then))
+        resized = sorted(n for n in set(then) & set(now) if then[n] != now[n])
+        problems.append(f"실행 당시와 파일이 다르다(빠짐 {lost} · 추가 {added} · 크기 다름 {resized})")
+    for key in ("raw_rows", "n_files"):
+        if recorded.get(key) != proof.get(key):
+            problems.append(f"{key} 실행 당시 {recorded.get(key)!r} · 지금 {proof.get(key)!r}")
+    if problems:
+        return None, "분기 원본이 실행 당시와 다르다 — " + " · ".join(problems)
+    return proof, None
+
+
+def _unchanged(root: Path, proof: Mapping[str, Any]) -> bool:
+    """읽는 동안 파일이 바뀌지 않았다 — 실행 루프 ``_unchanged_files`` 와 같은 크기 · mtime 대조."""
+    for name, signature in (proof.get("fingerprints") or {}).items():
+        path = Path(root) / name
+        if not path.is_file():
+            return False
+        stat = path.stat()
+        if [stat.st_size, stat.st_mtime_ns] != list(signature):
+            return False
+    return True
 
 
 def branch_stage_statuses(meta: Mapping[str, Any]) -> dict[str, Any]:
@@ -204,20 +289,31 @@ def branch_invariance(run_dir: Path) -> dict[str, Any]:
         eligible = eligible_t2(inputs["roster"])
         if inputs["missing"]:
             raise Incomplete(inputs["missing"])
+        proofs, unverified = {}, {}
+        for branch in inputs["branches"]:
+            proofs[branch], why = verify_branch_read(
+                inputs["raw_roots"][branch], inputs["recorded_reads"].get(branch), inputs["history_t2"])
+            if why is not None:
+                unverified[branch] = why
+        if unverified:
+            raise Incomplete(unverified)
         treated: set[str] = set()
         for path in inputs["assignments"].values():
             treated |= {str(c) for c in (_read_json(path).get("assignments") or {})}
+        signatures: dict[str, dict[str, tuple]] = {}
+        window_stats: dict[str, dict[str, int]] = {}
+        for branch in inputs["branches"]:
+            root = inputs["raw_roots"][branch]
+            signatures[branch], window_stats[branch] = customer_signatures(
+                sink.read_events(root), inputs["start"], inputs["end"])
+            if not _unchanged(root, proofs[branch]):
+                raise Incomplete({branch: "읽는 도중 분기 원본 파일이 바뀌었다"})
     except NotRun as reason:
         return {**record, "reason": str(reason)}
     except Incomplete as gap:
         return {**record, "status": "incomplete", "complete": False, "branches": list(REQUIRED_BRANCHES),
                 "missing_branches": gap.missing,
                 "reason": f"봉인 대상 분기 {len(gap.missing)}개를 대조할 수 없다 — 있는 분기만으로 판정하지 않는다"}
-    signatures: dict[str, dict[str, tuple]] = {}
-    window_stats: dict[str, dict[str, int]] = {}
-    for branch in inputs["branches"]:
-        signatures[branch], window_stats[branch] = customer_signatures(
-            sink.read_events(inputs["raw_roots"][branch]), inputs["start"], inputs["end"])
     seen = set().union(*(set(s) for s in signatures.values()))
     groups = {"non_eligible": sorted(seen - eligible), "untreated_eligible": sorted(eligible - treated)}
     compared = compare(signatures, groups)
@@ -228,6 +324,8 @@ def branch_invariance(run_dir: Path) -> dict[str, Any]:
         "n_eligible_t2": len(eligible), "n_treated_any_branch": len(treated & eligible),
         "n_treated_outside_eligible": len(treated - eligible),
         "events_by_branch": window_stats,
+        "branch_reads": {b: {"run_id": p.get("run_id"), "raw_rows": p.get("raw_rows"), "n_files": p.get("n_files"),
+                             "method": p.get("method")} for b, p in proofs.items()},
     }
 
 

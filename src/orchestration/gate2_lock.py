@@ -47,6 +47,10 @@ MIN_ARM_CUSTOMERS = 10_000
 CONTROL_ARM = "T0"
 TREATED_ARMS = ("T1", "T2", "T3", "T4")
 BASELINE_STRATEGIES = ("S0", "S1")
+#: 봉인하는 Baseline 실측 경제 지표 — ``run_sprint.MEASURED_KEYS`` 와 같다(시험이 AST 로 대조). 비교(``roi.summarize_strategy``)가
+#: ``measured_<이름>`` 으로 가장 먼저 읽는 값이라, 하나라도 없으면 S1 대비 증분이익 · ROI 의 기준선이 실측이 아니다(B-7).
+REQUIRED_MEASURED: tuple[str, ...] = ("revenue", "marketing_cost", "contribution_profit")
+GATE1_LOCKED = "LOCKED"
 HASHED_RESULT_FILES = ("run_meta.json", "strategy_comparison.json", "branch_invariance.json")
 #: GATE 1 ``freeze.build_record`` 의 거부 목록 + 에이전트 이름.
 NOT_HUMAN = frozenset({"agent", "unknown", "n/a", "-", "claude", "codex"})
@@ -176,27 +180,57 @@ def _git_bytes(root: Path, *args: str) -> bytes | None:
     return done.stdout if done.returncode == 0 else None
 
 
-def gate1_canonical_at(root: Path, commit: str, gate1: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """GATE 1 기록의 ``canonical_files`` 를 **실행 커밋**의 파일과 대조한다 — 해시는 ``freeze.file_sha256`` 그대로.
+def gate1_locked_files(gate1: Mapping[str, Any]) -> dict[str, list[str]]:
+    """GATE 1 기록에서 ``LOCKED`` 항목이 가리키는 정본 → 그 항목들.
 
-    파일 내용은 출력하지 않는다(경로 · 해시만). 기록에 정본이 없으면 빈 목록이다(그때 B-1 은 미충족).
+    ``freeze.verify`` 의 누락 판정("LOCKED 항목의 정본인데 기록에 해시가 없다")이 보는 목록과 같다. 구조가 깨졌으면
+    ``ValueError`` — 빈 목록으로 떨어뜨리면 무엇을 봉인했는지 모른 채 통과한다(PR #327 2차 리뷰).
+    """
+    entries = gate1.get("items")
+    if not isinstance(entries, list):
+        raise ValueError("items 가 목록이 아니다")
+    out: dict[str, list[str]] = {}
+    for index, entry in enumerate(entries):
+        if not isinstance(entry, Mapping) or "item" not in entry or "status" not in entry:
+            raise ValueError(f"items[{index}] 에 item · status 가 없다")
+        if entry["status"] != GATE1_LOCKED:
+            continue
+        files = entry.get("canonical_files") or ()
+        if isinstance(files, (str, bytes)) or not isinstance(files, (list, tuple)):
+            raise ValueError(f"items[{index}].canonical_files 가 경로 목록이 아니다")
+        for relative in files:
+            out.setdefault(str(relative), []).append(str(entry["item"]))
+    return out
+
+
+def gate1_canonical_at(root: Path, commit: str, gate1: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """GATE 1 기록의 정본을 **실행 커밋**의 파일과 대조한다 — 해시는 ``freeze.file_sha256`` 그대로.
+
+    대상 = 기록의 ``canonical_files`` ∪ ``LOCKED`` 항목이 가리키는 정본(``gate1_locked_files``). 뒤쪽에만 있는 정본은
+    ``recorded: None`` 으로 남는다 — 기록에 해시가 없는 봉인 정본이다(B-1 미충족, ``freeze.verify`` 와 같다).
+    파일 내용은 출력하지 않는다(경로 · 해시만). 둘 다 없으면 빈 목록이다(그때 B-1 은 미충족).
     """
     from src.measurement.freeze import file_sha256
 
     recorded = gate1.get("canonical_files")
-    if not isinstance(recorded, Mapping):
-        return []
+    recorded = recorded if isinstance(recorded, Mapping) else {}
+    try:
+        locked = gate1_locked_files(gate1)
+    except ValueError:
+        locked = {}  # B-1 이 같은 함수로 사유를 다시 낸다
+    paths = [str(p) for p in recorded] + [p for p in locked if p not in {str(r) for r in recorded}]
     rows = []
     with tempfile.TemporaryDirectory() as folder:
         scratch = Path(folder) / "canonical"
-        for relative, expected in recorded.items():
+        for relative in paths:
+            expected = recorded.get(relative)
             data = _git_bytes(root, "show", f"{commit}:{relative}")
             actual = None
             if data is not None:
                 scratch.write_bytes(data)
                 actual = file_sha256(scratch)
-            rows.append({"path": str(relative), "recorded": None if expected is None else str(expected),
-                         "at_run_commit": actual})
+            rows.append({"path": relative, "recorded": None if expected is None else str(expected),
+                         "at_run_commit": actual, "locked_items": locked.get(relative, [])})
     return rows
 
 
@@ -275,15 +309,26 @@ def _number(value: Any) -> float | None:
 def _gate1_check(gate1: Mapping[str, Any] | None, canonical: list[dict[str, Any]] | None,
                  run_commit: str | None, run_simulator: Any) -> Check:
     """B-1 — 실행 환경이 GATE 1 봉인과 같다: FULL_FREEZE 선언 · 기록의 simulator_commit = 실행의 simulator_commit ·
-    기록의 정본 파일 해시 = 실행 커밋의 파일 해시(#213 · PR #327 리뷰)."""
-    title = "실행 환경 = GATE 1 봉인(FULL_FREEZE · simulator_commit · 정본 해시, 실행 커밋 기준)"
+    LOCKED 항목이 가리키는 정본이 모두 기록에 해시가 있고 · 기록의 정본 파일 해시 = 실행 커밋의 파일 해시
+    (#213 · PR #327 리뷰 · 2차 리뷰 — ``freeze.verify`` 의 누락 판정과 같다)."""
+    title = "실행 환경 = GATE 1 봉인(FULL_FREEZE · simulator_commit · LOCKED 정본 해시 전부, 실행 커밋 기준)"
     if gate1 is None:
         return Check("B-1", title, None, f"실행 커밋 {str(run_commit)[:12]} 의 {GATE1_RECORD.as_posix()} 를 읽지 못했다")
     declaration = gate1.get("declaration")
     sealed_sim = gate1.get("simulator_commit")
     rows = canonical or []
-    broken = [r["path"] for r in rows if r["recorded"] is None or r["at_run_commit"] != r["recorded"]]
     problems = []
+    try:
+        locked = gate1_locked_files(gate1)
+    except ValueError as error:
+        locked = {}
+        problems.append(f"GATE 1 항목(items)을 읽을 수 없다 — {error}")
+    else:
+        if not locked:
+            problems.append("LOCKED 항목이 가리키는 정본이 없다 — 무엇을 봉인했는지 대조할 수 없다")
+    covered = {r["path"] for r in rows}
+    unrecorded = sorted({r["path"] for r in rows if r["recorded"] is None} | (set(locked) - covered))
+    broken = [r["path"] for r in rows if r["recorded"] is not None and r["at_run_commit"] != r["recorded"]]
     if declaration != GATE1_FULL:
         problems.append(f"declaration={declaration!r}")
     if not sealed_sim or not run_simulator:
@@ -292,16 +337,48 @@ def _gate1_check(gate1: Mapping[str, Any] | None, canonical: list[dict[str, Any]
         problems.append(f"simulator_commit 다름(기록 {str(sealed_sim)[:12]} · 실행 {str(run_simulator)[:12]})")
     if not rows:
         problems.append("기록에 정본 파일(canonical_files)이 없다")
+    if unrecorded:
+        problems.append(f"기록에 해시가 없는 정본 {unrecorded}"
+                        + "".join(f" — {p}: LOCKED {locked[p]}" for p in unrecorded if p in locked))
     if broken:
         problems.append(f"실행 커밋에서 해시가 다른 정본 {broken}")
+    total = len(covered | set(locked))
     evidence = (f"실행 커밋 {str(run_commit)[:12]} · declaration={declaration!r} · simulator_commit "
-                f"{str(sealed_sim)[:12]}={str(run_simulator)[:12]} · 정본 {len(rows) - len(broken)}/{len(rows)} 일치")
+                f"{str(sealed_sim)[:12]}={str(run_simulator)[:12]} · "
+                f"정본 {total - len(unrecorded) - len(broken)}/{total} 일치(LOCKED 정본 {len(locked)}개)")
     return Check("B-1", title, not problems, evidence if not problems else f"{evidence} — {' · '.join(problems)}")
 
 
+def measured_problems(detail: Mapping[str, Any]) -> list[str]:
+    """분기 상세 하나의 실측 경제 지표가 봉인할 수 있는가 — 문제 목록(비면 봉인 가능).
+
+    - 정식 경제 입력 관측(``economics_input_observation``)이 ``ok`` — 아니면 실행 루프가 ``measured_*`` 를 비교에 넘기지 않는다.
+    - ``measured_economics.status == "ok"`` — ``not_run``(교환 묶음 · 읽기 근거 없음) · ``failed`` · ``quality_failed``
+      (분기 창 DQ 실패, 값은 남지만 ``measured_value`` 가 꺼내지 않는다)는 봉인하지 않는다.
+    - ``REQUIRED_MEASURED`` 각각의 상태가 ``ok`` 이고 유한한 수.
+    """
+    problems = []
+    observation = detail.get("economics_input_observation")
+    observation = observation if isinstance(observation, Mapping) else {}
+    if observation.get("status") != "ok":
+        problems.append(f"정식 경제 입력 관측 status={observation.get('status')!r}")
+    economics = detail.get("measured_economics")
+    economics = economics if isinstance(economics, Mapping) else {}
+    if economics.get("status") != "ok":
+        problems.append(f"measured_economics.status={economics.get('status')!r}")
+    metrics = economics.get("metrics") if isinstance(economics.get("metrics"), Mapping) else {}
+    bad = [key for key in REQUIRED_MEASURED
+           if not isinstance(metrics.get(key), Mapping) or metrics[key].get("status") != "ok"
+           or _number(metrics[key].get("value")) is None]
+    if bad:
+        problems.append(f"ok 인 값이 없는 실측 지표 {bad}")
+    return problems
+
+
 def _baseline_check(meta: Mapping[str, Any], comparison: Mapping[str, Any] | None) -> Check:
-    """B-7 — S0 · S1 분기 ok, 같은 실행의 ``strategy_comparison.json`` 에 S0 · S1 상세(배정 수 · 계획 비용)가 있다."""
-    title = "S0 · S1 분기 ok · 같은 실행의 결과 파일에 S0 · S1 상세"
+    """B-7 — S0 · S1 분기 ok, 같은 실행의 ``strategy_comparison.json`` 에 S0 · S1 상세(배정 수 · 계획 비용)와
+    봉인할 실측 경제 지표(``measured_problems``)가 있다(PR #327 2차 리뷰)."""
+    title = "S0 · S1 분기 ok · 같은 실행의 결과 파일에 S0 · S1 상세 · 실측 경제 지표"
     statuses = {s: _stage_status(meta, f"strategy_{s}") for s in BASELINE_STRATEGIES}
     stage_text = " · ".join(f"strategy_{s}={v!r}" for s, v in statuses.items())
     if comparison is None:
@@ -318,6 +395,11 @@ def _baseline_check(meta: Mapping[str, Any], comparison: Mapping[str, Any] | Non
         met = all(v == "ok" for v in statuses.values())
     if lacking:
         problems.append(f"배정 수 · 계획 비용이 없는 상세 {lacking}")
+    for strategy in BASELINE_STRATEGIES:
+        if isinstance(details.get(strategy), Mapping):
+            gaps = measured_problems(details[strategy])
+            if gaps:
+                problems.append(f"{strategy} 실측 경제 지표 — {' · '.join(gaps)}")
     if not same_run:
         problems.append(f"run_id 다름(결과 파일 {comparison.get('run_id')!r} · run_meta {meta.get('run_id')!r})")
     if problems:
@@ -472,6 +554,7 @@ def _baseline_entry(entry: Mapping[str, Any] | None) -> dict[str, Any]:
         "budget_krw": entry.get("budget_krw"),
         "measured_economics": {
             "status": economics.get("status"),
+            "input_observation": (entry.get("economics_input_observation") or {}).get("status"),
             "values": {k: (m.get("value") if isinstance(m, Mapping) and m.get("status") == "ok" else None)
                        for k, m in metrics.items()},
         },

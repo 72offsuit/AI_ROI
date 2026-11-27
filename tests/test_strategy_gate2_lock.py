@@ -161,6 +161,13 @@ class LockedNameTests(unittest.TestCase):
         data = json.loads((REPO_ROOT / "docs" / "team_boundaries.json").read_text(encoding="utf-8"))
         self.assertIn(g.LOCK_RECORD.as_posix(), data["lead_only"]["paths"])
 
+    def test_required_measured_keys_are_run_sprint_measured_keys(self) -> None:
+        """B-7 이 요구하는 실측 지표 = 실행 루프가 비교에 ``measured_<이름>`` 으로 넘기는 지표(``run_sprint.MEASURED_KEYS``)."""
+        tree = ast.parse(RUN_SPRINT.read_text(encoding="utf-8"))
+        values = [ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.AnnAssign)
+                  and isinstance(node.target, ast.Name) and node.target.id == "MEASURED_KEYS"]
+        self.assertEqual([g.REQUIRED_MEASURED], values)
+
     def test_run_uses_the_locked_planned_cost_function(self) -> None:
         """C_rule 합산식이 지문 밖 run() 본문에 남지 않는다 — 잠근 함수를 부른다."""
         rs = _run_sprint_parts("assignment_planned_cost")
@@ -200,14 +207,38 @@ def _git(root: Path, *args: str) -> str:
 
 SIMULATOR_COMMIT = "f" * 40
 ECONOMIC_TEXT = "cost_accounting:\n  message_cost_krw: 30\n"
+ECONOMIC_FILE = "config/economic_config.yaml"
+#: 합성 정본 두 번째 — LOCKED 항목이 정본 둘을 가리키는 반례(PR #327 2차 리뷰)에 쓴다.
+SECOND_TEXT = "metrics:\n  - revenue\n"
+SECOND_FILE = "config/second_canonical.yaml"
+TEXTS = {ECONOMIC_FILE: ECONOMIC_TEXT, SECOND_FILE: SECOND_TEXT}
 
 
-def gate1_text(declaration: str = "FULL_FREEZE", simulator_commit: str | None = SIMULATOR_COMMIT) -> str:
-    """합성 GATE 1 기록 — 정본 하나(경제 설정 자리)의 해시와 simulator_commit 을 담는다."""
-    digest = hashlib.sha256(ECONOMIC_TEXT.encode("utf-8")).hexdigest()
+def gate1_text(declaration: str = "FULL_FREEZE", simulator_commit: str | None = SIMULATOR_COMMIT, *,
+               locked: tuple[str, ...] = (ECONOMIC_FILE,), hashed: tuple[str, ...] = (ECONOMIC_FILE,),
+               items: str | None = None) -> str:
+    """합성 GATE 1 기록 — LOCKED 항목 하나(경제 규칙 자리)가 가리키는 정본(``locked``) · 해시를 적은 정본(``hashed``) ·
+    simulator_commit. ``items`` 를 주면 항목 목록을 그 YAML 조각으로 바꾼다."""
     sim = "null" if simulator_commit is None else simulator_commit
+    if items is None:
+        items = ("items:\n- item: ECONOMIC_RULE_v1\n  status: LOCKED\n  owner_part: measurement\n"
+                 "  scope_note: 합성\n  canonical_files:\n" + "".join(f"  - {path}\n" for path in locked))
+    hashes = "".join(f"  {path}: {hashlib.sha256(TEXTS[path].encode('utf-8')).hexdigest()}\n" for path in hashed)
     return (f"declaration: {declaration}\nlocked_at: '2026-11-26T10:00:00.000+09:00'\nlocked_by: tester\n"
-            f"simulator_commit: {sim}\ncanonical_files:\n  config/economic_config.yaml: {digest}\n")
+            f"simulator_commit: {sim}\n{items}canonical_files:\n{hashes}")
+
+
+def measured(revenue: Any = 1_000.0, marketing: Any = 300.0, profit: Any = 200.0, *,
+             status: str = "ok") -> dict[str, Any]:
+    """분기 상세의 실측 경제 지표 — ``branch_economics`` 가 남기는 모양(값이 None 이면 not_computable)."""
+    def metric(value: Any) -> dict[str, Any]:
+        return {"status": "ok", "value": value} if value is not None else {"status": "unavailable", "value": None}
+    return {"status": status, "metrics": {"revenue": metric(revenue), "marketing_cost": metric(marketing),
+                                          "contribution_profit": metric(profit),
+                                          "cogs": {"status": "not_computable", "value": None}}}
+
+
+OBSERVED = {"economics_input_observation": {"status": "ok", "reason": None}}
 
 
 @unittest.skipUnless(HAVE_GIT and HAVE_YAML, "git 또는 PyYAML 없음")
@@ -237,7 +268,7 @@ class RecordTests(unittest.TestCase):
                   s1_status: str = "ok", budget: Mapping[str, Any] | None = None,
                   invariance: str | None = "same", comparison_run_id: str = "gate2-test",
                   invariance_extra: Mapping[str, Any] | None = None, with_comparison: bool = True,
-                  s1_detail: Mapping[str, Any] | None = None) -> None:
+                  s1_detail: Mapping[str, Any] | None = None, s0_detail: Mapping[str, Any] | None = None) -> None:
         meta = {
             "run_id": "gate2-test", "num_customers": 50_000, "profile": "reference",
             "versions": {"customer_seed": 42},
@@ -254,12 +285,10 @@ class RecordTests(unittest.TestCase):
             "planning_costs_krw": {"T0": 0.0, "T3": 7_030.0},
         }
         comparison = {"run_id": comparison_run_id, "strategy_details": {
-            "S0": {"n_assigned": 0, "n_targeted": 0, "treatment_counts": {}, "planned_cost_krw": 0.0},
+            "S0": {"n_assigned": 0, "n_targeted": 0, "treatment_counts": {}, "planned_cost_krw": 0.0,
+                   "measured_economics": measured(900.0, 0.0, 250.0), **OBSERVED, **(s0_detail or {})},
             "S1": {"n_assigned": 4_100, "n_targeted": 4_100, "treatment_counts": {"T3": 4_100},
-                   "planned_cost_krw": 28_823_000.0,
-                   "measured_economics": {"status": "ok", "metrics": {
-                       "revenue": {"status": "ok", "value": 1_000.0},
-                       "contribution_profit": {"status": "not_computable", "value": None}}},
+                   "planned_cost_krw": 28_823_000.0, "measured_economics": measured(), **OBSERVED,
                    **(s1_detail or {})},
         }}
         (self.run_dir / "run_meta.json").write_text(json.dumps(meta), encoding="utf-8")
@@ -293,8 +322,9 @@ class RecordTests(unittest.TestCase):
         self.assertEqual("광진", payload["locked_by"])
         self.assertEqual(28_823_000.0, payload["budget_cap"]["c_rule_krw"])
         self.assertEqual(4_100, payload["baseline_results"]["S1"]["n_assigned"])
-        self.assertEqual({"revenue": 1_000.0, "contribution_profit": None},
+        self.assertEqual({"revenue": 1_000.0, "marketing_cost": 300.0, "contribution_profit": 200.0, "cogs": None},
                          payload["baseline_results"]["S1"]["measured_economics"]["values"])
+        self.assertEqual("ok", payload["baseline_results"]["S0"]["measured_economics"]["input_observation"])
         self.assertEqual("same", payload["baseline_rule"]["tag"]["names"]["plan_S1"])
         self.assertEqual("run", payload["run"]["results_dir_name"])  # 절대 경로를 남기지 않는다
         self.assertTrue((self.root / g.LOCK_RECORD).exists())
@@ -359,6 +389,36 @@ class RecordTests(unittest.TestCase):
         evidence = next(c.evidence for c in g.collect(self.run_dir, self.commit, self.root)["checks"] if c.id == "B-1")
         self.assertIn("config/economic_config.yaml", evidence)
 
+    def _gate1(self, text: str, message: str) -> None:
+        (self.root / "config" / "gate1_lock.yaml").write_text(text, encoding="utf-8")
+        (self.root / SECOND_FILE).write_text(SECOND_TEXT, encoding="utf-8")
+        _git(self.root, "add", ".")
+        self._commit(message)
+
+    def _b1_evidence(self) -> str:
+        return next(c.evidence for c in g.collect(self.run_dir, self.commit, self.root)["checks"] if c.id == "B-1")
+
+    def test_b1_locked_canonical_without_a_recorded_hash(self) -> None:
+        """PR #327 2차 리뷰 반례 — LOCKED 항목의 정본 두 개 중 경제 설정의 해시만 기록에서 빠져도 B-1 이 통과했다
+        (GATE 1 ``freeze.verify`` 는 같은 기록을 mismatch 로 본다)."""
+        self._gate1(gate1_text(locked=(ECONOMIC_FILE, SECOND_FILE), hashed=(ECONOMIC_FILE, SECOND_FILE)), "both")
+        self.assertEqual({}, self.unmet())
+        self._gate1(gate1_text(locked=(ECONOMIC_FILE, SECOND_FILE), hashed=(SECOND_FILE,)), "one hash missing")
+        self._refused("B-1", False)
+        evidence = self._b1_evidence()
+        self.assertIn(f"기록에 해시가 없는 정본 ['{ECONOMIC_FILE}']", evidence)
+        self.assertIn("ECONOMIC_RULE_v1", evidence)
+
+    def test_b1_gate1_items_must_name_locked_canonicals(self) -> None:
+        """항목 목록이 없거나 LOCKED 정본이 하나도 없으면 무엇을 봉인했는지 대조할 수 없다 — 해시만 맞아도 통과하지 않는다."""
+        for items, needle in (("", "items 가 목록이 아니다"),
+                              ("items:\n- item: ECONOMIC_RULE_v1\n  status: PARTIAL\n", "LOCKED 항목이 가리키는 정본이 없다"),
+                              ("items:\n- status: LOCKED\n", "item · status 가 없다")):
+            with self.subTest(items=items):
+                self._gate1(gate1_text(items=items), f"items {needle}")
+                self._refused("B-1", False)
+                self.assertIn(needle, self._b1_evidence())
+
     def test_b2_other_commit_is_refused(self) -> None:
         (self.root / "README.md").write_text("x\n", encoding="utf-8")
         _git(self.root, "add", "README.md")
@@ -392,6 +452,28 @@ class RecordTests(unittest.TestCase):
         self._refused("B-7", False)
         with mock.patch.object(g, "REPO_ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(1, g.main(["check", str(self.run_dir), "--expected-commit", self.commit]))
+
+    def test_b7_baseline_without_measured_economics(self) -> None:
+        """PR #327 2차 리뷰 반례 — 교환 묶음을 못 받아 ``branch_economics`` 가 not_run 이고 S1 실측 값이 ``{}`` 여도
+        check 가 0 이었다. 봉인 대상(DR-170 G2 3)에 실측 경제 지표가 있으니 비면 거부한다."""
+        cases = {
+            "not_run": {"measured_economics": {"status": "not_run", "reason": "sim.exchange_bundle 상태 'missing'"}},
+            "값이 빔": {"measured_economics": {"status": "ok", "metrics": {}}},
+            "DQ 실패": {"measured_economics": measured(status="quality_failed")},
+            "기여이익 없음": {"measured_economics": measured(profit=None)},
+            "관측 근거 미충족": {"economics_input_observation": {"status": "not_run", "reason": "read_complete"}},
+        }
+        for label, detail in cases.items():
+            with self.subTest(label=label):
+                self.write_run(s1_detail=detail)
+                self._refused("B-7", False)
+                evidence = next(c.evidence for c in g.collect(self.run_dir, self.commit, self.root)["checks"]
+                                if c.id == "B-7")
+                self.assertIn("S1 실측 경제 지표", evidence)
+                with mock.patch.object(g, "REPO_ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(1, g.main(["check", str(self.run_dir), "--expected-commit", self.commit]))
+        self.write_run(s0_detail={"measured_economics": measured(marketing=None)})   # 기준 S0 도 같다
+        self._refused("B-7", False)
 
     def test_b7_result_file_from_another_run(self) -> None:
         self.write_run(comparison_run_id="SP-other")
