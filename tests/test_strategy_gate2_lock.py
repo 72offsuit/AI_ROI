@@ -419,6 +419,35 @@ class RecordTests(unittest.TestCase):
                 self._refused("B-1", False)
                 self.assertIn(needle, self._b1_evidence())
 
+    def test_b1_each_locked_item_needs_its_own_canonical_list(self) -> None:
+        """PR #327 3차 리뷰 반례 — LOCKED 항목 하나의 정본 목록만 빼고 다른 항목의 정본 해시를 맞게 남기면 B-1 이 통과했다
+        (``canonical_files or ()`` 가 그 항목을 조용히 건너뛰었다). GATE 1 공용 ``LockItem`` 은 LOCKED 에 비어 있지 않은
+        정본 목록을 요구한다."""
+        head = ("items:\n- item: ECONOMIC_RULE_v1\n  status: LOCKED\n  owner_part: measurement\n  scope_note: 합성\n"
+                f"  canonical_files:\n  - {ECONOMIC_FILE}\n"
+                "- item: KPI_DEFINITION_v1\n  status: LOCKED\n  owner_part: measurement\n  scope_note: 합성\n")
+        hashed = (ECONOMIC_FILE, SECOND_FILE)
+        self._gate1(gate1_text(hashed=hashed, items=head + f"  canonical_files:\n  - {SECOND_FILE}\n"), "both listed")
+        self.assertEqual({}, self.unmet())                                    # 대조군 — 두 항목 모두 목록이 있다
+        cases = {"목록 없음": ("", "canonical_files 가 비었다"),
+                 "빈 목록": ("  canonical_files: []\n", "canonical_files 가 비었다"),
+                 "문자열": (f"  canonical_files: {SECOND_FILE}\n", "경로 목록이 아니다"),
+                 "숫자 원소": ("  canonical_files:\n  - 123\n", "경로 문자열이 아닌 값"),
+                 "범위 문장 없음": (f"  canonical_files:\n  - {SECOND_FILE}\n", "scope_note 가 비었다")}
+        for label, (tail, needle) in cases.items():
+            with self.subTest(label=label):
+                items = head + tail
+                if label == "범위 문장 없음":
+                    items = items.replace("KPI_DEFINITION_v1\n  status: LOCKED\n  owner_part: measurement\n  scope_note: 합성\n",
+                                          "KPI_DEFINITION_v1\n  status: LOCKED\n  owner_part: measurement\n")
+                self._gate1(gate1_text(hashed=hashed, items=items), f"b1 {label}")
+                self._refused("B-1", False)
+                evidence = self._b1_evidence()
+                self.assertIn("KPI_DEFINITION_v1", evidence)
+                self.assertIn(needle, evidence)
+                with mock.patch.object(g, "REPO_ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
+                    self.assertEqual(1, g.main(["check", str(self.run_dir), "--expected-commit", self.commit]))
+
     def test_b2_other_commit_is_refused(self) -> None:
         (self.root / "README.md").write_text("x\n", encoding="utf-8")
         _git(self.root, "add", "README.md")
@@ -502,6 +531,11 @@ class RecordTests(unittest.TestCase):
         self.write_run(invariance_extra={"status": "incomplete", "result": None, "complete": False,
                                          "missing_branches": {"S2": "분기 원본이 없다"}})
         self._refused("B-9", False)
+        # PR #327 3차 리뷰 — 분기 원본 내용이 실행 당시와 다르면(incomplete) check 도 실패로 끝난다
+        self.write_run(invariance_extra={"status": "incomplete", "result": None, "complete": False,
+                                         "missing_branches": {"S2": "분기 원본 내용이 실행 당시와 다르다"}})
+        with mock.patch.object(g, "REPO_ROOT", self.root), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(1, g.main(["check", str(self.run_dir), "--expected-commit", self.commit]))
         self.write_run(invariance_extra={"branches": ["S0", "S1", "S3", "S4", "S5"]})
         self._refused("B-9", False)
         self.write_run(invariance_extra={"run_id": "SP-other"})

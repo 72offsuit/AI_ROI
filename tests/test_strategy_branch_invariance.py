@@ -70,6 +70,31 @@ def write_run_record(root: Path, run_id: str, parent: str | None = None) -> None
 #: 본선 t2 읽기 근거 — 분기 실행이 본선 history 를 외부 부모로 잇는 경우(실행 루프 ``_branch_proof``).
 MAIN_HISTORY = {"status": "ok", "run_id": "SR-main", "verified_run_ids": ["SR-main"], "run_rejections": {"SR-main": 0}}
 
+#: 본선 t2 원본(history) — 실행 루프가 분기 읽기 때 이 행 지문과 분기 행 지문을 합쳐 ``public_stream_content`` 를 남긴다.
+HISTORY_EVENTS = [
+    _event("N1", "2026-02-20T10:00:00+09:00"),
+    _event("E1", "2026-02-21T11:00:00+09:00", "purchase", 9_000),
+]
+
+
+def content_hashes(root: Path) -> list[bytes]:
+    """실행 루프와 같은 행 지문(``observation_contract.event_content_hash`` · ``sink.read_events``)."""
+    from src.decision.observation_contract import event_content_hash
+    from src.measurement.sink import read_events
+
+    return [event_content_hash(row) for row in read_events(root)]
+
+
+def write_partitions(root: Path, events: list[dict[str, Any]]) -> None:
+    """KST 날짜별 파티션(``events/date=YYYY-MM-DD/part-0000.jsonl``)."""
+    by_date: dict[str, list[dict[str, Any]]] = {}
+    for event in events:
+        by_date.setdefault(event["timestamp"][:10], []).append(event)
+    for day, rows in by_date.items():
+        folder = root / "events" / f"date={day}"
+        folder.mkdir(parents=True, exist_ok=True)
+        (folder / "part-0000.jsonl").write_text("".join(json.dumps(e) + "\n" for e in rows), encoding="utf-8")
+
 
 @unittest.skipUnless(HAVE_PANDAS, "pandas 없음 — 분기 원본 재검증(verify_event_run)이 행 수를 pandas 로 센다")
 class BranchInvarianceTests(unittest.TestCase):
@@ -91,23 +116,26 @@ class BranchInvarianceTests(unittest.TestCase):
               roster_t2: list[str] = ("E1", "E2"), with_roster: bool = True,
               stage_status: dict[str, str] | None = None, parent: str | None = None,
               with_history: bool = True) -> None:
-        """분기 원본은 KST 날짜별 파티션 · 실행 기록, 결과 파일에는 실행 당시의 분기 읽기 근거를 남긴다."""
-        from src.decision.observation_contract import verify_event_run
+        """분기 원본은 KST 날짜별 파티션 · 실행 기록, 결과 파일에는 실행 당시의 분기 읽기 근거(내용 다이제스트 포함 —
+        실행 루프의 통제된 분기 읽기가 남기는 ``public_stream_content`` · ``history_content``)를 남긴다."""
+        from src.decision.observation_contract import event_content_digest, verify_event_run
 
+        main = self.tmp / "out" / "raw" / "main"
+        if not main.exists():
+            write_partitions(main, HISTORY_EVENTS)
+            write_run_record(main, "SR-main")
+        history_hashes = content_hashes(main)
+        self.history = {**MAIN_HISTORY, "root": str(main)}
         raw_roots, files, reads = {}, {}, {}
         for branch, events in events_by_branch.items():
             root = self.raw(branch)
-            by_date: dict[str, list[dict[str, Any]]] = {}
-            for event in events:
-                by_date.setdefault(event["timestamp"][:10], []).append(event)
-            for day, rows in by_date.items():
-                folder = root / "events" / f"date={day}"
-                folder.mkdir(parents=True, exist_ok=True)
-                (folder / "part-0000.jsonl").write_text("".join(json.dumps(e) + "\n" for e in rows), encoding="utf-8")
+            write_partitions(root, events)
             run_id = f"SR-{branch}"
             write_run_record(root, run_id, parent)
             reads[branch] = {**verify_event_run(root, run_id, history_evidence=MAIN_HISTORY if parent else None),
-                             "branch_run_ids": [run_id]}
+                             "branch_run_ids": [run_id],
+                             "public_stream_content": event_content_digest(history_hashes + content_hashes(root)),
+                             "history_content": event_content_digest(history_hashes)}
             raw_roots[branch] = str(root)
             path = self.tmp / "out" / "assignments" / "strategies" / f"{branch}.json"
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -117,7 +145,7 @@ class BranchInvarianceTests(unittest.TestCase):
         stages = [{"name": f"strategy_{b}", "status": (stage_status or {}).get(b, "ok")} for b in events_by_branch]
         meta = {"run_id": "SP-test", "timeline": {"t2": T2, "end": END}, "raw_roots": {"main": "x", **raw_roots},
                 "assignment_files": {"strategies": files}, "split_roster": {"file": bi.ROSTER_FILE},
-                "stages": stages, "event_read_evidence": {"t2": MAIN_HISTORY if with_history else None}}
+                "stages": stages, "event_read_evidence": {"t2": self.history if with_history else None}}
         (self.run_dir / "run_meta.json").write_text(json.dumps(meta), encoding="utf-8")
         self.write_reads(reads)
         if with_roster:
@@ -149,8 +177,10 @@ class BranchInvarianceTests(unittest.TestCase):
         s0 = result["groups"]["non_eligible"]["by_branch"]["S0"]
         self.assertEqual({"events": 2, "purchases": 1, "revenue_krw": 12_000.0}, {k: s0[k] for k in ("events", "purchases", "revenue_krw")})
         self.assertEqual(1, result["events_by_branch"]["S0"]["n_outside_window"])
-        self.assertEqual({"run_id": "SR-S1", "raw_rows": 6, "n_files": 5}, {  # 날짜 5개 = 파티션 5개
-            k: result["branch_reads"]["S1"][k] for k in ("run_id", "raw_rows", "n_files")})
+        self.assertEqual({"run_id": "SR-S1", "raw_rows": 6, "n_files": 5, "content_verified": True}, {  # 날짜 5개 = 파티션 5개
+            k: result["branch_reads"]["S1"][k] for k in ("run_id", "raw_rows", "n_files", "content_verified")})
+        self.assertEqual(8, result["branch_reads"]["S1"]["public_stream_content"]["rows"])   # 본선 2 + 분기 6
+        self.assertEqual(2, result["history_content"]["rows"])
 
     def test_differs_when_an_untreated_customer_changes(self) -> None:
         changed = [*BASE_EVENTS[:1], _event("N1", "2026-03-02T10:05:00+09:00", "purchase", 12_500), *BASE_EVENTS[2:]]
@@ -219,6 +249,52 @@ class BranchInvarianceTests(unittest.TestCase):
         self.assertEqual("incomplete", result["status"])
         self.assertIn("실행 당시와 파일이 다르다", result["missing_branches"]["S2"])
         self.assertIn("date=2026-03-10/part-0000.jsonl", result["missing_branches"]["S2"])
+
+    def test_same_size_content_change_with_rewritten_run_record_is_incomplete(self) -> None:
+        """PR #327 3차 리뷰 반례 — S2 주문액만 12,500 → 12,000 으로 바꾼 같은 크기의 파티션과 그 내용에 맞춘 실행 기록을 두면,
+        실행 당시 결과 파일을 그대로 두었는데도 ``differs`` 가 ``same`` 이 됐다(check 0). 크기 · 행 수 · 지금의 실행 기록은
+        모두 맞는다 — 실행 당시 내용 다이제스트만 다르다."""
+        changed = [*BASE_EVENTS[:1], _event("N1", "2026-03-02T10:05:00+09:00", "purchase", 12_500), *BASE_EVENTS[2:]]
+        self.write(self.six(S2=changed), {})
+        self.assertEqual("differs", bi.branch_invariance(self.run_dir)["result"])
+        part = self.raw("S2") / "events" / "date=2026-03-02" / "part-0000.jsonl"
+        before = part.read_text(encoding="utf-8")
+        part.write_text(before.replace("12500", "12000"), encoding="utf-8")
+        self.assertEqual(len(before.encode()), part.stat().st_size)          # 같은 크기
+        write_run_record(self.raw("S2"), "SR-S2")                              # 내용에 맞춘 실행 기록
+        result = bi.branch_invariance(self.run_dir)
+        self.assertEqual(("incomplete", None, False), (result["status"], result["result"], result["complete"]))
+        self.assertEqual(["S2"], list(result["missing_branches"]))
+        self.assertIn("분기 원본 내용이 실행 당시와 다르다", result["missing_branches"]["S2"])
+        with contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(2, bi.main([str(self.run_dir)]))                 # same(0) 이 아니다
+
+    def test_history_content_change_is_incomplete_for_every_branch(self) -> None:
+        """본선 t2 원본이 실행 뒤 바뀌면 분기 내용 대조의 기준이 달라진다 — 모든 분기가 대조 불가다."""
+        self.write(self.six(), {})
+        part = self.tmp / "out" / "raw" / "main" / "events" / "date=2026-02-21" / "part-0000.jsonl"
+        part.write_text(part.read_text(encoding="utf-8").replace("9000", "8000"), encoding="utf-8")
+        write_run_record(self.tmp / "out" / "raw" / "main", "SR-main")
+        result = bi.branch_invariance(self.run_dir)
+        self.assertEqual(("incomplete", list(bi.REQUIRED_BRANCHES)), (result["status"], list(result["missing_branches"])))
+        self.assertIn("본선 history 내용이 실행 당시와 다르다", result["missing_branches"]["S0"])
+
+    def test_recorded_read_without_content_digest_or_history_root_is_incomplete(self) -> None:
+        """실행 당시 내용 다이제스트가 없는 근거(통제된 분기 읽기가 아닌 읽기)나 본선 원본 경로가 없으면 대조할 수 없다."""
+        self.write(self.six(), {})
+        reads = self.reads()
+        del reads["S3"]["public_stream_content"]
+        self.write_reads(reads)
+        result = bi.branch_invariance(self.run_dir)
+        self.assertEqual(["S3"], list(result["missing_branches"]))
+        self.assertIn("실행 당시 내용 다이제스트", result["missing_branches"]["S3"])
+        self.write(self.six(), {})
+        meta = json.loads((self.run_dir / "run_meta.json").read_text(encoding="utf-8"))
+        meta["event_read_evidence"]["t2"].pop("root")
+        (self.run_dir / "run_meta.json").write_text(json.dumps(meta), encoding="utf-8")
+        result = bi.branch_invariance(self.run_dir)
+        self.assertEqual(("incomplete", list(bi.REQUIRED_BRANCHES)), (result["status"], list(result["missing_branches"])))
+        self.assertIn("본선 t2 원본 경로", result["missing_branches"]["S1"])
 
     def test_branch_without_a_recorded_ok_read_is_incomplete(self) -> None:
         """실행 당시 읽기 근거가 없거나 ok 가 아니면 그 분기는 검증된 적이 없다 — 결과 파일이 없으면 전 분기다."""

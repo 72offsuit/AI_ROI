@@ -185,7 +185,14 @@ def gate1_locked_files(gate1: Mapping[str, Any]) -> dict[str, list[str]]:
 
     ``freeze.verify`` 의 누락 판정("LOCKED 항목의 정본인데 기록에 해시가 없다")이 보는 목록과 같다. 구조가 깨졌으면
     ``ValueError`` — 빈 목록으로 떨어뜨리면 무엇을 봉인했는지 모른 채 통과한다(PR #327 2차 리뷰).
+
+    ``LOCKED`` 항목마다 GATE 1 공용 계약 ``freeze.LockItem`` 을 그대로 세운다 — 비어 있지 않은 정본 목록(경로 문자열)과
+    범위 문장이 없으면 ``ValueError``(항목 이름 포함). 목록이 없거나 빈 항목을 건너뛰면, 다른 항목의 정본 해시만 맞아도
+    B-1 이 통과했다(PR #327 3차 리뷰). ``LOCKED`` 가 아닌 항목은 여기서 보지 않는다 — 기록 전체의 불변식은
+    ``freeze.verify`` 의 몫이다.
     """
+    from src.measurement.freeze import LockItem
+
     entries = gate1.get("items")
     if not isinstance(entries, list):
         raise ValueError("items 가 목록이 아니다")
@@ -195,11 +202,20 @@ def gate1_locked_files(gate1: Mapping[str, Any]) -> dict[str, list[str]]:
             raise ValueError(f"items[{index}] 에 item · status 가 없다")
         if entry["status"] != GATE1_LOCKED:
             continue
-        files = entry.get("canonical_files") or ()
+        name = str(entry["item"])
+        files = entry.get("canonical_files")
+        files = () if files is None else files
         if isinstance(files, (str, bytes)) or not isinstance(files, (list, tuple)):
-            raise ValueError(f"items[{index}].canonical_files 가 경로 목록이 아니다")
+            raise ValueError(f"items[{index}] {name}: canonical_files 가 경로 목록이 아니다")
+        if not all(isinstance(path, str) and path.strip() for path in files):
+            raise ValueError(f"items[{index}] {name}: canonical_files 에 경로 문자열이 아닌 값이 있다")
+        try:
+            LockItem(item=name, status=GATE1_LOCKED, owner_part=str(entry.get("owner_part") or ""),
+                     scope_note=str(entry.get("scope_note") or ""), canonical_files=tuple(files))
+        except ValueError as error:
+            raise ValueError(f"items[{index}] — GATE 1 LockItem 계약 위반: {error}") from error
         for relative in files:
-            out.setdefault(str(relative), []).append(str(entry["item"]))
+            out.setdefault(relative, []).append(name)
     return out
 
 

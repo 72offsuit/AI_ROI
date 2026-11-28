@@ -1,6 +1,6 @@
 """분기 간 대조 — 처치받지 않은 고객의 분기 창 결과가 분기와 무관한가 (DR-234 P3 반증 조건 · DR-170-gate2-lock G5).
 
-한 실행의 결과 폴더(``run_meta.json`` · 명부 ``split_roster.csv`` · 분기별 배정 파일 · 분기 원본 ``branches/<S>/raw``)를 읽어
+한 실행의 결과 폴더(``run_meta.json`` · 명부 ``split_roster.csv`` · 분기별 배정 파일 · 분기 원본 ``branches/S0~S5/raw``)를 읽어
 두 고객군의 **고객별** [t2, end) 이벤트 수 · 유형별 수 · purchase 수 · purchase ``order_amount`` 합을 기준 분기 S0 과 다른
 분기마다 대조한다.
 
@@ -28,7 +28,7 @@ import sys
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable, Mapping, Sequence
+from typing import Any, Iterable, Iterator, Mapping, Sequence
 
 KST = timezone(timedelta(hours=9), "KST")
 REFERENCE_BRANCH = "S0"
@@ -196,6 +196,9 @@ def verify_branch_read(root: Path, recorded: Any, history: Any) -> tuple[dict[st
        기록하지 않은 파티션이 없는지. 실행 루프(``_branch_proof``)와 같이 분기 루트만으로 먼저 보고, 안 되면 본선 t2
        읽기 근거(``run_meta.event_read_evidence.t2``)를 외부 부모로 넘긴다.
     3. 결과 파일에 남은 행 수 · 파일 수 · 파일별 크기와 지금이 같아야 한다(분기 루트의 실행 기록까지 함께 바뀐 경우).
+    4. 실행 당시 내용 다이제스트(``public_stream_content`` · ``history_content``)가 있어야 한다 — 내용 대조는
+       ``branch_invariance`` 가 분기 원본을 읽으면서 한다(``content_mismatch``, PR #327 3차 리뷰). 2 · 3 은 지금의 디스크와
+       지금의 실행 기록이 서로 맞는지와 크기만 본다 — 같은 크기로 값만 바꾸고 실행 기록을 다시 쓰면 통과한다.
     """
     from src.decision.observation_contract import verify_event_run
 
@@ -204,6 +207,9 @@ def verify_branch_read(root: Path, recorded: Any, history: Any) -> tuple[dict[st
     if not isinstance(recorded, Mapping) or recorded.get("status") != "ok" or not isinstance(recorded.get("run_id"), str):
         status = recorded.get("status") if isinstance(recorded, Mapping) else None
         return None, f"실행 당시 분기 읽기 근거가 ok 가 아니다(status={status!r})"
+    if not (_is_digest(recorded.get("public_stream_content")) and _is_digest(recorded.get("history_content"))):
+        return None, ("실행 당시 내용 다이제스트(public_stream_content · history_content)가 없다 — 분기 원본의 내용을 "
+                      "실행 당시와 대조할 수 없다")
     run_id = recorded["run_id"]
     proof = verify_event_run(root, run_id)
     if proof.get("status") != "ok" and isinstance(history, Mapping):
@@ -239,6 +245,60 @@ def _unchanged(root: Path, proof: Mapping[str, Any]) -> bool:
         if [stat.st_size, stat.st_mtime_ns] != list(signature):
             return False
     return True
+
+
+def _is_digest(value: Any) -> bool:
+    """``event_content_digest`` 의 모양 — ``{"rows": int, "sha256": str}``."""
+    return (isinstance(value, Mapping) and isinstance(value.get("rows"), int) and not isinstance(value.get("rows"), bool)
+            and isinstance(value.get("sha256"), str) and len(value["sha256"]) == 64)
+
+
+def _hashed(events: Iterable[Mapping[str, Any]], hashes: list[bytes]) -> Iterator[Mapping[str, Any]]:
+    """이벤트를 그대로 넘기면서 행마다 공개 22필드 내용 지문(``event_content_hash``)을 모은다 — 서명과 내용 대조가
+    같은 한 번의 읽기를 쓴다(대조한 행과 센 행이 다를 틈이 없다)."""
+    from src.decision.observation_contract import event_content_hash
+
+    for event in events:
+        hashes.append(event_content_hash(event))
+        yield event
+
+
+def history_hashes(history: Any) -> tuple[list[bytes] | None, str | None]:
+    """본선 t2 원본(실행 당시 분기 읽기의 history — ``run_meta.event_read_evidence.t2.root``)의 행 지문.
+
+    실행 루프는 분기 읽기 때 ``event_content_digest(본선 행 지문 + 분기 행 지문)`` 을 ``public_stream_content`` 로 남긴다
+    (``run_sprint`` 의 통제된 분기 읽기). 그 값을 다시 내려면 본선 행 지문이 필요하다. 본선 원본은 t2 뒤로 쓰이지
+    않는다(분기는 각자의 ``branches/S0~S5/raw`` 로 복원 · 진행한다).
+    """
+    from src.measurement import sink
+
+    root = history.get("root") if isinstance(history, Mapping) else None
+    if not isinstance(root, str) or not Path(root).is_dir():
+        return None, ("본선 t2 원본 경로(run_meta.event_read_evidence.t2.root)를 알 수 없다 — 분기 내용을 실행 당시와 "
+                      "대조할 수 없다")
+    hashes: list[bytes] = []
+    try:
+        for _ in _hashed(sink.read_events(Path(root)), hashes):
+            pass
+    except (OSError, ValueError) as error:
+        return None, f"본선 t2 원본의 내용 지문을 낼 수 없다: {type(error).__name__}: {error}"
+    return hashes, None
+
+
+def content_mismatch(recorded: Mapping[str, Any], history: list[bytes], branch: list[bytes]) -> str | None:
+    """실행 당시 내용 다이제스트와 지금의 원본 내용을 대조한다 — 어긋나면 사유, 같으면 ``None``."""
+    from src.decision.observation_contract import event_content_digest
+
+    def show(d: Mapping[str, Any]) -> str:
+        return f"{d.get('rows')}행 · sha256 {str(d.get('sha256'))[:12]}"
+
+    then_history, now_history = recorded["history_content"], event_content_digest(history)
+    if (then_history["rows"], then_history["sha256"]) != (now_history["rows"], now_history["sha256"]):
+        return f"본선 history 내용이 실행 당시와 다르다(실행 당시 {show(then_history)} · 지금 {show(now_history)})"
+    then, now = recorded["public_stream_content"], event_content_digest(history + branch)
+    if (then["rows"], then["sha256"]) != (now["rows"], now["sha256"]):
+        return f"분기 원본 내용이 실행 당시와 다르다(본선 + 분기 실행 당시 {show(then)} · 지금 {show(now)})"
+    return None
 
 
 def branch_stage_statuses(meta: Mapping[str, Any]) -> dict[str, Any]:
@@ -297,17 +357,31 @@ def branch_invariance(run_dir: Path) -> dict[str, Any]:
                 unverified[branch] = why
         if unverified:
             raise Incomplete(unverified)
+        history, why = history_hashes(inputs["history_t2"])
+        if history is None:
+            raise Incomplete({branch: why for branch in inputs["branches"]})
         treated: set[str] = set()
         for path in inputs["assignments"].values():
             treated |= {str(c) for c in (_read_json(path).get("assignments") or {})}
         signatures: dict[str, dict[str, tuple]] = {}
         window_stats: dict[str, dict[str, int]] = {}
+        changed: dict[str, str] = {}
         for branch in inputs["branches"]:
             root = inputs["raw_roots"][branch]
-            signatures[branch], window_stats[branch] = customer_signatures(
-                sink.read_events(root), inputs["start"], inputs["end"])
+            hashes: list[bytes] = []
+            try:
+                signatures[branch], window_stats[branch] = customer_signatures(
+                    _hashed(sink.read_events(root), hashes), inputs["start"], inputs["end"])
+            except ValueError as error:
+                changed[branch] = f"분기 원본 행의 내용 지문을 낼 수 없다: {error}"
+                continue
             if not _unchanged(root, proofs[branch]):
                 raise Incomplete({branch: "읽는 도중 분기 원본 파일이 바뀌었다"})
+            mismatch = content_mismatch(inputs["recorded_reads"][branch], history, hashes)
+            if mismatch is not None:
+                changed[branch] = mismatch
+        if changed:
+            raise Incomplete(changed)
     except NotRun as reason:
         return {**record, "reason": str(reason)}
     except Incomplete as gap:
@@ -325,7 +399,10 @@ def branch_invariance(run_dir: Path) -> dict[str, Any]:
         "n_treated_outside_eligible": len(treated - eligible),
         "events_by_branch": window_stats,
         "branch_reads": {b: {"run_id": p.get("run_id"), "raw_rows": p.get("raw_rows"), "n_files": p.get("n_files"),
-                             "method": p.get("method")} for b, p in proofs.items()},
+                             "method": p.get("method"), "content_verified": True,
+                             "public_stream_content": inputs["recorded_reads"][b]["public_stream_content"]}
+                         for b, p in proofs.items()},
+        "history_content": inputs["recorded_reads"][inputs["branches"][0]]["history_content"],
     }
 
 

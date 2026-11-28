@@ -4,7 +4,7 @@
 |---|---|
 | 태스크 | 이슈 #170 (GATE 2 정식 봉인 — Rule Baseline 경로 · 예산 상한) |
 | 작성 | 인성(시스템 팀 리드, 에이전트 구현) · 2026-11-26 |
-| 상태 | 제안 — 광진 리뷰(PR #327, 11/26 · 11/27 2차) 반영(아래 「리뷰 반영」). 재리뷰 뒤 확정. 봉인(서명)은 GATE 1 완전 봉인(#163) 뒤 Baseline 실행에서 광진이 한다 |
+| 상태 | 제안 — 광진 리뷰(PR #327, 11/26 · 11/27 2차 · 11/28 3차) 반영(아래 「리뷰 반영」). 재리뷰 뒤 확정. 봉인(서명)은 GATE 1 완전 봉인(#163) 뒤 Baseline 실행에서 광진이 한다 |
 | 관련 | DR-170-c-rule-budget(C_rule) · DR-145-strategy-sprint(S1 규칙) · DR-234-population-experiment-scale(Eligible · P3) · DR-211-experiment-scale-config(FR-05) |
 
 ## 무엇을 정하는가
@@ -107,7 +107,7 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
 
 | ID | 조건 | 근거 |
 |---|---|---|
-| B-1 | 실행 환경 = GATE 1 봉인: 실행 커밋의 `config/gate1_lock.yaml` 이 `FULL_FREEZE`, 기록의 `simulator_commit` = 실행 `provenance.simulator_commit`(어느 쪽이든 없으면 미충족), 기록의 `LOCKED` 항목이 가리키는 정본이 **모두** 기록에 해시가 있고(`freeze.verify` 의 "LOCKED 항목의 정본인데 기록에 해시가 없다"와 같은 판정, 항목 목록이 없거나 LOCKED 정본이 없어도 미충족), 기록의 정본 파일(`canonical_files`) 해시 = **실행 커밋**의 그 파일 해시(`freeze.file_sha256`) | PRD 순서 "GATE 1 봉인 → GATE 2", #170 11/13 "GATE 1 봉인 커밋에서", #213 "S0 · S1 Baseline 결과가 GATE 1 봉인 환경(`simulator_commit`)에서 나왔는지" |
+| B-1 | 실행 환경 = GATE 1 봉인: 실행 커밋의 `config/gate1_lock.yaml` 이 `FULL_FREEZE`, 기록의 `simulator_commit` = 실행 `provenance.simulator_commit`(어느 쪽이든 없으면 미충족), `LOCKED` 항목마다 GATE 1 공용 계약 `freeze.LockItem` 이 서고(비어 있지 않은 정본 목록 — 경로 문자열 — 과 범위 문장, 아니면 미충족 · 근거에 항목 이름), 그 정본이 **모두** 기록에 해시가 있고(`freeze.verify` 의 "LOCKED 항목의 정본인데 기록에 해시가 없다"와 같은 판정, 항목 목록이 없거나 LOCKED 정본이 없어도 미충족), 기록의 정본 파일(`canonical_files`) 해시 = **실행 커밋**의 그 파일 해시(`freeze.file_sha256`) | PRD 순서 "GATE 1 봉인 → GATE 2", #170 11/13 "GATE 1 봉인 커밋에서", #213 "S0 · S1 Baseline 결과가 GATE 1 봉인 환경(`simulator_commit`)에서 나왔는지" |
 | B-2 | `provenance.repo_commit` = 지정한 커밋(태그) | #170 11/05 표 |
 | B-3 | `require_clean = true` · `repo_worktree_dirty = false` | #170 11/05 표 · DR-262 |
 | B-4 | `repo_changed_during_run = false` | #170 11/05 표 |
@@ -136,6 +136,15 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
   3. 결과 파일에 남은 행 수 · 파일 수 · 파일별 크기가 지금과 같아야 한다(분기 루트의 실행 기록까지 함께 바뀐 경우를 잡는다).
      mtime 은 결과 폴더를 옮기면 바뀌므로 대조하지 않는다 — 내용은 2의 다이제스트가 본다.
   4. 읽은 뒤 파일 크기 · mtime 이 재검증 때와 같아야 한다(실행 루프 `_unchanged_files` 와 같다).
+  5. **내용이 실행 당시와 같아야 한다(3차 리뷰).** 실행 루프의 통제된 분기 읽기는 이미 내용 근거를 남긴다 —
+     `public_stream_content` = `event_content_digest(본선 t2 행 지문 + 분기 행 지문)`, `history_content` = 본선 t2 행 지문의
+     다이제스트(공개 22필드 `event_content_hash`, 행 순서 무관 · 중복 유지). 대조할 때 본선 t2 원본(`event_read_evidence.t2.root`)과
+     분기 원본을 같은 함수로 다시 해시해 둘 다 같아야 한다. 분기 행 지문은 서명을 만드는 **같은 한 번의 읽기**에서 낸다(대조한 행과
+     센 행이 다를 틈이 없다). 근거가 없거나(통제된 분기 읽기가 아닌 읽기) 본선 원본 경로를 모르면 대조할 수 없으므로 `incomplete`.
+     2 · 3 만으로는 지금의 디스크와 지금의 실행 기록이 서로 맞는지 · 크기만 본다 — 같은 크기로 값만 바꾸고 실행 기록을 다시 쓰면
+     통과했다. 새 해시를 결과에 더 남기지 않고 이미 있는 근거를 쓴 이유: 실행 루프가 분기 읽기를 받아들일 때 쓴 바로 그 값이라
+     기준이 둘이 되지 않고, 결과 파일 형식을 바꾸지 않는다. 본선 원본은 t2 뒤로 쓰이지 않는다(분기는 각자 `branches/S0~S5/raw` 로
+     복원 · 진행한다) — 그래서 본선 다이제스트를 다시 낼 수 있다.
   하나라도 어긋나면 그 분기는 `incomplete` 다. 근거: `src/decision/observation_contract.verify_event_run` 이 실험 입력 검증의 단일
   구현이고(#179), 실행 루프도 같은 함수로 분기 읽기를 받아들였다 — 대조 때 다른 기준을 쓰면 실행 때 받아들인 원본과 대조한 원본이
   다를 수 있다.
@@ -195,6 +204,13 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
 | B-1 은 GATE 1 LOCKED 항목이 요구하는 해시도 모두 | LOCKED 항목의 정본 둘 중 경제 설정의 해시 하나만 기록에서 빠진 GATE 1 기록에서 `freeze.verify` 는 `mismatch` 였는데 B-1 은 통과했다 | B-1 — 대조 대상 = 기록의 `canonical_files` ∪ LOCKED 항목의 정본, 기록에 해시가 없으면 미충족. 항목 목록이 없거나 LOCKED 정본이 없어도 미충족 |
 | 실측 경제 지표가 생성되지 않은 Baseline 을 B-7 에서 | 교환 묶음을 받지 못해 `branch_economics` 가 `not_run` 이고 S1 실측 값이 `{}` 여도 `check` 가 0 이었다 | G2 3 · B-7 — 필수 지표 3종 · 허용 상태를 정하고 S0 · S1 모두 검사 |
 
+### 3차(2026-11-28, `0199c80` 에서 찾은 반례)
+
+| 리뷰 | 반례 | 바꾼 것 |
+|---|---|---|
+| B-9 는 원본의 **내용**을 실행 당시 근거와 대조 | S2 주문액만 12,500원 → 12,000원으로 바꾼 같은 크기의 파티션과 그 내용에 맞춘 실행 기록을 두니, 실행 당시 `strategy_comparison.json` 을 그대로 두었는데도 `differs` 가 `same` 이 되고 `check` 가 0 이었다 | G5 5 — 실행 당시 `public_stream_content` · `history_content` 를 본선 · 분기 원본에서 다시 계산해 대조, 어긋나거나 근거 · 본선 경로가 없으면 `incomplete`(B-9 미충족) |
+| B-1 은 LOCKED 항목마다 정본 목록을 | 한 LOCKED 항목의 목록만 빼고 다른 항목의 정본과 일치하는 해시를 남기면 B-1 이 통과했다(`canonical_files or ()` 가 그 항목을 건너뛰었다) | B-1 — LOCKED 항목마다 `freeze.LockItem` 을 세운다: 목록 없음 · 빈 목록 · 문자열 · 경로가 아닌 원소 · 범위 문장 없음이면 미충족(항목 이름) |
+
 결과(실측)를 보고 바꾼 것이 아니다 — 합성 반례로 드러난 검사의 빈틈이다. 각 반례는 시험(`tests/test_strategy_gate2_lock.py` ·
 `tests/test_strategy_branch_invariance.py`)으로 남겼다.
 
@@ -203,13 +219,15 @@ GATE 2(PRD §83 · SRS GATE 2, v3.0)는 S0 · S1 을 실행해 결과를 저장�
 - 실행 기록(`run_meta`)에 `verify` 결과를 자동으로 싣는 것은 이번에 하지 않았다. GATE 3 동결(11/30) 전에 정한다 — 그 전까지는
   GATE 3 · 4 실행 전에 `verify` 를 돌린다.
 - 분기 간 대조는 분기 원본(`branches/S0~S5/raw`)을 모두 읽는다. 2차 리뷰 뒤로는 읽기 전에 `verify_event_run` 이 파티션을 한 번 더
-  전부 읽는다(행 수 · 다이제스트). 5만 명 · 6분기에서 걸리는 시간은 재지 않았다.
+  전부 읽는다(행 수 · 다이제스트). 3차 리뷰 뒤로는 본선 t2 원본도 한 번 읽어 행 지문을 낸다(분기 행 지문은 서명과 같은 읽기).
+  5만 명 · 6분기에서 걸리는 시간은 재지 않았다.
 - **가설 H-B7(결과 전, 2026-11-27):** 5만 명 Baseline 실행에서 S0 · S1 모두 필수 실측 지표 3종이 `ok` 로 나온다. 근거는 코드
   경로뿐이다 — 교환 묶음이 `ok` 이고 분기 창 품질 검사가 통과하면 `branch_economics` 가 `ok` 를 낸다. 처치가 없는 S0 의
   `marketing_cost` 는 코드상 `ok`(0원)다 — 구성 요소 셋(`economics.message_cost` = 발송 수 × 단가, `coupon_cost` = 쿠폰이 쓰인
   주문만 합산, `campaign_fixed_cost` = 실행 캠페인 수 × 고정비)이 해당 이벤트 0건이면 모두 `ok` 0 을 낸다. 예외는 `coupon_use` 가
   있는데 실제 할인액도 쿠폰 처치 ID 도 없는 주문으로, 그때 `coupon_cost` 가 계산 불가(#108)가 되어 B-7 이 막는다 — S0 세계에 그런
-  주문이 생기는지는 실측으로 확인하지 않았다. **평가:** Baseline 실행 뒤 `check` 의 B-7 근거 줄. 하나라도
+  주문이 생기는지는 실측으로 확인하지 않았다. 광진 3차 리뷰(11/28)가 공용 측정 함수에 정상 무처치 합성 입력을 넣어 실측
+  마케팅비 `ok` 0원과 B-7 통과를 확인했다 — 코드 경로의 근거이고 5만 명 실측은 아니다. **평가:** Baseline 실행 뒤 `check` 의 B-7 근거 줄. 하나라도
   `ok` 가 아니면 먼저 원인(교환 묶음 · DQ)을 고친다. 구조적으로 `ok` 가 될 수 없는 지표로 드러나면 그 사실과 근거를 여기 적고 리뷰를
   받은 뒤 필수 목록을 고친다 — 지표 값이 아니라 상태만 보고 정한다.
 - B-1 은 GATE 1 기록의 LOCKED 정본 해시가 빠짐없이 있는지까지 본다. 기록 전체의 불변식(9종 · 선언 유도 · 서명 증거)은 다시 보지
