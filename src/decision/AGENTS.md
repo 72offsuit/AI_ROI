@@ -39,6 +39,8 @@ Feature 이름이 `*_post_t0`로 끝나면 학습 로더가 차단한다.
 
 `strategies.py`의 S1 선정 규칙(`S1_RULE` · `plan_S1`, AI 결과 이전 커밋 `ce05a66` · 태그 `gate2-s1-rule`)과 `C_rule`(S1 계획 비용 합 — 쿠폰 전량 사용 상한, 캠페인 고정비 제외)은 GATE 2에서 확정한다(#170 · `docs/decisions/DR-170-c-rule-budget.md`). **AI 결과를 본 뒤 Baseline을 바꾸지 않는다** (SRS BASE-003). 기준선을 낮추면 Incremental Profit이 올라가지만 아무 의미가 없다.
 
+봉인 범위는 위 규칙 코드에 더해 S1 대상을 정하는 입력(Eligible · S1 일수 — KST 날짜 차)과 C_rule 계산까지다. 잠그는 이름 · 봉인 조건 · 기록 방법은 `docs/decisions/DR-170-gate2-lock.md`, 기록은 `config/gate2_lock.yaml`(사람 서명), 대조는 `python -m src.orchestration.gate2_lock verify`.
+
 ## 하위 구조
 
 ```

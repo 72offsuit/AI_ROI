@@ -228,11 +228,11 @@ CI 4종이 PR 마다 돈다: 격리 경계 · 의존성 설치 후 전건(3.12) 
 | | 언제 | 무엇이 잠기나 |
 |---|---|---|
 | **GATE 1** | `S7` (#81 → 진행 #163) | 페르소나 구성비 · Hidden Trait 분포 · 행동 규칙 · Churn 임계값 · 처치 반응 · 경제 파라미터 · 이벤트 스키마 |
-| **GATE 2** | `D7` (#89 → 비교 조건 #274) | 전략 정의 · `rule_based.py` · 예산 상한 |
+| **GATE 2** | `D7` (#89 → 비교 조건 #274 · 봉인 #170) | S1 대상을 정하는 규칙 · 입력(`strategies.py` `S1_RULE` · `plan_S1` · Eligible · S1 일수) · 예산 상한 `C_rule` · S0 · S1 결과 |
 
 봉인 후 변경 비용은 `FREEZE-003` — **버전 상향 → 전 데이터 재생성 → Baseline 부터 전 전략 재실행.**
 
-봉인 기록(`config/gate1_lock.yaml`)은 **사람이 손으로 쓰지 않는다.** `freeze.record()` 가 쓰고, `locked_by` 는 **사람 서명**이다 — 에이전트가 대신 적지 않는다. 손으로 고치면 해시 대조가 실패한다.
+봉인 기록(`config/gate1_lock.yaml` · `config/gate2_lock.yaml`)은 **사람이 손으로 쓰지 않는다.** `freeze.record()` · `src/orchestration/gate2_lock.py record` 가 쓰고, `locked_by` 는 **사람 서명**이다 — 에이전트가 대신 적지 않는다. 손으로 고치면 해시 · 지문 대조가 실패한다. GATE 2 의 잠그는 범위 · 봉인 조건은 `docs/decisions/DR-170-gate2-lock.md`.
 
 ---
 
