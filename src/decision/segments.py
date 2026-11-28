@@ -16,7 +16,7 @@ PRD 세그먼트 번호(S1~S6)는 전략 ID(S0~S5)와 겹치므로 코드는 서
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Mapping
 
 import numpy as np
 import pandas as pd
@@ -181,8 +181,10 @@ LOW_VALUE = ("LV_PERSUADABLE", "LV_LOST_CAUSE")
 #: 고객 세그먼트 표(SRS SEG-005 필수 열 + 판정 근거 열). 결손은 빈 칸 — 0 으로 채우지 않는다.
 SEGMENT_TABLE_COLUMNS: tuple[str, ...] = (
     "customer_id", "segment", "segment_prd_id", "quadrant", "churn_probability", "uplift_score", "uplift_arm",
-    "predicted_clv_12m", "priority_score", "signup_tier", "signup_tier_source",
+    "predicted_clv_12m", "priority_score", "expected_net_value_krw", "net_arm", "signup_tier", "signup_tier_source",
 )
+#: 비용을 뺀 우선순위의 처치 후보 — S4 전략과 같다(``strategies.TREATMENTS``).
+NET_TREATMENTS: tuple[str, ...] = ("T1", "T2", "T3", "T4")
 
 
 def is_new_from_signup_tier(signup_tier: pd.Series) -> pd.Series:
@@ -234,8 +236,8 @@ def _two_proportions(x1: int, n1: int, x2: int, n2: int, alpha: float) -> dict[s
     l2, u2 = _wilson(x2, n2, z)
     diff = p1 - p2
     return {"share_new": p1, "share_existing": p2, "diff": diff,
-            "ci95": [diff - math.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2), diff + math.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2)],
-            "method": "Newcombe(1998) hybrid score interval"}
+            "ci": [diff - math.sqrt((p1 - l1) ** 2 + (u2 - p2) ** 2), diff + math.sqrt((u1 - p1) ** 2 + (p2 - l2) ** 2)],
+            "ci_level": round(1 - alpha, 10), "method": "Newcombe(1998) hybrid score interval"}
 
 
 #: 결과 전에 등록한 가설(DR-219-segments). 근거 자료로 정할 수 없는 기대라 가설로 두고 실행마다 같은 규칙으로 평가한다.
@@ -291,30 +293,125 @@ def new_segment_shift(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: p
                                                     "n_value_new": n_new_value, "n_value_existing": n_old_value})
     else:
         test = _two_proportions(lv_new, n_new_value, lv_old, n_old_value, alpha)
-        hyp.update(result="supported" if test["ci95"][0] > 0 else "not_supported",
-                   evidence={**test, "n_value_new": n_new_value, "n_value_existing": n_old_value, "alpha": alpha})
+        supported = test["ci"][0] > 0
+        # #326 리뷰 — 지지되지 않음은 차이를 지지할 근거가 부족하다는 뜻이다(반증이 아니다). 구간은 한 실행의 공통 점수 ·
+        # 분위수 경계로 나눈 고객 안의 비교라, 경계 추정의 불확실성까지 담은 실행 간 구간이 아니다 — 이 실행에 조건부인 근사다.
+        hyp.update(result="supported" if supported else "not_supported",
+                   not_supported_kind=None if supported else "insufficient_evidence",
+                   evidence={**test, "n_value_new": n_new_value, "n_value_existing": n_old_value, "alpha": alpha,
+                             "interval_note": ("이 실행의 점수 · 분위수 경계에 조건부인 근사 — 경계 추정의 불확실성은 "
+                                               "담지 않는다")})
     return {
         "rule": NEW_SEGMENT_SOURCE,
         "n_new": int(new.sum()), "n_existing": int(existing.sum()),
         "n_signup_unknown": int((~new & ~existing).sum()),
         "underlying_of_new": counts(new), "existing": counts(existing),
         "note": ("underlying_of_new = NEW 를 판정하지 않았다면 NEW 고객이 들어갔을 세그먼트(같은 점수 · 같은 경계). "
-                 "가입일을 모르는 고객은 NEW 로 보지 않는다"),
-        "hypotheses": [hyp, {**SEGMENT_HYPOTHESES[1], "result": "not_evaluated", "evidence": None}],
+                 "가입일을 모르는 고객은 NEW 로 보지 않는다. n_signup_unknown = 가입일 모름(UNKNOWN) + 판정하지 않은 고객"
+                 "(명부 밖인데 가입일 명부가 없다) — 둘은 segments.new_input 의 n_unknown_* · n_not_judged 로 나뉜다"),
+        "hypotheses": [hyp],   # H-SEG-2 는 test 분할에서 평가한다(uplift_report.quadrant_validation)
     }
+
+
+def expected_net_value(cate: pd.DataFrame, clv: pd.Series | None, margin_rate: float | None,
+                       costs: Mapping[str, Any] | None) -> pd.DataFrame:
+    """SEG-004 프로젝트 확장 — 처치 t 중 최대(CATE_t × CLV × margin_rate − cost_t)와 그 처치(DR-219-segments 2부).
+
+    S4 전략(``strategies.plan_S4``)과 같은 정의 · 같은 계획 비용이다. ``margin_rate`` · ``costs`` · CLV 중 하나라도 없으면
+    비운다 — 매출 CLV 를 이익으로 쓰지 않는다(#217). 열: ``expected_net_value_krw`` · ``net_arm``.
+    """
+    idx = cate.index
+    out = pd.DataFrame({"expected_net_value_krw": np.nan, "net_arm": None}, index=idx)
+    out["net_arm"] = out["net_arm"].astype(object)
+    if clv is None or margin_rate is None or not costs:
+        return out
+    frame = cate[[t for t in NET_TREATMENTS if t in cate.columns]].astype(float)
+    value = clv.reindex(idx).astype(float) * float(margin_rate)
+    net = frame.mul(value, axis=0) - pd.Series({t: float(costs[t]) for t in frame.columns})
+    known = net.notna().any(axis=1)
+    out.loc[known, "expected_net_value_krw"] = net[known].max(axis=1)
+    out.loc[known, "net_arm"] = net[known].idxmax(axis=1)
+    return out
+
+
+def persuadables_profile(quadrants: pd.Series, features: pd.DataFrame,
+                         tiers: pd.DataFrame | None = None) -> dict[str, Any]:
+    """SRS UP-006 — Persuadables 대 나머지(4분면이 매겨진 고객)의 관측 Feature 차이(DR-219-segments 2부).
+
+    Feature 마다 두 집단의 평균 · 결손 비율 · 표준화 평균차(SMD = 평균 차 ÷ √((분산₁ + 분산₂)/2), Austin 2009)를 내고
+    |SMD| 내림차순으로 싣는다. 판정 기준값은 쓰지 않는다. 관측 등급(``tiers`` — #218 명부 t2 행, Eligible(t2)만)이 있으면
+    축마다 등급 비율도 나란히 싣는다. 비율의 분모는 **명부에 있는 고객**이다 — 명부 밖 고객은 ``coverage`` 에 따로 세고
+    명부가 매긴 ``UNKNOWN`` 등급과 섞지 않는다(2026-11-26 광진 리뷰, PR #328). 명부가 없거나 t2 행 · 등급 열이 없으면
+    등급 부분만 ``tiers_status = not_run`` 과 사유를 남긴다 — Feature 차이는 그대로 낸다(2026-11-27 재리뷰).
+    """
+    scored = quadrants[quadrants != UNSCORED]
+    pers = scored.index[scored == "Persuadables"]
+    rest = scored.index[scored != "Persuadables"]
+    rows = []
+    for col in features.columns:
+        series = features[col]
+        if not pd.api.types.is_numeric_dtype(series):
+            continue
+        a, b = series.reindex(pers).astype(float), series.reindex(rest).astype(float)
+        va, vb = a.dropna(), b.dropna()
+        smd = None
+        if len(va) >= 2 and len(vb) >= 2:
+            pooled = math.sqrt((float(va.var(ddof=1)) + float(vb.var(ddof=1))) / 2)
+            smd = (float(va.mean()) - float(vb.mean())) / pooled if pooled > 0 else None
+        rows.append({"feature": str(col), "mean_persuadables": float(va.mean()) if len(va) else None,
+                     "mean_rest": float(vb.mean()) if len(vb) else None,
+                     "missing_persuadables": float(a.isna().mean()) if len(a) else None,
+                     "missing_rest": float(b.isna().mean()) if len(b) else None, "smd": smd})
+    rows.sort(key=lambda r: (r["smd"] is None, -abs(r["smd"] or 0.0), r["feature"]))
+    tier_rows: dict[str, Any] = {}
+    tier_reason = ("관측 등급 명부(#218 t2 행)가 없다" if tiers is None else
+                   "명부에 t2 행이 없다" if len(tiers) == 0 else
+                   "명부에 등급 열이 없다" if len(tiers.columns) == 0 else None)
+    if tier_reason is None:
+        frame = tiers.copy()
+        frame.index = frame.index.map(str)
+        frame = frame[~frame.index.duplicated(keep=False)]
+        members = {"persuadables": pers.map(str), "rest": rest.map(str)}
+        for col in frame.columns:
+            values, coverage = {}, {}
+            for name, ids in members.items():
+                inside = ids.isin(frame.index)
+                vals = frame[col].reindex(ids[inside])
+                values[name] = vals
+                coverage[name] = {"n_total": int(len(ids)), "n_in_roster": int(inside.sum()),
+                                  "n_not_in_roster": int((~inside).sum()),
+                                  "n_roster_unknown": int((vals.astype(object) == "UNKNOWN").sum()),
+                                  "n_missing_in_roster": int(vals.isna().sum())}
+            codes = sorted({str(v) for v in pd.concat(list(values.values())).dropna()})
+            rows_out = []
+            for code in codes:
+                row: dict[str, Any] = {"group": code}
+                for name, vals in values.items():
+                    count = int((vals.astype(object) == code).sum())
+                    denom = coverage[name]["n_in_roster"]
+                    row[f"n_{name}"] = count
+                    row[f"share_{name}"] = count / denom if denom else None
+                rows_out.append(row)
+            tier_rows[str(col)] = {"denominator": "명부(#218 t2 행 — Eligible(t2))에 있는 고객 — 명부 밖 고객은 coverage 에만",
+                                   "coverage": coverage, "rows": rows_out}
+    return {"n_persuadables": int(len(pers)), "n_rest": int(len(rest)), "features": rows, "tiers": tier_rows,
+            "tiers_status": "not_run" if tier_reason else "ok", **({"tiers_reason": tier_reason} if tier_reason else {}),
+            "measure": "SMD = (평균 Persuadables − 평균 나머지) ÷ √((분산₁ + 분산₂)/2) — Austin(2009). 판정 기준값 없음",
+            "note": "관측 Feature(t2 Feature 표)만 쓴다(PRD §21). 원인이 아니라 차이다 — 그 Feature 가 반응을 만든다는 뜻이 아니다"}
 
 
 def segment_table(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: pd.Series | None,
                   segments: pd.Series, signup_tier: pd.Series | None = None,
-                  thresholds: dict[str, float] | None = None, *,
+                  thresholds: dict[str, float] | None = None, margin_rate: float | None = None,
+                  costs: Mapping[str, Any] | None = None, *,
                   signup_source: pd.Series | None = None) -> pd.DataFrame:
     """SRS SEG-005 고객 세그먼트 표(+ 4분면 · 우선순위 근거 열). 점수는 받은 그대로 옮기고, 결손은 비워 둔다.
 
+    ``priority_score`` = 과제 기본 ``uplift × CLV``(SEG-004). ``expected_net_value_krw`` · ``net_arm`` = 프로젝트 확장
+    (S4 와 같은 정의 — ``expected_net_value``). ``margin_rate`` · ``costs`` 가 없으면 확장 열은 비운다.
+
     ``signup_tier_source`` = 가입 시기 등급의 출처(``roster`` = #218 명부 · ``signups_t2`` = 명부 밖 고객을 같은 정의로
     정함). 비어 있으면 NEW 를 판정하지 않은 고객이다 — 명부의 ``UNKNOWN``(가입일 모름)과 구분한다(#326 리뷰).
-
-    ``priority_score`` = 과제 기본 ``uplift × CLV``(SEG-004) — 비용을 뺀 프로젝트 확장은 처치별 비용을 고객의
-    처치(최대 CATE 처치)에 맞춰야 해서 2부에서 낸다.
     """
     idx = churn_p.index
     uplift = uplift_score(cate).reindex(idx)
@@ -335,6 +432,8 @@ def segment_table(churn_p: pd.Series, cate: pd.DataFrame | pd.Series, clv: pd.Se
         "uplift_arm": arm.to_numpy(),
         "predicted_clv_12m": (clv.reindex(idx).astype(float).to_numpy() if clv is not None else np.nan),
         "priority_score": priority_score(cate, clv).reindex(idx).to_numpy(),
+        **({k: v.to_numpy() for k, v in expected_net_value(cate.reindex(idx), clv, margin_rate, costs).items()}
+           if isinstance(cate, pd.DataFrame) else {"expected_net_value_krw": np.nan, "net_arm": None}),
         "signup_tier": (signup_tier.reindex(idx.map(str)).to_numpy() if signup_tier is not None else None),
         "signup_tier_source": (signup_source.reindex(idx.map(str)).to_numpy() if signup_source is not None else None),
     })

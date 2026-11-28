@@ -175,6 +175,10 @@ DECISION_API: dict[str, tuple[str, str]] = {
     "quadrant_summary": ("src.decision.segments", "quadrant_summary"),
     "new_segment_shift": ("src.decision.segments", "new_segment_shift"),
     "segment_table": ("src.decision.segments", "segment_table"),
+    # #219 2부 — test 분할 보고(십분위표 · 메타러너 CATE 차이 · H-SEG-2) · Persuadables 특성(UP-006)
+    "uplift_report": ("src.decision.uplift_report", "uplift_report"),
+    "persuadables_profile": ("src.decision.segments", "persuadables_profile"),
+    "assign_quadrants": ("src.decision.segments", "assign_quadrants"),
     "what_if": ("src.decision.optimize", "what_if"),
     "what_if_budgets": ("src.decision.optimize", "what_if_budgets"),
     # #274 · DR-170 E1~E4 · E6 — 구속 예산 S4 대 S5 · 혼합 전략 S6(D-1) · 예산 근거 표시
@@ -1477,9 +1481,23 @@ def segments_with_new(scores: Mapping[str, Any], ctx: dict[str, Any]) -> tuple[A
     ctx["segments_t2"], ctx["is_new_t2"], ctx["signup_tier_t2"] = seg, aligned, signup
     ctx["signup_source_t2"] = source
     record: dict[str, Any] = {"new_input": new_input}
+
+    def profile() -> dict[str, Any]:
+        quadrants = decision_fn("assign_quadrants")(decision_fn("uplift_score")(cate), churn_p)
+        if ctx.get("X2") is None:
+            raise NotRun("t2 Feature 표가 없다")
+        roster = ctx.get("split_roster")
+        tiers = None
+        if roster is not None and len(roster):
+            rows = roster[roster["origin"] == "t2"]
+            tiers = rows.set_index(rows["customer_id"].map(str))[
+                [c for c in ("value_tier", "frequency_tier", "signup_tier", "category_tier") if c in rows.columns]]
+        return decision_fn("persuadables_profile")(quadrants, ctx["X2"], tiers)
+
     steps = {
         "quadrants": lambda: decision_fn("quadrant_summary")(decision_fn("uplift_score")(cate), churn_p),
         "new_segment": lambda: decision_fn("new_segment_shift")(churn_p, cate, clv, aligned),
+        "persuadables_profile": profile,
     }
     for key, step in steps.items():
         if key == "new_segment" and aligned is None:
@@ -1491,13 +1509,46 @@ def segments_with_new(scores: Mapping[str, Any], ctx: dict[str, Any]) -> tuple[A
             record[key] = {"status": "not_run", "reason": str(reason)}
         except Exception as error:  # 삼키지 않는다 — failed 와 사유
             record[key] = {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
+    record["hypotheses"] = segment_hypotheses(record, ctx)
     return seg, record
+
+
+def segment_hypotheses(record: Mapping[str, Any], ctx: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """#219 — 결과 전 등록한 가설의 이 실행 평가를 한곳에 모은다(DR-219-segments). 못 낸 것은 사유와 함께 판정 불가."""
+    out: list[dict[str, Any]] = []
+    new_segment = record.get("new_segment") or {}
+    h1 = next((h for h in new_segment.get("hypotheses") or [] if h.get("id") == "H-SEG-1"), None)
+    out.append(h1 or {"id": "H-SEG-1", "result": "undetermined",
+                      "evidence": {"reason": new_segment.get("reason") or "NEW 쏠림 기록이 없다"}})
+    report = ctx.get("uplift_test_report") or {}
+    h2 = report.get("quadrant_validation") if report.get("status") == "ok" else None
+    out.append(h2 or {"id": "H-SEG-2", "result": "undetermined",
+                      "evidence": {"reason": report.get("reason") or "Uplift test 분할 보고가 없다"}})
+    return out
+
+
+def uplift_test_report(ctx: Mapping[str, Any], method: Any, *, loaded: bool) -> dict[str, Any]:
+    """#219 2부 — test 분할의 십분위표 · 메타러너 CATE 차이 · H-SEG-2(``uplift_report``). 보고만 한다."""
+    if loaded:
+        return {"status": "not_run", "reason": "불러온 모델 — 이 실행에서 train/test 분할 평가를 하지 않았다"}
+    test = ctx.get("uplift_test")
+    if not test:
+        return {"status": "not_run", "reason": "test 분할 예측이 없다(evaluate_uplift_models 가 keep_predictions 를 받지 않음)"}
+    if not method:
+        return {"status": "not_run", "reason": "학습에 쓴 메타러너를 모른다"}
+    try:
+        return decision_fn("uplift_report")(test, method)
+    except NotRun as reason:
+        return {"status": "not_run", "reason": str(reason)}
+    except Exception as error:  # 삼키지 않는다 — failed 와 사유
+        return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
 
 
 SEGMENTS_FILE = "segments_6plus.csv"
 
 
-def segments_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Path]) -> dict[str, Any]:
+def segments_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Path],
+                  costs: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """#219 — ``segments_6plus.csv``(SRS SEG-005): t2 점수 고객의 세그먼트 · 4분면 · 점수 · 우선순위 · 가입 시기."""
     seg = ctx.get("segments_t2")
     scores = ctx.get("scores") or {}
@@ -1505,7 +1556,8 @@ def segments_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Pat
         return {"status": "not_run", "reason": "세그먼트를 배정하지 않았다(segments 단계 미실행 · 실패)"}
     try:
         table = decision_fn("segment_table")(scores["churn_p"], scores["cate"], scores.get("clv"), seg,
-                                             ctx.get("signup_tier_t2"), signup_source=ctx.get("signup_source_t2"))
+                                             ctx.get("signup_tier_t2"), margin_rate=scores.get("margin_rate"),
+                                             costs=costs, signup_source=ctx.get("signup_source_t2"))
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         table.to_csv(path, index=False)
@@ -1515,7 +1567,25 @@ def segments_file(path: Path, ctx: Mapping[str, Any], extra_files: dict[str, Pat
         return {"status": "failed", "reason": f"{type(error).__name__}: {error}"[:300]}
     extra_files[SEGMENTS_FILE] = path
     return {"status": "ok", "file": SEGMENTS_FILE, "rows": int(len(table)), "columns": list(table.columns),
-            "note": "priority_score = uplift × CLV(SEG-004 과제 기본). 빈 칸 = 계산 불가(결손) — 0 으로 채우지 않았다"}
+            "net_value": net_value_status(scores, costs, table),
+            "note": ("priority_score = uplift × CLV(SEG-004 과제 기본). expected_net_value_krw = 처치별 CATE × CLV × "
+                     "margin_rate − 계획 비용의 최댓값, net_arm = 그 값이 가장 큰 **순가치 최대 후보 처치**(S4 와 같은 정의, "
+                     "DR-219-segments) — 순가치가 0 이하여도 남는다. 실제 배정에는 Eligible(t2) · 양의 순가치 · 예산 조건이 "
+                     "따로 필요하다(S4). 빈 칸 = 계산 불가(결손 — 사유는 net_value) — 0 으로 채우지 않았다")}
+
+
+def net_value_status(scores: Mapping[str, Any], costs: Mapping[str, Any] | None, table: Any) -> dict[str, Any]:
+    """#219 2부 리뷰 — ``segments_6plus.csv`` 의 비용을 뺀 우선순위 열이 비었으면 그 사유(margin_rate · 비용 · CLV · CATE)."""
+    missing = [label for label, absent in (
+        ("margin_rate 없음(기여이익률 — 매출 CLV 를 이익으로 쓰지 않는다, #217)", scores.get("margin_rate") is None),
+        ("처치별 계획 비용 없음", not costs),
+        ("12개월 CLV 없음", scores.get("clv") is None),
+        ("처치별 CATE 표 없음", not hasattr(scores.get("cate"), "columns"))) if absent]
+    blank = int(table["expected_net_value_krw"].isna().sum()) if "expected_net_value_krw" in table else None
+    if missing:
+        return {"status": "not_run", "reason": " · ".join(missing), "n_blank": blank}
+    return {"status": "ok", "n_blank": blank,
+            "blank_reason": "빈 칸은 그 고객의 CATE · CLV 결손이다" if blank else None}
 
 
 def _segment_summary(segments: Any, scores: Mapping[str, Any]) -> dict[str, Any]:
@@ -2408,7 +2478,9 @@ def run(config: SprintConfig) -> Path:
                 evaluation = call_by_name(decision_fn("evaluate_uplift_models"), {
                     "X": ctx["X_rct"], "treatment": ctx["treatment"], "y": retention,
                     "seed": config.seed, "risk_model_factory": risk_factory,
+                    "keep_predictions": True,  # #219 2부 — test 분할 예측(결과 파일엔 안 싣는다)
                 })
+                ctx["uplift_test"] = evaluation.pop("_test", None) if isinstance(evaluation, dict) else None
                 uplift_eval.update(evaluation)  # n · arms · ate · models … (대시보드 UpliftEval)
                 fit = decision_fn("fit_uplift")
                 params = inspect.signature(fit).parameters
@@ -2430,6 +2502,9 @@ def run(config: SprintConfig) -> Path:
                 uplift_eval["fitted_base_learner_source"] = (
                     "Validation 으로 고른 규제" if "params" in kwargs
                     else "fit_uplift 기본값(고른 규제 없음 · 넘기지 않음)" if used else "기록 없음(이 fit 은 규제를 남기지 않는다)")
+            # #219 2부 — test 분할 보고(보고만 — 선택 · 경계를 바꾸지 않는다). 실패해도 Uplift 단계는 그대로다.
+            ctx["uplift_test_report"] = uplift_eval["test_report"] = uplift_test_report(
+                ctx, uplift_eval.get("fitted_method"), loaded=config.load_models is not None)
 
         # CLV — 전 군 42일 매출 ----------------------------------------------
         with log.stage("clv", requires=("training_set",)):
@@ -2877,7 +2952,7 @@ def run(config: SprintConfig) -> Path:
         clv_eval["clv_predictions_file"] = clv_predictions_file(out / "artifacts" / CLV_FILE, ctx, extra_outputs, run_id,
                                                                 loaded_models)
         # #219 — segments_6plus.csv(SEG-005). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 segments 에 남긴다.
-        segments_out["segments_file"] = segments_file(out / "artifacts" / SEGMENTS_FILE, ctx, extra_outputs)
+        segments_out["segments_file"] = segments_file(out / "artifacts" / SEGMENTS_FILE, ctx, extra_outputs, costs)
         # #217 — 고객별 τ̂ (S8 채점 입력). 실패해도 결과 파일 쓰기는 이어 간다 — 사유를 uplift_eval 에 남긴다.
         uplift_eval["cate_file"] = cate_file(out / "artifacts" / CATE_FILE, ctx, extra_outputs,
                                              loaded=config.load_models is not None)

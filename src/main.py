@@ -647,6 +647,24 @@ def uplift_selection_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
     return lines
 
 
+def uplift_test_lines(uplift: Mapping[str, Any], fmt: Any) -> list[str]:
+    """#219 2부 — test 분할 십분위 실측 uplift · 메타러너 CATE 순위상관(보고만, 선택에 쓰지 않음)."""
+    report = uplift.get("test_report")
+    if not isinstance(report, Mapping):
+        return []
+    if report.get("status") != "ok":
+        return [f"             test 분할 보고 없음 — {report.get('reason') or '사유가 적혀 있지 않다'}"]
+    deciles = report.get("deciles") or {}
+    cells = " · ".join(fmt(row.get("effect"), 3) for row in deciles.get("rows") or [])
+    lines = [f"             십분위 실측 uplift({deciles.get('method')} · {deciles.get('arm')}, 1→10구간) {cells or '—'}"
+             " — test 분할, 보고만"]
+    pairs = (report.get("learner_agreement") or {}).get("pairs") or []
+    if pairs:
+        lines.append("             메타러너 CATE 순위상관 " + " · ".join(
+            f"{p.get('a')}/{p.get('b')} {fmt(p.get('spearman'), 2)}" for p in pairs))
+    return lines
+
+
 def segment_lines(segments: Mapping[str, Any]) -> list[str]:
     """#219 — 세그먼트 인원(NEW 포함) · NEW 입력 상태 · 결과 전 등록한 가설 평가(DR-219-segments)."""
     rows = [r for r in segments.get("segments") or [] if isinstance(r, Mapping)]
@@ -662,11 +680,21 @@ def segment_lines(segments: Mapping[str, Any]) -> list[str]:
         state = "일부만 판정" if new_input.get("status") == "partial" else "판정 안 함"
         lines.append(f"             ! NEW {state} — {new_input.get('reason')}")
     results = {"supported": "지지", "not_supported": "지지되지 않음", "undetermined": "판정 불가",
-               "not_evaluated": "평가 전(2부)"}
-    hypotheses = [h for h in (segments.get("new_segment") or {}).get("hypotheses") or [] if isinstance(h, Mapping)]
+               "not_evaluated": "평가 전", "partially_supported": "부분 지지"}
+    kinds = {"insufficient_evidence": "근거 부족", "contradicted": "반증"}   # #219 2부 리뷰 — 지지되지 않음의 두 뜻
+    hypotheses = [h for h in (segments.get("hypotheses") or (segments.get("new_segment") or {}).get("hypotheses") or [])
+                  if isinstance(h, Mapping)]
+
+    def kind(h: Mapping[str, Any]) -> str:
+        if h.get("not_supported_kind") not in kinds:
+            return ""
+        # #328 재리뷰 — 어느 주장에 반대 근거가 있었는지 적는다(H-SEG-2 ``contradicted_by``)
+        why = [str(c.get("reading") or c.get("claim")) for c in h.get("contradicted_by") or [] if isinstance(c, Mapping)]
+        return f"({kinds[h['not_supported_kind']]}{' — ' + ' · '.join(why) if why else ''})"
+
     if hypotheses:
         lines.append("             가설(결과 전 등록, DR-219-segments) " + " · ".join(
-            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}" for h in hypotheses))
+            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}{kind(h)}" for h in hypotheses))
     return lines
 
 
@@ -693,6 +721,7 @@ def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> lis
     uplift = _read_json(run_dir / "uplift_eval.json")
     if uplift.get("status") == "ok":
         lines.extend(uplift_selection_lines(uplift, fmt))
+        lines.extend(uplift_test_lines(uplift, fmt))
     segments = _read_json(run_dir / "segments.json")
     if segments.get("status") == "ok":
         lines.extend(segment_lines(segments))
