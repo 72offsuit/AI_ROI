@@ -1,0 +1,481 @@
+{
+ "generated_at": "2026-11-23T14:02:00+09:00",
+ "scope": "관측 이벤트로 잰 F1~F11 · F13 만 담는다. 처치 효과 · 고객군별 값 · 숨은 값 · 생성 이탈률은 담지 않는다(#163). 통과 띠는 docs/research/data_grounding.md §4.",
+ "source": {
+  "simulator_version": "sim-0.9",
+  "random_seed": "42",
+  "n_customers": 12996,
+  "n_events": 7144279,
+  "n_orders": 216684,
+  "span_days": 315,
+  "start": "2025-01-01",
+  "end_exclusive": "2025-11-12"
+ },
+ "rules": {
+  "bands_from": "docs/research/data_grounding.md §4 (GATE 1 전 고정, 결과를 보고 바꾸지 않는다)",
+  "borderline": "띠 밖이지만 가까운 경계값의 ±20% 이내",
+  "multi_part": "여러 값을 판정하는 항목은 모든 값이 계산돼야 판정한다(가장 나쁜 판정을 따른다)",
+  "excluded": "AI 성능 지표(AUC·Qini 등)는 넣지 않는다"
+ },
+ "summary": {
+  "pass": 12,
+  "borderline": 0,
+  "fail": 0
+ },
+ "metrics": [
+  {
+   "id": "F1",
+   "name": "구매 간격 분포 (주문 단위, 30일 절단)",
+   "unit": "일",
+   "synthetic": {
+    "median": 7.0,
+    "mean": 10.02,
+    "p75": 14.0,
+    "p90": 26.0,
+    "share_gap_7": 0.0535,
+    "peak_at_7": false,
+    "uncapped": {
+     "median": 7.0,
+     "mean": 12.38,
+     "p95": 39.0
+    },
+    "n_gaps": 204648
+   },
+   "reference": {
+    "dataset": "Instacart 2017",
+    "value": {
+     "median": 7,
+     "mean": 11.1,
+     "p75": 15,
+     "share_gap_7": 0.0997
+    },
+    "band": {
+     "median": [
+      5,
+      10
+     ],
+     "mean": [
+      9,
+      15
+     ],
+     "p75": [
+      12,
+      20
+     ]
+    },
+    "band_text": "중앙값 5~10 · 평균 9~15 · p75 12~20",
+    "source_ids": [
+     "S01"
+    ],
+    "source_url": "https://huggingface.co/datasets/attik/Instacart-Market-Basket-Analysis"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": {
+    "median": "pass",
+    "mean": "pass",
+    "p75": "pass"
+   },
+   "note": "Instacart 와 같게 30일에서 절단해 판정한다(절단 전 값은 uncapped). 7일 피크 없음(가점 항목, 판정에 쓰지 않음)."
+  },
+  {
+   "id": "F2",
+   "name": "고객 안 간격 불규칙성 (간격 CV 중앙값)",
+   "unit": "CV",
+   "synthetic": {
+    "median_cv": 0.573,
+    "n_customers": 8447
+   },
+   "reference": {
+    "dataset": "Instacart 2017",
+    "value": 0.571,
+    "band": [
+     0.45,
+     0.7
+    ],
+    "band_text": "0.45~0.70",
+    "source_ids": [
+     "S01"
+    ],
+    "source_url": "https://huggingface.co/datasets/attik/Instacart-Market-Basket-Analysis"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": null,
+   "note": "간격 5개 이상 고객의 고객 안 간격 CV(모표준편차/평균) 중앙값. 30일 절단(Instacart 와 같음). 지수분포면 1.0, 시계면 0."
+  },
+  {
+   "id": "F3",
+   "name": "고객별 평균 구매 주기의 퍼짐",
+   "unit": "일 · ln-sd",
+   "synthetic": {
+    "median": 14.72,
+    "ln_sd": 0.56,
+    "n_customers": 9639,
+    "uncapped": {
+     "median": 16.6,
+     "ln_sd": 0.761
+    }
+   },
+   "reference": {
+    "dataset": "Instacart 2017 · Complete Journey · 오픈서베이",
+    "value": {
+     "median": 15.0,
+     "ln_sd": {
+      "Instacart": 0.527,
+      "Complete Journey": 0.89
+     }
+    },
+    "band": {
+     "median": [
+      12,
+      18
+     ],
+     "ln_sd": [
+      0.5,
+      0.9
+     ]
+    },
+    "band_text": "중앙값 12~18일 · ln-sd 0.5~0.9",
+    "source_ids": [
+     "S01",
+     "S02",
+     "S20",
+     "S21"
+    ],
+    "source_url": "https://huggingface.co/datasets/attik/Instacart-Market-Basket-Analysis"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": {
+    "median": "pass",
+    "ln_sd": "pass"
+   },
+   "note": "간격 3개 이상 고객의 고객별 평균 간격(30일 절단, Instacart 정의). 절단 전 값은 uncapped(Complete Journey 0.89 는 절단 없음)."
+  },
+  {
+   "id": "F4",
+   "name": "월 구매 빈도 · 객단가 자릿수",
+   "unit": "회/월 · 원",
+   "synthetic": {
+    "orders_per_month": 2.06,
+    "orders_per_month_median": 1.4,
+    "aov_krw": 52359.0,
+    "aov_median_krw": 45000.0,
+    "n_customers": 11955,
+    "n_orders": 216684,
+    "orders_per_month_exposure": 1.79,
+    "n_customers_exposure": 12035
+   },
+   "reference": {
+    "dataset": "오픈서베이 2023·2025 (컬리 이용자)",
+    "value": {
+     "orders_per_month": [
+      2.5,
+      2.66
+     ],
+     "aov_krw": 44800
+    },
+    "band": {
+     "orders_per_month": [
+      2.0,
+      3.2
+     ],
+     "aov_krw": [
+      38000,
+      55000
+     ]
+    },
+    "band_text": "월 2.0~3.2회 · 객단가 38,000~55,000원",
+    "source_ids": [
+     "S20",
+     "S21"
+    ],
+    "source_url": "https://byline.network/2023/01/30_0976"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": {
+    "orders_per_month": "pass",
+    "aov_krw": "pass"
+   },
+   "note": "활성 고객의 월 주문 수 = 주문 수 ÷ 활성 구간(첫 구매일 ~ min(관측 끝, 마지막 구매일 + 42일), 28일 미만 제외) × 30.44일. 참고 orders_per_month_exposure(판정 안 함) = 구매 고객 전체 노출(첫 이벤트~관측 끝) 기준 — 이탈 뒤 공백 포함. 객단가는 purchase.order_amount(할인 후·배송비 제외) 평균."
+  },
+  {
+   "id": "F5",
+   "name": "구매율 이질성 (12주 주문 수 NBD shape)",
+   "unit": "Gamma shape",
+   "synthetic": {
+    "nbd_shape": 0.724,
+    "mean_12w": 4.38,
+    "var_to_mean": 7.06,
+    "cj_style_shape_full_span": 0.828,
+    "n_customers": 11873
+   },
+   "reference": {
+    "dataset": "Complete Journey 2.0",
+    "value": {
+     "Complete Journey": 0.82,
+     "Instacart(상한)": 1.72
+    },
+    "band": [
+     0.5,
+     1.5
+    ],
+    "band_text": "0.5~1.5",
+    "source_ids": [
+     "S02",
+     "S01"
+    ],
+    "source_url": "https://cran.r-project.org/web/packages/completejourney/vignettes/completejourney.html"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": null,
+   "note": "마지막 12주 창, 창 이전부터 관측된 구매 고객(0건 포함). NBD 적률 추정 r = m²/(v − m) (Poisson 잡음 보정). cj_style 은 cj_stats.py 와 같은 (평균/표준편차)² 보조값."
+  },
+  {
+   "id": "F6",
+   "name": "Pareto 집중 (매출 상위 고객 비중)",
+   "unit": "비율",
+   "synthetic": {
+    "top20": 0.668,
+    "top10": 0.477,
+    "n_customers": 12036,
+    "window_days": 315
+   },
+   "reference": {
+    "dataset": "Complete Journey 2.0 · Instacart · 문헌",
+    "value": {
+     "top20": {
+      "CJ": 0.545,
+      "Instacart(주문)": 0.526,
+      "McCarthy&Winer": 0.67,
+      "KSW": 0.73
+     },
+     "top10": {
+      "CJ": 0.35
+     }
+    },
+    "band": {
+     "top20": [
+      0.53,
+      0.73
+     ],
+     "top10": [
+      0.33,
+      0.5
+     ]
+    },
+    "band_text": "상위 20% 0.53~0.73 · 상위 10% 0.33~0.50",
+    "source_ids": [
+     "S02",
+     "S01",
+     "S08",
+     "S09"
+    ],
+    "source_url": "https://cran.r-project.org/web/packages/completejourney/vignettes/completejourney.html"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": {
+    "top20": "pass",
+    "top10": "pass"
+   },
+   "note": "관측 315일(최대 365일) 매출, 구매 고객만(cj_stats.py 와 같은 정의). 1년 미만 창 — 기간이 짧으면 집중도가 높게 나온다."
+  },
+  {
+   "id": "F7",
+   "name": "객단가 분포 (로그정규·오른쪽 꼬리)",
+   "unit": "ln-sd · CV",
+   "synthetic": {
+    "order_ln_sd": 0.528,
+    "customer_mean_aov_cv": 0.525,
+    "n_orders": 216684
+   },
+   "reference": {
+    "dataset": "Complete Journey 2.0",
+    "value": {
+     "order_ln_sd($20+)": 0.59,
+     "customer_mean_aov_cv": 0.65
+    },
+    "band": {
+     "order_ln_sd": [
+      0.4,
+      0.8
+     ],
+     "customer_mean_aov_cv": [
+      0.5,
+      0.8
+     ]
+    },
+    "band_text": "주문 금액 ln-sd 0.4~0.8 · 고객 평균 객단가 CV 0.5~0.8",
+    "source_ids": [
+     "S02"
+    ],
+    "source_url": "https://cran.r-project.org/web/packages/completejourney/vignettes/completejourney.html"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": {
+    "order_ln_sd": "pass",
+    "customer_mean_aov_cv": "pass"
+   },
+   "note": "pandas 표본표준편차(ddof=1), cj_stats.py 와 같다."
+  },
+  {
+   "id": "F8",
+   "name": "무료배송 임계값(40,000원) 바로 위 몰림",
+   "unit": "밀도비",
+   "synthetic": {
+    "ratio": 2.842,
+    "n_40000_44000": 32303,
+    "n_36000_40000": 11365
+   },
+   "reference": {
+    "dataset": "Lewis 2006 · Lewis·Singh·Fay 2006 · UPS",
+    "value": "방향(> 1). 52% 가 기준을 맞추려 상품 추가",
+    "band": [
+     1.0,
+     null
+    ],
+    "band_text": "> 1",
+    "source_ids": [
+     "S15",
+     "S16",
+     "S14"
+    ],
+    "source_url": "https://doi.org/10.1016/j.jretai.2005.11.005"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": null,
+   "note": "구간 폭이 같으므로 밀도비 = 건수비. 금액은 purchase.order_amount(할인 후). 무료배송 판정이 할인 전 금액이면 몰림이 할인 폭만큼 흐려진다."
+  },
+  {
+   "id": "F9",
+   "name": "장바구니 이탈률",
+   "unit": "%",
+   "synthetic": {
+    "cart_abandonment_pct": 57.22,
+    "session_to_purchase_pct": 19.34,
+    "session_add_to_cart_pct": 42.15,
+    "n_sessions": 1120185,
+    "n_cart_sessions": 472132
+   },
+   "reference": {
+    "dataset": "Baymard · Stripe(식료품)",
+    "value": {
+     "grocery": 50.03,
+     "all": 70.22
+    },
+    "band": [
+     50,
+     75
+    ],
+    "band_text": "50~75%",
+    "source_ids": [
+     "S03",
+     "S07",
+     "S04"
+    ],
+    "source_url": "https://baymard.com/lists/cart-abandonment-rate"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": {
+    "cart_abandonment": "pass"
+   },
+   "note": "장바구니 이탈률 = 1 − (add_to_cart 와 purchase 가 함께 있는 세션 ÷ add_to_cart 세션). 판정은 이 값만. 세션→구매 전환(참고 3~8%)은 '방문 = 세션'일 때만 비교 대상이라 판정에 넣지 않는다(§3-4 미정)."
+  },
+  {
+   "id": "F10",
+   "name": "상품 재주문 비중",
+   "unit": "비율",
+   "synthetic": {
+    "share": 0.607,
+    "share_non_first_orders": 0.586,
+    "n_lines": 466240
+   },
+   "reference": {
+    "dataset": "Instacart 2017",
+    "value": 0.599,
+    "band": [
+     0.5,
+     0.65
+    ],
+    "band_text": "0.50~0.65",
+    "source_ids": [
+     "S01"
+    ],
+    "source_url": "https://huggingface.co/datasets/attik/Instacart-Market-Basket-Analysis"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": null,
+   "note": "주문 품목 중 그 고객이 이전 주문에서 산 상품의 비율. Instacart train 이 4번째 이후 주문이라 같은 조건으로 판정."
+  },
+  {
+   "id": "F11",
+   "name": "신규 고객 재구매율 (첫 구매 후 365일 안 2번째 구매)",
+   "unit": "비율",
+   "synthetic": {
+    "rate": 0.683,
+    "n_new_buyers": 1178,
+    "followup_days_median": 155.0
+   },
+   "reference": {
+    "dataset": "컬리 2019~2021 (보도)",
+    "value": {
+     "2019": 0.612,
+     "2020": 0.652,
+     "2021": 0.75
+    },
+    "band": [
+     0.55,
+     0.75
+    ],
+    "band_text": "0.55~0.75",
+    "source_ids": [
+     "S30"
+    ],
+    "source_url": "https://www.venturesquare.net/806256/"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": null,
+   "note": "신규 기준: 교환 묶음 customers.signup_date > 관측 첫날. 관측 끝에서 잘린 추적(중앙 155일)이라 컬리의 '같은 해' 재구매율처럼 하한 쪽이다."
+  },
+  {
+   "id": "F13",
+   "name": "일시 공백 뒤 복귀 (42일+ 공백 후 재구매)",
+   "unit": "비율",
+   "synthetic": {
+    "share_returned_after_42d_gap": 0.4885,
+    "n_returned": 5879,
+    "n_customers": 12036,
+    "return_rate_among_lapsed": 0.6969
+   },
+   "reference": {
+    "dataset": "Complete Journey 2.0",
+    "value": {
+     "1년간 42일+ 공백 뒤 복귀 가구": 0.435,
+     "주": "자주 사는 가구 선발 표본이라 상한"
+    },
+    "band": [
+     0.0,
+     null
+    ],
+    "band_text": "> 0",
+    "source_ids": [
+     "S02"
+    ],
+    "source_url": "https://cran.r-project.org/web/packages/completejourney/vignettes/completejourney.html"
+   },
+   "verdict": "pass",
+   "dashboard_verdict": "consistent",
+   "parts": null,
+   "note": "cj_stats.py 와 같은 정의: 구매 날짜(중복 제거) 사이 공백이 42일 이상이었던 고객 비율 = 공백 뒤 돌아온 고객. 0 이면 이탈이 흡수 상태다(PRD Risk 2). CJ 43.5% 는 선발 표본이라 상한 참고."
+  }
+ ]
+}
