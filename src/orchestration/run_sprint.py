@@ -2132,13 +2132,16 @@ def churn_tier_performance(ctx: Mapping[str, Any], roster_record: Mapping[str, A
 
 
 def churn_segment_performance(ctx: Mapping[str, Any], method: Any) -> dict[str, Any]:
-    """#303 ML-010 AI 세그먼트 축 — t1 Validation 고객에게 **t1 라벨을 쓰지 않은 t1 입력**으로 세그먼트를 매기고
-    세그먼트별 ML-009 지표를 낸다(DR-303 「AI 세그먼트 축」).
+    """#303 ML-010 AI 세그먼트 축 — t1 Validation 고객에게 **t1 입력**으로 세그먼트를 매기고 세그먼트별 ML-009 지표를
+    낸다(DR-303 「AI 세그먼트 축」 · 「라벨 사용 범위」). 이탈 점수의 모델 종류 · 하이퍼파라미터는 같은 t1 Validation
+    라벨로 골랐으므로 **사후 Validation 진단**이다 — 배정에는 이탈 점수로 가른 두 세그먼트에만 닿는다(#329 리뷰).
 
     - 고객: Validation(탐색 RCT T0 군) 중 Uplift **test 분할** 고객. 학습 분할 고객의 CATE 는 그 고객의 [t1, t2) 결과로
       학습된 값이라 세그먼트가 라벨에 따라 갈린다 — 그 고객은 세그먼트 없이 전체 지표에만 들어간다(수를 남긴다).
-    - 이탈 점수: 고른 모델의 시간 순서 검증 점수(앞 기준일 학습). 최종 모델은 t1 라벨로 학습했다.
-    - CATE: test 분할 예측(``uplift_eval.fitted_method`` 와 같은 메타러너). CLV: 12개월 모델(t1 미만 이력으로 학습)로 t1 기준
+    - 이탈 점수: 고른 모델의 시간 순서 검증 점수(적합 · 임계는 앞 기준일, 튜닝 · 선택은 같은 t1 Validation 라벨).
+      최종 모델은 t1 라벨로 학습했다.
+    - CATE: test 분할 예측(``uplift_eval.fitted_method`` 와 같은 메타러너) — 입력 시점 t1, 모델은 다른 고객(train 분할)의
+      [t1, t2) 결과로 학습(이 고객의 결과는 쓰지 않았다). CLV: 12개월 모델(t1 미만 이력으로 학습)로 t1 기준
       이력을 매긴 값. NEW: #218 명부 t1 validation 행의 가입 시기 등급(DR-221).
     - 배정은 ``assign_segments`` 그대로(경계는 배정 고객 안의 분위수 — 생산과 같은 정의). t2 세그먼트를 가져오지 않는다 —
       t2 Feature 창의 마지막 42일이 t1 라벨 창 [t1, t2) 이다.
@@ -2204,8 +2207,12 @@ def churn_segment_performance(ctx: Mapping[str, Any], method: Any) -> dict[str, 
         inputs = {
             "population": "Validation(탐색 RCT T0 군) ∩ Uplift test 분할",
             "n_validation": int(len(validation_ids)), "n_test_split_control": int(len(control)), "n_segmented": int(len(ids)),
-            "churn_score": f"{chosen} 의 시간 순서 검증 점수(앞 기준일 학습 — t1 라벨을 쓰지 않았다)",
-            "uplift": f"{method} 의 test 분할 CATE(이 고객의 결과로 학습하지 않았다)",
+            "churn_score": (f"{chosen} 의 시간 순서 검증 점수 — 적합 · 임계는 앞 기준일 데이터, 모델 종류 · 하이퍼파라미터는 "
+                            "같은 t1 Validation 라벨로 골랐다(사후 진단, #329 리뷰)"),
+            "uplift": (f"{method} 의 test 분할 CATE — 입력 시점 t1, 모델은 Uplift train 분할 고객의 [t1, t2) 결과로 "
+                       "학습(이 고객의 결과는 쓰지 않았다)"),
+            "uplift_timing": {"input_time": "t1", "model_fit_on": "Uplift train 분할 고객의 [t1, t2) 결과",
+                              "own_outcome_used": False},
             "clv": clv_input, "new": new_input,
             "thresholds": {k: (None if v is None else float(v)) for k, v in (segments.attrs.get("thresholds") or {}).items()},
         }

@@ -61,7 +61,8 @@ class TestSegmentPerformance(unittest.TestCase):
         self.assertEqual(("H-ML010-4", "supported"), (hyp["id"], hyp["result"]))
         self.assertEqual(5, hyp["evidence"]["n_groups_judged"])                             # 7 − 이탈 점수로 가른 2
         self.assertNotIn("HV_SURE_THING", hyp["evidence"]["groups_judged"])
-        self.assertIn("같다는 증거는 아니고", hyp["reading"])                                # #325 리뷰와 같은 읽는 문구
+        self.assertIn("같다는 증거도 아니다", hyp["reading"])                                # #325 리뷰와 같은 읽는 문구
+        self.assertIn("모델 쪽으로 기울 수 있다", hyp["reading"])
         self.assertIn("Cawley", out["rule"]["selection_effect"])                           # 같은 Validation 선택 효과
 
     def test_weak_unrestricted_segment_is_not_supported(self) -> None:
@@ -87,6 +88,40 @@ class TestSegmentPerformance(unittest.TestCase):
         self.assertIn("100명", hyp["evidence"]["not_judged"]["NEW"])
 
 
+    def test_input_gaps_and_judged_scope_are_published(self) -> None:
+        """#329 리뷰 반례 — CLV 미실행 · NEW 일부 미판정이면 가치 세그먼트는 0명이다. 1/5개만 검정한 '지지'에 범위를 붙인다."""
+        from src import main as cli
+        from src.decision import churn
+
+        validation, seg = _blocks()
+        keep = seg.isin(["SLEEPING_DOG"])                          # CLV 가 없으면 가치 세그먼트 · NEW(일부)는 생기지 않는다
+        seg = seg.where(keep, "CLV_UNKNOWN_NEAR_ZERO")
+        inputs = {"clv": {"status": "not_run", "reason": "12개월 CLV 모델이 없다"},
+                  "new": {"status": "partial", "n_not_judged": 300}}
+        out = churn.segment_performance(validation, seg, inputs=inputs)
+        hyp = out["hypotheses"][0]
+        ev = hyp["evidence"]
+        self.assertEqual(("supported", "1/5", ["SLEEPING_DOG"]), (hyp["result"], ev["scope"], ev["groups_judged"]))
+        self.assertEqual(["HV_PERSUADABLE", "LV_PERSUADABLE", "LV_LOST_CAUSE"], ev["input_missing"])  # 표본 부족이 아니다
+        self.assertIn("입력 결손 — CLV 미실행", ev["not_judged"]["LV_PERSUADABLE"])
+        self.assertIn("100명", ev["not_judged"]["NEW"])          # NEW 는 일부 판정 — 0명은 표본 부족으로 남는다
+        self.assertEqual(["CLV 미실행", "NEW 일부 미판정(300명)"], ev["input_gaps"])
+        self.assertIn("검정한 1/5개 세그먼트(SLEEPING_DOG)", hyp["reading"])
+        self.assertIn("입력 결손: CLV 미실행 · NEW 일부 미판정(300명)", hyp["reading"])
+        self.assertEqual("post_hoc_validation", out["label_use"]["diagnostic"])
+        lines = cli.churn_segment_lines({"by_segment": out}, fmt)
+        self.assertIn("H-ML010-4 지지(1/5개 판정 · CLV 미실행 · NEW 일부 미판정(300명))", lines[3])
+        self.assertIn("사후 Validation 진단", lines[4])
+
+    def test_full_inputs_report_scope_without_gaps(self) -> None:
+        from src.decision import churn
+
+        hyp = churn.segment_performance(*_blocks(), inputs={"clv": {"status": "ok"}, "new": {"status": "ok"}})["hypotheses"][0]
+        self.assertEqual(("5/5", [], []), (hyp["evidence"]["scope"], hyp["evidence"]["input_gaps"],
+                                           hyp["evidence"]["input_missing"]))
+        self.assertNotIn("입력 결손", hyp["reading"])
+
+
 @unittest.skipUnless(HAVE_ML, SKIP_REASON)
 class TestSegmentDefinitions(unittest.TestCase):
     def test_labels_are_the_assign_segments_codes(self) -> None:
@@ -95,6 +130,29 @@ class TestSegmentDefinitions(unittest.TestCase):
         expected = set(segments.SEGMENT_PRD_ID) | set(segments.UNKNOWN_VALUE.values()) | {segments.UNSCORED}
         self.assertEqual(expected, set(churn.SEGMENT_LABELS))
         self.assertEqual(set(segments.SEGMENT_PRD_ID), set(churn.SEG002_SEGMENTS))
+
+    def test_judged_segments_do_not_depend_on_the_churn_score(self) -> None:
+        """#329 리뷰 — 이탈 점수는 같은 t1 Validation 라벨로 튜닝했다. 그 점수를 어떻게 바꿔도 판정 대상 세그먼트의 배정은
+        같고, 바뀌는 것은 이탈 점수로 가른 두 세그먼트 사이뿐이다(SEGMENT_LABEL_USE · DR-303 「라벨 사용 범위」)."""
+        import numpy as np
+        import pandas as pd
+
+        from src.decision import churn, segments
+
+        rng = np.random.RandomState(7)
+        n = 2000
+        ids = pd.Index([f"c{i}" for i in range(n)])
+        cate = pd.DataFrame(rng.normal(0, 0.05, (n, 4)), index=ids, columns=["T1", "T2", "T3", "T4"])
+        clv = pd.Series(rng.gamma(2, 50000, n), index=ids)
+        is_new = pd.Series(rng.rand(n) < 0.1, index=ids)
+        judged = set(churn.SEG002_SEGMENTS) - set(churn.SCORE_RESTRICTED_SEGMENTS)
+        base = segments.assign_segments(pd.Series(rng.rand(n), index=ids), cate, clv, is_new=is_new)
+        for other in (rng.rand(n), 1 - base.index.map(lambda c: int(c[1:]) / n).to_numpy(), np.full(n, 0.3)):
+            seg = segments.assign_segments(pd.Series(other, index=ids), cate, clv, is_new=is_new)
+            for code in judged:
+                self.assertEqual(set(base.index[base == code]), set(seg.index[seg == code]), code)
+            restricted = set(churn.SCORE_RESTRICTED_SEGMENTS)
+            self.assertEqual(set(base.index[base.isin(restricted)]), set(seg.index[seg.isin(restricted)]))
 
     def test_score_restricted_segments_are_exactly_the_ones_split_by_churn_score(self) -> None:
         import numpy as np
@@ -177,6 +235,24 @@ class TestRunSprintWiring(unittest.TestCase):
         self.assertEqual(20, int((segments == "NEW").sum()))
         self.assertEqual("ok", inputs["clv"]["status"])
         self.assertTrue(set(inputs["thresholds"]) >= {"uplift_band", "churn_high", "clv_high"})
+
+    def test_changing_t1_validation_scores_keeps_judged_segment_assignment(self) -> None:
+        """#329 리뷰 — 실행 루프에서도 고른 모델의 Validation 점수만 바꾸면 판정 대상 세그먼트 배정이 그대로다."""
+        import numpy as np
+
+        first = self.parts([])(self.ctx(), "t_learner")
+        ctx = self.ctx()
+        y = np.arange(300) % 2
+        ctx["churn_validation"] = _validation(y, 1 - np.linspace(0, 1, 300), y, [f"c{i}" for i in range(300)])
+        second = self.parts([])(ctx, "t_learner")
+        from src.decision import churn
+
+        a, b = first["segments"], second["segments"]
+        judged = set(churn.SEG002_SEGMENTS) - set(churn.SCORE_RESTRICTED_SEGMENTS)
+        self.assertTrue((a[a.isin(judged)] == b[a.isin(judged)]).all())
+        self.assertIn("같은 t1 Validation 라벨로 골랐다", second["inputs"]["churn_score"])
+        self.assertEqual({"input_time": "t1", "model_fit_on": "Uplift train 분할 고객의 [t1, t2) 결과",
+                          "own_outcome_used": False}, second["inputs"]["uplift_timing"])
 
     def test_without_clv_model_or_roster_value_and_new_are_not_judged(self) -> None:
         calls: list = []
