@@ -251,7 +251,7 @@ class TestQuadrantValidation(unittest.TestCase):
                 json.dumps(h)
 
     def test_persuadables_interval_on_the_opposite_side_is_a_contradiction(self) -> None:
-        """재리뷰 반례 — ① 구간 전체가 0 아래면 근거 부족이 아니라 반증이다. ② 미확정(작은 칸)이어도 전체가 반증."""
+        """재리뷰 반례 — ① 구간 전체가 0 아래면 근거 부족이 아니라 반증이다. ② 판정 불가(작은 칸)여도 전체가 반증."""
         from src.decision.uplift_report import quadrant_validation
 
         h = quadrant_validation(cell_test({"P": (400, 100, 200, 100), "R": (4000, 2000, 2000, 1000),

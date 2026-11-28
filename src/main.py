@@ -550,6 +550,48 @@ def churn_tier_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
     return lines
 
 
+def churn_segment_lines(churn: Mapping[str, Any], fmt: Any) -> list[str]:
+    """#303 ML-010 — AI 세그먼트별 고른 모델의 ROC-AUC(t1 Validation 중 Uplift test 분할 T0 고객).
+
+    세그먼트는 t1 라벨을 쓰지 않은 t1 입력으로 매겼다(DR-303 「AI 세그먼트 축」). 전체 지표는 ``churn_eval.by_segment``.
+    """
+    seg = churn.get("by_segment")
+    if not isinstance(seg, Mapping):
+        return []
+    if seg.get("status") != "ok":
+        return [f"             세그먼트별 지표(ML-010) 없음 — {seg.get('reason') or '사유가 적혀 있지 않다'}"]
+    chosen = seg.get("chosen")
+    cells = []
+    for row in next(iter((seg.get("axes") or {}).values()), []):
+        if not row.get("n"):
+            continue  # n = 0 세그먼트는 결과 파일에만 — 한 줄에 다 싣지 못한다
+        auc = ((row.get("models") or {}).get(chosen) or {}).get("roc_auc")
+        cells.append(f"{'!' if row.get('weak') else ''}{row.get('group')}{'*' if row.get('score_restricted') else ''} "
+                     f"{fmt(auc)}(n {row.get('n')}{' 표본 부족' if row.get('small_group') else ''})")
+    lines = [f"             세그먼트별 ROC-AUC (ML-010 · t1 Validation 중 Uplift test 분할 {seg.get('n_grouped')}명 · {chosen})",
+             "               " + (" · ".join(cells) or "—"),
+             "               * 고른 모델의 이탈 점수로 가른 세그먼트 — 점수 범위가 잘려 낮게 나온다, 가설 판정에 쓰지 않는다"]
+    results = {"supported": "지지", "not_supported": "지지되지 않음", "undetermined": "판정 불가"}
+    hypotheses = [h for h in seg.get("hypotheses") or [] if isinstance(h, Mapping)]
+
+    def scope(h: Mapping[str, Any]) -> str:
+        # #329 리뷰 — 검정한 세그먼트 수와 입력 결손을 판정 옆에 적는다
+        ev = h.get("evidence") or {}
+        parts = ([f"{ev['scope']}개 판정"] if ev.get("scope") else []) + [str(g) for g in ev.get("input_gaps") or []]
+        return f"({' · '.join(parts)})" if parts else ""
+
+    if hypotheses:
+        lines.append("               가설(결과 전 등록, DR-303) " + " · ".join(
+            f"{h.get('id')} {results.get(h.get('result'), h.get('result'))}{scope(h)}" for h in hypotheses))
+    if (seg.get("label_use") or {}).get("diagnostic") == "post_hoc_validation":
+        lines.append("               사후 Validation 진단 — 이탈 점수는 같은 t1 Validation 라벨로 튜닝 · 선택했다"
+                     "(배정에는 * 세그먼트에만 쓰인다)")
+    if seg.get("n_without_group"):
+        lines.append(f"               세그먼트 없는 Validation 고객 {seg['n_without_group']}명(Uplift 학습 분할 — 자기 결과로 학습된 "
+                     "CATE) — 전체 지표에만 들어갔다")
+    return lines
+
+
 def uplift_selection_state(uplift: Mapping[str, Any]) -> tuple[str, str]:
     """#320 리뷰 — Uplift 학습 방법이 어떻게 정해졌나. (상태, 설명) — 상태는 selected · not_selected · loaded · absent.
 
@@ -718,6 +760,7 @@ def summary_lines(mode: Mode, run_dir: Path, manifest: Mapping[str, Any]) -> lis
             lines.append(f"             시간 홀드아웃 {holdout.get('name')} ROC-AUC {fmt(holdout.get('roc_auc'))} "
                          f"(n={holdout.get('n_test')}) — 선택 뒤 보고만")
         lines.extend(churn_tier_lines(churn, fmt))
+        lines.extend(churn_segment_lines(churn, fmt))
     uplift = _read_json(run_dir / "uplift_eval.json")
     if uplift.get("status") == "ok":
         lines.extend(uplift_selection_lines(uplift, fmt))
